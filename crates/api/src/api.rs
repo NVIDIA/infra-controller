@@ -643,14 +643,6 @@ impl Forge for Api {
         crate::handlers::dns::lookup_record(self, request).await
     }
 
-    // Legacy DNS lookup method for backward compatibility
-    async fn lookup_record_legacy(
-        &self,
-        request: Request<rpc::dns_message::DnsQuestion>,
-    ) -> Result<Response<rpc::dns_message::DnsResponse>, Status> {
-        crate::handlers::dns::lookup_record_legacy_compat(self, request).await
-    }
-
     async fn invoke_instance_power(
         &self,
         request: Request<rpc::InstancePowerRequest>,
