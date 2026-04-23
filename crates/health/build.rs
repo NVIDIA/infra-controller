@@ -29,7 +29,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build_server(false)
         .build_client(true)
         .compile_protos(
-            &[proto_dir.join("opentelemetry/proto/collector/logs/v1/logs_service.proto")],
+            &[
+                proto_dir.join("opentelemetry/proto/collector/logs/v1/logs_service.proto"),
+                proto_dir.join("opentelemetry/proto/collector/metrics/v1/metrics_service.proto"),
+            ],
             std::slice::from_ref(&proto_dir),
         )?;
 
