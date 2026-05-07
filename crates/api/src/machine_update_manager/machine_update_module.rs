@@ -45,7 +45,7 @@ pub trait MachineUpdateModule: Send + Sync + fmt::Display {
 
     async fn start_updates(
         &self,
-        txn: &mut PgConnection,
+        pool: &sqlx::Pool<sqlx::Postgres>,
         available_updates: i32,
         updating_host_machines: &HashSet<MachineId>,
         snapshots: &HashMap<MachineId, ManagedHostStateSnapshot>,
@@ -55,9 +55,9 @@ pub trait MachineUpdateModule: Send + Sync + fmt::Display {
 
     async fn update_metrics(
         &self,
-        txn: &mut PgConnection,
+        pool: &sqlx::Pool<sqlx::Postgres>,
         snapshots: &HashMap<MachineId, ManagedHostStateSnapshot>,
-    );
+    ) -> CarbideResult<()>;
 }
 
 /// Creates a Health override report that indicates that a host update is in progress

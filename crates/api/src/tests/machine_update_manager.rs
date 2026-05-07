@@ -63,7 +63,7 @@ impl MachineUpdateModule for TestUpdateModule {
 
     async fn start_updates(
         &self,
-        _txn: &mut PgConnection,
+        _pool: &sqlx::Pool<sqlx::Postgres>,
         _available_updates: i32,
         _updating_machines: &HashSet<MachineId>,
         _snapshots: &HashMap<MachineId, ManagedHostStateSnapshot>,
@@ -84,9 +84,10 @@ impl MachineUpdateModule for TestUpdateModule {
 
     async fn update_metrics(
         &self,
-        _txn: &mut PgConnection,
+        _pool: &sqlx::Pool<sqlx::Postgres>,
         _snapshots: &HashMap<MachineId, ManagedHostStateSnapshot>,
-    ) {
+    ) -> CarbideResult<()> {
+        Ok(())
     }
 }
 
