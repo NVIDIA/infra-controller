@@ -61,7 +61,7 @@ use model::instance::status::network::{
     InstanceInterfaceStatusObservation, InstanceNetworkStatusObservation,
 };
 use model::machine::{
-    AttestationMode, CleanupState, FailureDetails, InstanceState, MachineState,
+    AttestationMode, CleanupContext, CleanupState, FailureDetails, InstanceState, MachineState,
     MachineValidatingState, ManagedHostState, MeasuringState, NetworkConfigUpdateState,
     SpdmMeasuringState, ValidationState,
 };
@@ -679,6 +679,7 @@ async fn test_measurement_assigned_ready_to_waiting_for_measurements_to_ca_faile
             cleanup_state: CleanupState::HostCleanup {
                 boss_controller_id: None,
             },
+            cleanup_context: CleanupContext::Deprovision,
         },
     )
     .await;

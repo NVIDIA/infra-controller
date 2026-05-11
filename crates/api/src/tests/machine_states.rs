@@ -45,9 +45,9 @@ use model::controller_outcome::PersistentStateHandlerOutcome;
 use model::hardware_info::TpmEkCertificate;
 use model::machine::health_override::HARDWARE_HEALTH_OVERRIDE_PREFIX;
 use model::machine::{
-    DpuInitState, DpuReprovisionStates, FailureCause, FailureDetails, FailureSource, InstanceState,
-    LockdownMode, MachineState, MachineValidatingState, ManagedHostState, MeasuringState,
-    SpdmMeasuringState, ValidationState,
+    CleanupContext, CleanupState, DpuInitState, DpuReprovisionStates, FailureCause, FailureDetails,
+    FailureSource, InstanceState, LockdownMode, MachineState, MachineValidatingState,
+    ManagedHostState, MeasuringState, RetryInfo, SpdmMeasuringState, ValidationState,
 };
 use rpc::forge::forge_server::Forge;
 use rpc::forge::{HealthReportEntry, InsertMachineHealthReportRequest, TpmCaCert, TpmCaCertId};
@@ -1712,6 +1712,43 @@ async fn test_measurement_host_init_failed_to_waiting_for_measurements_to_pendin
         .expect("Failed to add hardware health report to newly created machine");
 
     let response = mh.host().forge_agent_control().await;
+    assert!(matches!(response.action, Some(Action::Retry(_))));
+    assert_eq!(response.legacy_action, LegacyAction::Retry as i32);
+
+    env.run_machine_state_controller_iteration_until_state_matches(
+        &host_machine_id,
+        3,
+        ManagedHostState::WaitingForCleanup {
+            cleanup_state: CleanupState::HostCleanup {
+                boss_controller_id: None,
+            },
+            cleanup_context: CleanupContext::InitialDiscovery,
+        },
+    )
+    .await;
+
+    let response = mh.host().forge_agent_control().await;
+    assert!(matches!(response.action, Some(Action::Reset(_))));
+    assert_eq!(response.legacy_action, LegacyAction::Reset as i32);
+
+    env.api
+        .cleanup_machine_completed(Request::new(rpc::MachineCleanupInfo {
+            machine_id: mh.id.into(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+
+    env.run_machine_state_controller_iteration_until_state_matches(
+        &host_machine_id,
+        3,
+        ManagedHostState::HostInit {
+            machine_state: MachineState::WaitingForDiscovery,
+        },
+    )
+    .await;
+
+    let response = mh.host().forge_agent_control().await;
     assert!(matches!(response.action, Some(Action::Discovery(_))));
     assert_eq!(response.legacy_action, LegacyAction::Discovery as i32);
 
@@ -1778,6 +1815,40 @@ async fn test_measurement_host_init_failed_to_waiting_for_measurements_to_pendin
         ManagedHostState::Ready,
     )
     .await;
+}
+
+#[crate::sqlx_test]
+async fn test_forge_agent_control_assigned_discovery_boot_does_not_reset_without_cleanup_timestamp(
+    pool: sqlx::PgPool,
+) {
+    let env = create_test_env(pool).await;
+    let mh = create_managed_host(&env).await;
+    let state = ManagedHostState::Assigned {
+        instance_state: InstanceState::BootingWithDiscoveryImage {
+            retry: RetryInfo { count: 0 },
+        },
+    };
+
+    let mut txn = env.db_txn().await;
+    let host = mh.host().db_machine(&mut txn).await;
+    db::machine::advance(&host, &mut txn, &state, None)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE machines SET last_cleanup_time = NULL WHERE id = $1")
+        .bind(mh.host().id)
+        .execute(txn.as_mut())
+        .await
+        .unwrap();
+    txn.commit().await.unwrap();
+
+    let mut txn = env.db_txn().await;
+    let host = mh.host().db_machine(&mut txn).await;
+    assert!(host.last_cleanup_time.is_none());
+    txn.commit().await.unwrap();
+
+    let response = mh.host().forge_agent_control().await;
+    assert!(matches!(response.action, Some(Action::Noop(_))));
+    assert_eq!(response.legacy_action, LegacyAction::Noop as i32);
 }
 
 #[crate::sqlx_test]
