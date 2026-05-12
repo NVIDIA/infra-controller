@@ -59,9 +59,11 @@ tracing-subscriber = { features = [
 tryhard = { workspace = true }
 uname = { workspace = true }
 uuid = { workspace = true }
+x509-parser = { workspace = true }
 serde_with = { workspace = true }
 
 [dev-dependencies]
+rcgen = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

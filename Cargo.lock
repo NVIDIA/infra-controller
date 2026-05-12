@@ -2075,6 +2075,7 @@ dependencies = [
  "libudev",
  "logfmt",
  "procfs",
+ "rcgen",
  "regex",
  "serde",
  "serde_json",
@@ -2090,6 +2091,7 @@ dependencies = [
  "tryhard",
  "uname",
  "uuid",
+ "x509-parser",
 ]
 
 [[package]]
