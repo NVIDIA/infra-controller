@@ -943,8 +943,9 @@ async fn test_update_persists_nvos_mac_addresses(pool: sqlx::PgPool) {
     assert_eq!(fetched.nvos_mac_addresses, vec![new_nvos_mac]);
 }
 
-/// When an expected switch is created with a bmc_ip_address, a real
-/// machine_interface with a static address should be created in the DB.
+/// When an expected switch is registered with a bmc_ip_address, the static `machine_interface`
+/// gets materialized lazily by site-explorer's per-iteration sweep (the gRPC `add` handler
+/// doesn't preallocate inline). Verify that flow end-to-end.
 #[crate::sqlx_test()]
 async fn test_add_with_bmc_ip_creates_static_interface(
     pool: sqlx::PgPool,
@@ -969,6 +970,17 @@ async fn test_add_with_bmc_ip_creates_static_interface(
             bmc_retain_credentials: None,
         }))
         .await?;
+
+    // Add doesn't preallocate inline; mimic what site-explorer does on the next iteration --
+    // materialize the static BMC interface for this entity.
+    carbide_site_explorer::try_preallocate_one(
+        &env.pool,
+        bmc_mac,
+        bmc_ip.parse().unwrap(),
+        model::machine_interface::InterfaceType::Bmc,
+        "expected_switch BMC",
+    )
+    .await;
 
     let mut txn = env.pool.begin().await?;
     let interfaces = db::machine_interface::find_by_mac_address(&mut *txn, bmc_mac).await?;

@@ -247,24 +247,21 @@ pub async fn discover_dhcp(
                             .await
                             .map_err(CarbideError::from)?
                     {
-                        // If ExpectedHostNics are configured, see if any
-                        // of them are annotated as "primary", or if any of
-                        // them have a fixed_ip DHCP reservation.
+                        // Walk the host_nics list to see if there's a matching NIC (because it
+                        // may have a static reservation need or a primary-interface need)
+                        let mut declared_primary_mac: Option<MacAddress> = None;
                         for nic in &m.data.host_nics {
+                            if nic.primary == Some(true) {
+                                declared_primary_mac = Some(nic.mac_address);
+                            }
                             if nic.mac_address == parsed_mac {
                                 host_nic = Some(nic.clone());
                             }
                         }
-                        if let Some(declared_primary) =
-                            m.data.host_nics.iter().find(|n| n.primary == Some(true))
-                        {
-                            is_primary_nic = Some(declared_primary.mac_address == parsed_mac);
+                        if let Some(pmac) = declared_primary_mac {
+                            is_primary_nic = Some(pmac == parsed_mac);
                         }
-                        if let Some(nic) = m
-                            .data
-                            .host_nics
-                            .iter()
-                            .find(|n| n.mac_address == parsed_mac)
+                        if let Some(ref nic) = host_nic
                             && let Some(fixed_ip_str) = &nic.fixed_ip
                         {
                             let fixed_ip: IpAddr = fixed_ip_str.parse().map_err(|_| {
@@ -275,7 +272,8 @@ pub async fn discover_dhcp(
                             // It looks like there's a DHCP reservation for this address,
                             // so make an idempotent call to ensure we have a preallocated
                             // machine interface (and machine interface address) for it,
-                            // creating one if needed.
+                            // creating one if needed. Races against site-explorer's
+                            // reconciliation pass are handled inside preallocate.
                             db::machine_interface::preallocate_machine_interface(
                                 &mut txn, parsed_mac, fixed_ip,
                             )
@@ -290,8 +288,10 @@ pub async fn discover_dhcp(
                         // In this case it looks like our parsed MAC address is for the BMC
                         // of an expected machine, and it has a static DHCP reservation per
                         // its bmc_ip_address, so again, ensure the machine interface is
-                        // allocated before continuing.
-                        db::machine_interface::preallocate_machine_interface(
+                        // allocated before continuing. BMC variant so the row carries
+                        // InterfaceType::Bmc (and primary=false). Races against
+                        // site-explorer's reconciliation pass are handled inside preallocate.
+                        db::machine_interface::preallocate_bmc_machine_interface(
                             &mut txn, parsed_mac, bmc_ip,
                         )
                         .await?;
