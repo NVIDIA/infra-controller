@@ -50,7 +50,7 @@ pub(super) enum CollectorKind {
 }
 
 impl CollectorKind {
-    pub(super) const ALL: [CollectorKind; 6] = [
+    pub(super) const ALL: [CollectorKind; 7] = [
         CollectorKind::Sensor,
         CollectorKind::Logs,
         CollectorKind::Firmware,

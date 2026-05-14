@@ -235,6 +235,7 @@ fn build_auth_metadata(
 
 /// Extract a string from a `TypedValue`, handling JSON-encoded bytes as well
 /// as native string values.
+#[allow(deprecated)]
 pub fn typed_value_to_string(val: &proto::TypedValue) -> Option<String> {
     use proto::typed_value::Value;
     match &val.value {
@@ -256,6 +257,7 @@ pub fn typed_value_to_string(val: &proto::TypedValue) -> Option<String> {
 
 /// Extract a float from a `TypedValue`, handling JSON-encoded bytes, native
 /// numeric values, and string representations.
+#[allow(deprecated)]
 pub fn typed_value_to_f64(val: &proto::TypedValue) -> Option<f64> {
     use proto::typed_value::Value;
     match &val.value {

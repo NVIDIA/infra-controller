@@ -347,7 +347,7 @@ pub(super) async fn spawn_collectors_for_endpoint(
         match spawn_gnmi_collector(endpoint, gnmi_cfg, collector_registry, data_sink.clone()) {
             Ok(handle) => {
                 ctx.collectors
-                    .insert(CollectorKind::NvueGnmi, key.clone(), handle);
+                    .insert(CollectorKind::NvueGnmi, key.clone().into(), handle);
                 tracing::info!(
                     endpoint_key = %key,
                     total_nvue_gnmi_collectors = ctx.collectors.len(CollectorKind::NvueGnmi),

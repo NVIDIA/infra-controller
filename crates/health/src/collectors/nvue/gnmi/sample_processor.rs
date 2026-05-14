@@ -35,6 +35,7 @@ pub(crate) struct GnmiSampleProcessor {
 }
 
 impl GnmiSampleProcessor {
+    #[allow(deprecated)]
     pub(crate) fn process_subscribe_response(
         &self,
         resp: &proto::SubscribeResponse,
@@ -824,6 +825,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_process_subscribe_response_error_increments_counter() {
         let proc = test_processor();
         let metrics = test_stream_metrics();
