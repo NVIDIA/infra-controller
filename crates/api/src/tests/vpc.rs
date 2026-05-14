@@ -56,8 +56,9 @@ async fn create_vpc_for_tenant_without_profile(
         .tenant
         .unwrap();
 
-    // Try to request a VPC without sending a valid tenant org.
-    // This should fail.
+    // Try to request a VPC without sending a valid tenant org. Routing-
+    // profile validation lives behind the FNN-only path, so the request
+    // has to be an FNN VPC to exercise the "no tenant" branch.
     assert!(
         env.api
             .create_vpc(
@@ -66,6 +67,7 @@ async fn create_vpc_for_tenant_without_profile(
                         name: "Forge".to_string(),
                         ..Default::default()
                     })
+                    .network_virtualization_type(rpc::forge::VpcVirtualizationType::Fnn as i32)
                     .routing_profile_type("PRIVILEGED_INTERNAL".to_string())
                     .tonic_request(),
             )
@@ -84,6 +86,7 @@ async fn create_vpc_for_tenant_without_profile(
                         name: "Forge".to_string(),
                         ..Default::default()
                     })
+                    .network_virtualization_type(rpc::forge::VpcVirtualizationType::Fnn as i32)
                     .routing_profile_type("PRIVILEGED_INTERNAL".to_string())
                     .tonic_request(),
             )
@@ -218,8 +221,10 @@ async fn create_vpc(pool: sqlx::PgPool) -> Result<(), Box<dyn std::error::Error>
         .tenant
         .unwrap();
 
-    // Try to request a broader routing profile for the VPC.
-    // This should fail.
+    // Try to request a broader routing profile for the VPC. Access-tier
+    // broadening checks live behind the routing-profile path, which is
+    // FNN-only -- the request has to be an FNN VPC to even reach that
+    // validation. This should fail.
     assert!(
         env.api
             .create_vpc(
@@ -228,6 +233,7 @@ async fn create_vpc(pool: sqlx::PgPool) -> Result<(), Box<dyn std::error::Error>
                         name: "Forge".to_string(),
                         ..Default::default()
                     })
+                    .network_virtualization_type(rpc::forge::VpcVirtualizationType::Fnn as i32)
                     .routing_profile_type("PRIVILEGED_INTERNAL".to_string())
                     .tonic_request(),
             )
@@ -557,7 +563,10 @@ async fn create_vpc_without_fnn_rejects_explicit_routing_profile(
         txn.commit().await?;
     };
 
-    // Requesting a VPC routing profile without FNN should fail early.
+    // Requesting a VPC routing profile on a non-FNN VPC type (default
+    // is ETV) should fail early at the API gate. The REST API enforces
+    // this upstream; carbide-core enforces it as defense-in-depth via
+    // `ensure_supports_routing_profiles`.
     assert!(
         env.api
             .create_vpc(
@@ -572,7 +581,7 @@ async fn create_vpc_without_fnn_rejects_explicit_routing_profile(
             .await
             .unwrap_err()
             .message()
-            .contains("FNN configuration required to request routing-profile for VPCs")
+            .contains("do not support routing profiles")
     );
 
     Ok(())
@@ -1159,6 +1168,107 @@ async fn test_increment_vpc_version_detects_concurrent_writes(
         final_version_nr - initial_version_nr,
         1,
         "exactly one increment should have happened after the race"
+    );
+
+    Ok(())
+}
+
+#[crate::sqlx_test]
+async fn create_flat_vpc_succeeds_without_routing_profile(
+    pool: sqlx::PgPool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Flat VPCs are for zero-DPU hosts and don't have a Carbide-managed
+    // routing layer. The create handler should skip the FNN-flavored
+    // routing-profile validation entirely and still allocate a VNI.
+    let env = create_test_env(pool).await;
+
+    let tenant = env
+        .api
+        .create_tenant(tonic::Request::new(rpc::forge::CreateTenantRequest {
+            organization_id: "flat-tenant".to_string(),
+            routing_profile_type: None,
+            metadata: Some(rpc::forge::Metadata {
+                name: "flat-tenant".to_string(),
+                description: "".to_string(),
+                labels: vec![],
+            }),
+        }))
+        .await?
+        .into_inner()
+        .tenant
+        .unwrap();
+
+    let vpc = env
+        .api
+        .create_vpc(
+            VpcCreationRequest::builder(tenant.organization_id.clone())
+                .network_virtualization_type(rpc::forge::VpcVirtualizationType::Flat as i32)
+                .metadata(rpc::forge::Metadata {
+                    name: "flat".to_string(),
+                    ..Default::default()
+                })
+                .tonic_request(),
+        )
+        .await?
+        .into_inner();
+
+    assert_eq!(
+        vpc.network_virtualization_type,
+        Some(rpc::forge::VpcVirtualizationType::Flat as i32),
+    );
+    assert!(vpc.routing_profile_type.is_none());
+    assert!(
+        vpc.status.as_ref().and_then(|s| s.vni).is_some(),
+        "Flat VPCs still allocate a VNI for pluggable SDN hooks (e.g. switch-side VTEPs)",
+    );
+
+    Ok(())
+}
+
+#[crate::sqlx_test]
+async fn create_flat_vpc_rejects_routing_profile_type(
+    pool: sqlx::PgPool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Routing profile types are FNN-specific. Sending one on a Flat VPC
+    // create is contradictory and should be rejected up front.
+    let env = create_test_env(pool).await;
+
+    let tenant = env
+        .api
+        .create_tenant(tonic::Request::new(rpc::forge::CreateTenantRequest {
+            organization_id: "flat-tenant".to_string(),
+            routing_profile_type: None,
+            metadata: Some(rpc::forge::Metadata {
+                name: "flat-tenant".to_string(),
+                description: "".to_string(),
+                labels: vec![],
+            }),
+        }))
+        .await?
+        .into_inner()
+        .tenant
+        .unwrap();
+
+    let err = env
+        .api
+        .create_vpc(
+            VpcCreationRequest::builder(tenant.organization_id)
+                .network_virtualization_type(rpc::forge::VpcVirtualizationType::Flat as i32)
+                .routing_profile_type("EXTERNAL".to_string())
+                .metadata(rpc::forge::Metadata {
+                    name: "flat".to_string(),
+                    ..Default::default()
+                })
+                .tonic_request(),
+        )
+        .await
+        .expect_err("Flat VPC + routing_profile_type must be rejected");
+
+    assert_eq!(err.code(), tonic::Code::InvalidArgument, "got: {err}");
+    assert!(
+        err.message().contains("flat") && err.message().contains("routing_profile_type"),
+        "error should mention flat VPC and the routing_profile_type field, got: {}",
+        err.message()
     );
 
     Ok(())

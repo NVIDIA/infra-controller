@@ -27,6 +27,7 @@ impl From<rpc::VpcVirtualizationType> for VpcVirtualizationType {
             #[allow(deprecated)]
             rpc::VpcVirtualizationType::EthernetVirtualizerWithNvue => Self::EthernetVirtualizer,
             rpc::VpcVirtualizationType::Fnn => Self::Fnn,
+            rpc::VpcVirtualizationType::Flat => Self::Flat,
             // Following are deprecated.
             rpc::VpcVirtualizationType::FnnClassic => Self::Fnn,
             rpc::VpcVirtualizationType::FnnL3 => Self::Fnn,
@@ -42,6 +43,7 @@ impl From<VpcVirtualizationType> for rpc::VpcVirtualizationType {
                 rpc::VpcVirtualizationType::EthernetVirtualizer
             }
             VpcVirtualizationType::Fnn => rpc::VpcVirtualizationType::Fnn,
+            VpcVirtualizationType::Flat => rpc::VpcVirtualizationType::Flat,
         }
     }
 }
@@ -60,6 +62,7 @@ pub fn vpc_virtualization_type_try_from_rpc(
             VpcVirtualizationType::EthernetVirtualizer
         }
         x if x == rpc::VpcVirtualizationType::Fnn as i32 => VpcVirtualizationType::Fnn,
+        x if x == rpc::VpcVirtualizationType::Flat as i32 => VpcVirtualizationType::Flat,
         _ => {
             return Err(RpcDataConversionError::InvalidVpcVirtualizationType(value));
         }
@@ -99,5 +102,18 @@ mod test {
     fn proto_value_0_maps_to_etv() {
         let vtype = vpc_virtualization_type_try_from_rpc(0).unwrap();
         assert_eq!(vtype, VpcVirtualizationType::EthernetVirtualizer);
+    }
+
+    #[test]
+    fn flat_round_trips() {
+        let rpc_vtype: rpc::VpcVirtualizationType = VpcVirtualizationType::Flat.into();
+        assert_eq!(rpc_vtype, rpc::VpcVirtualizationType::Flat);
+
+        let vtype: VpcVirtualizationType = rpc::VpcVirtualizationType::Flat.into();
+        assert_eq!(vtype, VpcVirtualizationType::Flat);
+
+        let vtype =
+            vpc_virtualization_type_try_from_rpc(rpc::VpcVirtualizationType::Flat as i32).unwrap();
+        assert_eq!(vtype, VpcVirtualizationType::Flat);
     }
 }

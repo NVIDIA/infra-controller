@@ -1434,3 +1434,147 @@ async fn test_find_state_histories_unknown_segment_returns_no_records(pool: sqlx
         "unknown segment must yield no history records, got: {records:?}"
     );
 }
+
+#[crate::sqlx_test]
+async fn flat_vpc_accepts_host_inband_segment(
+    pool: sqlx::PgPool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // The canonical Flat pairing: a Flat VPC with a HostInband segment.
+    let env =
+        create_test_env_with_overrides(pool.clone(), TestEnvOverrides::no_network_segments()).await;
+
+    let (_vpc_id, vpc) = common::api_fixtures::vpc::create_flat_vpc(
+        &env,
+        "flat".to_string(),
+        Some("2829bbe3-c169-4cd9-8b2a-19a8b1618a93".to_string()),
+    )
+    .await;
+
+    // Use a fixture-tenant gateway since it's guaranteed to be in TEST_SITE_PREFIXES;
+    // the segment type (HostInband) is what's being tested here, not the prefix.
+    let gw = FIXTURE_TENANT_NETWORK_SEGMENT_GATEWAYS[0];
+    let request = rpc::forge::NetworkSegmentCreationRequest {
+        id: None,
+        mtu: Some(1500),
+        name: "FLAT_HOST_INBAND".to_string(),
+        prefixes: vec![rpc::forge::NetworkPrefix {
+            id: None,
+            prefix: gw.network().to_string() + "/24",
+            gateway: Some(gw.ip().to_string()),
+            reserve_first: 3,
+            free_ip_count: 0,
+            svi_ip: None,
+        }],
+        subdomain_id: None,
+        vpc_id: vpc.id,
+        segment_type: rpc::forge::NetworkSegmentType::HostInband as i32,
+    };
+
+    env.api
+        .create_network_segment(Request::new(request))
+        .await
+        .expect("Flat VPC + HostInband segment is the canonical pairing");
+
+    Ok(())
+}
+
+#[crate::sqlx_test]
+async fn flat_vpc_rejects_tenant_segment(
+    pool: sqlx::PgPool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Flat VPCs are HostInband-only -- attempting to put a Tenant overlay
+    // segment in a Flat VPC should be rejected at create time.
+    let env =
+        create_test_env_with_overrides(pool.clone(), TestEnvOverrides::no_network_segments()).await;
+
+    let (_vpc_id, vpc) = common::api_fixtures::vpc::create_flat_vpc(
+        &env,
+        "flat".to_string(),
+        Some("2829bbe3-c169-4cd9-8b2a-19a8b1618a93".to_string()),
+    )
+    .await;
+
+    let request = rpc::forge::NetworkSegmentCreationRequest {
+        id: None,
+        mtu: Some(1500),
+        name: "FLAT_TENANT_REJECTED".to_string(),
+        prefixes: vec![rpc::forge::NetworkPrefix {
+            id: None,
+            prefix: FIXTURE_TENANT_NETWORK_SEGMENT_GATEWAYS[0].to_string(),
+            gateway: Some(FIXTURE_TENANT_NETWORK_SEGMENT_GATEWAYS[0].ip().to_string()),
+            reserve_first: 3,
+            free_ip_count: 0,
+            svi_ip: None,
+        }],
+        subdomain_id: None,
+        vpc_id: vpc.id,
+        segment_type: rpc::forge::NetworkSegmentType::Tenant as i32,
+    };
+
+    let err = env
+        .api
+        .create_network_segment(Request::new(request))
+        .await
+        .expect_err("Flat VPC + Tenant segment must be rejected");
+
+    assert_eq!(err.code(), tonic::Code::InvalidArgument, "got: {err}");
+    assert!(
+        err.message().contains("flat") && err.message().contains("tenant"),
+        "error should mention flat VPC rejecting tenant segment, got: {}",
+        err.message()
+    );
+
+    Ok(())
+}
+
+#[crate::sqlx_test]
+async fn etv_vpc_rejects_host_inband_segment(
+    pool: sqlx::PgPool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // HostInband segments must live in Flat VPCs. An ETV VPC accepting a
+    // HostInband segment would violate the Flat<->HostInband binding.
+    let env =
+        create_test_env_with_overrides(pool.clone(), TestEnvOverrides::no_network_segments()).await;
+
+    // Default `create_vpc` produces an ETV VPC (no virt type set => default).
+    let (_vpc_id, vpc) = common::api_fixtures::vpc::create_vpc(
+        &env,
+        "etv".to_string(),
+        Some("2829bbe3-c169-4cd9-8b2a-19a8b1618a93".to_string()),
+        None,
+    )
+    .await;
+
+    let gw = FIXTURE_TENANT_NETWORK_SEGMENT_GATEWAYS[0];
+    let request = rpc::forge::NetworkSegmentCreationRequest {
+        id: None,
+        mtu: Some(1500),
+        name: "ETV_HOST_INBAND_REJECTED".to_string(),
+        prefixes: vec![rpc::forge::NetworkPrefix {
+            id: None,
+            prefix: gw.network().to_string() + "/24",
+            gateway: Some(gw.ip().to_string()),
+            reserve_first: 3,
+            free_ip_count: 0,
+            svi_ip: None,
+        }],
+        subdomain_id: None,
+        vpc_id: vpc.id,
+        segment_type: rpc::forge::NetworkSegmentType::HostInband as i32,
+    };
+
+    let err = env
+        .api
+        .create_network_segment(Request::new(request))
+        .await
+        .expect_err("HostInband segment must be rejected on non-Flat VPCs");
+
+    assert_eq!(err.code(), tonic::Code::InvalidArgument, "got: {err}");
+    assert!(
+        err.message().contains("etv") && err.message().contains("host_inband"),
+        "error should mention etv VPC rejecting host_inband segment, got: {}",
+        err.message()
+    );
+
+    Ok(())
+}
