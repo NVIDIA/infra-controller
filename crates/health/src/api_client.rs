@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 
+buse std::collections::HashMap;
 use std::convert::TryFrom;
 use std::net::IpAddr;
 use std::str::FromStr;
@@ -68,6 +69,34 @@ impl CredentialProvider for ApiCredentialProvider {
     }
 }
 
+fn machine_slot_number(
+    machine: &rpc::forge::Machine,
+    position: Option<&rpc::forge::MachinePositionInfo>,
+) -> Option<i32> {
+    position
+        .and_then(|position| position.physical_slot_number)
+        .or_else(|| {
+            machine
+                .placement_in_rack
+                .as_ref()
+                .and_then(|placement| placement.slot_number)
+        })
+}
+
+fn machine_tray_index(
+    machine: &rpc::forge::Machine,
+    position: Option<&rpc::forge::MachinePositionInfo>,
+) -> Option<i32> {
+    position
+        .and_then(|position| position.compute_tray_index)
+        .or_else(|| {
+            machine
+                .placement_in_rack
+                .as_ref()
+                .and_then(|placement| placement.tray_index)
+        })
+}
+
 impl ApiClientWrapper {
     pub fn new(root_ca: String, client_cert: String, client_key: String, api_url: &Url) -> Self {
         let client_config = ForgeClientConfig::new(
@@ -118,13 +147,15 @@ impl ApiClientWrapper {
                 .find_machines_by_ids(request)
                 .await
                 .map_err(HealthError::ApiInvocationError)?;
+            let positions = self.fetch_machine_position_info(ids_chunk).await;
             tracing::debug!(
                 "Fetched details for {} machines with chunk size of 100",
                 machines.machines.len(),
             );
 
             for machine in machines.machines {
-                match self.extract_machine_endpoint(&machine).await {
+                let position = machine.id.as_ref().and_then(|id| positions.get(id));
+                match self.extract_machine_endpoint(&machine, position).await {
                     Ok(endpoint) => endpoints.push(Arc::new(endpoint)),
                     Err(error) => tracing::warn!(
                         ?machine,
@@ -136,6 +167,30 @@ impl ApiClientWrapper {
         }
 
         Ok(endpoints)
+    }
+
+    async fn fetch_machine_position_info(
+        &self,
+        machine_ids: &[carbide_uuid::machine::MachineId],
+    ) -> HashMap<carbide_uuid::machine::MachineId, rpc::forge::MachinePositionInfo> {
+        let request = rpc::forge::MachinePositionQuery {
+            machine_ids: machine_ids.to_vec(),
+        };
+
+        match self.client.get_machine_position_info(request).await {
+            Ok(response) => response
+                .machine_position_info
+                .into_iter()
+                .filter_map(|info| info.machine_id.map(|id| (id, info)))
+                .collect(),
+            Err(error) => {
+                tracing::warn!(
+                    ?error,
+                    "failed to fetch machine position info; falling back to machine placement metadata"
+                );
+                HashMap::new()
+            }
+        }
     }
 
     async fn fetch_switch_endpoints(&self) -> Vec<Arc<BmcEndpoint>> {
@@ -203,6 +258,7 @@ impl ApiClientWrapper {
     async fn extract_machine_endpoint(
         &self,
         machine: &rpc::forge::Machine,
+        position: Option<&rpc::forge::MachinePositionInfo>,
     ) -> Result<BmcEndpoint, HealthError> {
         let Some(bmc_info) = &machine.bmc_info else {
             return Err(HealthError::GenericError(
@@ -218,14 +274,8 @@ impl ApiClientWrapper {
                     .as_ref()
                     .and_then(|info| info.dmi_data.as_ref())
                     .map(|dmi| dmi.chassis_serial.clone()),
-                slot_number: machine
-                    .placement_in_rack
-                    .as_ref()
-                    .and_then(|placement| placement.slot_number),
-                tray_index: machine
-                    .placement_in_rack
-                    .as_ref()
-                    .and_then(|placement| placement.tray_index),
+                slot_number: machine_slot_number(machine, position),
+                tray_index: machine_tray_index(machine, position),
                 nvlink_domain_uuid: machine
                     .nvlink_info
                     .as_ref()
@@ -252,7 +302,7 @@ impl ApiClientWrapper {
             .as_ref()
             .map(|config| config.name.clone())
             .ok_or(HealthError::GenericError(
-                "Switch endpont does not have serial".to_string(),
+                "switch endpoint does not have serial".to_string(),
             ))?;
 
         self.endpoint_with_auth(
@@ -269,7 +319,7 @@ impl ApiClientWrapper {
                     .as_ref()
                     .and_then(|placement| placement.tray_index),
             })),
-            None,
+            switch.rack_id.clone(),
         )
         .await
     }
@@ -468,5 +518,43 @@ impl From<rpc::forge::bmc_credentials::Type> for BmcCredentials {
             rpc::forge::bmc_credentials::Type::UsernamePassword(value) => value.into(),
             rpc::forge::bmc_credentials::Type::SessionToken(value) => value.into(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn machine_position_info_takes_precedence_over_machine_placement() {
+        let machine = rpc::forge::Machine {
+            placement_in_rack: Some(rpc::forge::PlacementInRack {
+                slot_number: Some(2),
+                tray_index: Some(1),
+            }),
+            ..Default::default()
+        };
+        let position = rpc::forge::MachinePositionInfo {
+            physical_slot_number: Some(11),
+            compute_tray_index: Some(4),
+            ..Default::default()
+        };
+
+        assert_eq!(machine_slot_number(&machine, Some(&position)), Some(11));
+        assert_eq!(machine_tray_index(&machine, Some(&position)), Some(4));
+    }
+
+    #[test]
+    fn machine_placement_is_fallback_when_position_info_is_absent() {
+        let machine = rpc::forge::Machine {
+            placement_in_rack: Some(rpc::forge::PlacementInRack {
+                slot_number: Some(2),
+                tray_index: Some(1),
+            }),
+            ..Default::default()
+        };
+
+        assert_eq!(machine_slot_number(&machine, None), Some(2));
+        assert_eq!(machine_tray_index(&machine, None), Some(1));
     }
 }

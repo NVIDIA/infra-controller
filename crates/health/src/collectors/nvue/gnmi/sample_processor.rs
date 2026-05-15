@@ -324,8 +324,32 @@ pub(crate) fn now_unix_secs() -> f64 {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+
+    use carbide_uuid::rack::RackId;
+    use carbide_uuid::switch::{SwitchId, SwitchIdSource, SwitchType};
+
+    use crate::endpoint::{EndpointMetadata, SwitchData};
 
     use super::*;
+
+    #[derive(Default)]
+    struct CapturingSink {
+        events: Mutex<Vec<(EventContext, CollectorEvent)>>,
+    }
+
+    impl DataSink for CapturingSink {
+        fn sink_type(&self) -> &'static str {
+            "capturing_sink"
+        }
+
+        fn handle_event(&self, context: &EventContext, event: &CollectorEvent) {
+            self.events
+                .lock()
+                .expect("lock poisoned")
+                .push((context.clone(), event.clone()));
+        }
+    }
 
     #[test]
     fn test_leaf_matches() {
@@ -440,6 +464,13 @@ mod tests {
         }
     }
 
+    fn test_switch_id(label: &str) -> SwitchId {
+        let mut hash = [0u8; 32];
+        let bytes = label.as_bytes();
+        hash[..bytes.len().min(32)].copy_from_slice(&bytes[..bytes.len().min(32)]);
+        SwitchId::new(SwitchIdSource::Tpm, hash, SwitchType::NvLink)
+    }
+
     #[test]
     fn test_process_notification_interface_oper_status() {
         let proc = test_processor();
@@ -468,6 +499,72 @@ mod tests {
 
         let count = proc.process_notification(&notification);
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn emitted_metrics_preserve_switch_position_context() {
+        use std::str::FromStr;
+
+        use mac_address::MacAddress;
+
+        use crate::endpoint::BmcAddr;
+
+        let sink = Arc::new(CapturingSink::default());
+        let switch_id = test_switch_id("switch-a");
+        let proc = GnmiSampleProcessor {
+            data_sink: Some(sink.clone()),
+            event_context: EventContext {
+                endpoint_key: "aa:bb:cc:dd:ee:ff".to_string(),
+                addr: BmcAddr {
+                    ip: "10.0.0.1".parse().unwrap(),
+                    port: None,
+                    mac: MacAddress::from_str("AA:BB:CC:DD:EE:FF").unwrap(),
+                },
+                collector_type: NVUE_GNMI_SAMPLE_STREAM_ID,
+                metadata: Some(EndpointMetadata::Switch(SwitchData {
+                    id: Some(switch_id),
+                    serial: "SN-SWITCH-001".to_string(),
+                    slot_number: Some(7),
+                    tray_index: Some(3),
+                })),
+                rack_id: Some(RackId::new("RACK_2")),
+            },
+            switch_id: "SN-SWITCH-001".to_string(),
+        };
+        let notification = proto::Notification {
+            timestamp: 0,
+            prefix: Some(proto::Path {
+                elem: vec![
+                    make_path_elem("interfaces", &[]),
+                    make_path_elem("interface", &[("name", "nvl4")]),
+                ],
+                ..Default::default()
+            }),
+            update: vec![proto::Update {
+                path: Some(proto::Path {
+                    elem: vec![
+                        make_path_elem("state", &[]),
+                        make_path_elem("oper-status", &[]),
+                    ],
+                    ..Default::default()
+                }),
+                val: Some(make_typed_value_string("UP")),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let count = proc.process_notification(&notification);
+        assert_eq!(count, 1);
+
+        let events = sink.events.lock().expect("lock poisoned");
+        assert_eq!(events.len(), 1);
+        let (context, event) = &events[0];
+        assert_eq!(context.switch_id(), Some(switch_id));
+        assert_eq!(context.switch_slot_number(), Some(7));
+        assert_eq!(context.switch_tray_index(), Some(3));
+        assert_eq!(context.rack_id().map(RackId::as_str), Some("RACK_2"));
+        assert!(matches!(event, CollectorEvent::Metric(_)));
     }
 
     #[test]

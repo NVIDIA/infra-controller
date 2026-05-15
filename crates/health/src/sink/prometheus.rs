@@ -103,6 +103,9 @@ impl PrometheusSink {
         if let Some(serial) = context.serial_number() {
             labels.push((Cow::Borrowed("serial_number"), serial.to_string()));
         }
+        if let Some(rack_id) = context.rack_id() {
+            labels.push((Cow::Borrowed("rack_id"), rack_id.to_string()));
+        }
         if let Some(slot) = context.slot_number() {
             labels.push((Cow::Borrowed("machine_slot_number"), slot.to_string()));
         }
@@ -237,6 +240,7 @@ mod tests {
     use std::str::FromStr;
 
     use carbide_uuid::nvlink::NvLinkDomainId;
+    use carbide_uuid::rack::RackId;
     use carbide_uuid::switch::{SwitchId, SwitchIdSource, SwitchType};
     use mac_address::MacAddress;
 
@@ -269,7 +273,7 @@ mod tests {
                 tray_index: Some(5),
                 nvlink_domain_uuid: Some(NvLinkDomainId::nil()),
             })),
-            rack_id: None,
+            rack_id: Some(RackId::new("RACK_1")),
         };
 
         let labels = PrometheusSink::stream_static_labels(&context);
@@ -284,6 +288,7 @@ mod tests {
             Some("fm100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0")
         );
         assert_eq!(label_value("serial_number"), Some("MN-001"));
+        assert_eq!(label_value("rack_id"), Some("RACK_1"));
         assert_eq!(label_value("machine_slot_number"), Some("15"));
         assert_eq!(label_value("machine_tray_index"), Some("5"));
         assert_eq!(
@@ -310,7 +315,7 @@ mod tests {
                 slot_number: Some(7),
                 tray_index: Some(3),
             })),
-            rack_id: None,
+            rack_id: Some(RackId::new("RACK_2")),
         };
 
         let labels = PrometheusSink::stream_static_labels(&context);
@@ -322,6 +327,7 @@ mod tests {
 
         assert_eq!(label_value("switch_id"), Some(switch_id_label.as_str()));
         assert_eq!(label_value("serial_number"), Some("SN-SWITCH-001"));
+        assert_eq!(label_value("rack_id"), Some("RACK_2"));
         assert_eq!(label_value("switch_slot_number"), Some("7"));
         assert_eq!(label_value("switch_tray_index"), Some("3"));
     }

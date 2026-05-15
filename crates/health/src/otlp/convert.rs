@@ -79,6 +79,9 @@ fn resource_attributes(context: &EventContext) -> Vec<KeyValue> {
     if let Some(switch_id) = context.switch_id() {
         attrs.push(kv("switch.id", switch_id.to_string()));
     }
+    if let Some(rack_id) = context.rack_id() {
+        attrs.push(kv("rack.id", rack_id.to_string()));
+    }
     if let Some(slot) = context.slot_number() {
         attrs.push(int_kv("machine.slot_number", i64::from(slot)));
     }
@@ -265,6 +268,7 @@ mod tests {
     use std::str::FromStr;
 
     use carbide_uuid::nvlink::NvLinkDomainId;
+    use carbide_uuid::rack::RackId;
     use carbide_uuid::switch::{SwitchId, SwitchIdSource, SwitchType};
     use mac_address::MacAddress;
 
@@ -337,11 +341,12 @@ mod tests {
                 tray_index: Some(5),
                 nvlink_domain_uuid: Some(domain_uuid),
             })),
-            rack_id: None,
+            rack_id: Some(RackId::new("RACK_1")),
         };
 
         let attrs = resource_attributes(&context);
 
+        assert_eq!(attr_value(&attrs, "rack.id"), Some("RACK_1"));
         assert_eq!(attr_int_value(&attrs, "machine.slot_number"), Some(15));
         assert_eq!(attr_int_value(&attrs, "machine.tray_index"), Some(5));
         assert_eq!(
@@ -368,7 +373,7 @@ mod tests {
                 slot_number: Some(7),
                 tray_index: Some(3),
             })),
-            rack_id: None,
+            rack_id: Some(RackId::new("RACK_2")),
         };
 
         let attrs = resource_attributes(&context);
@@ -377,6 +382,7 @@ mod tests {
             attr_value(&attrs, "switch.id"),
             Some(switch_id_attr.as_str())
         );
+        assert_eq!(attr_value(&attrs, "rack.id"), Some("RACK_2"));
         assert_eq!(attr_int_value(&attrs, "switch.slot_number"), Some(7));
         assert_eq!(attr_int_value(&attrs, "switch.tray_index"), Some(3));
     }
