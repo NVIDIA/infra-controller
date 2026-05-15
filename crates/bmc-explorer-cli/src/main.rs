@@ -124,6 +124,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     fallback_credentials.clone(),
                     args.boot_mac,
                     None,
+                    None,
                 )
                 .await?;
         }
@@ -138,6 +139,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         bmc_ip_address,
                         fallback_credentials.clone(),
                         args.boot_mac,
+                        None,
                         None,
                     )
                     .await?,

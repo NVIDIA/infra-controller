@@ -29,10 +29,11 @@ use forge_secrets::credentials::{CredentialManager, Credentials};
 use libredfish::model::service_root::RedfishVendor;
 use mac_address::MacAddress;
 use model::expected_entity::{BmcCredentialsData, ExpectedEntity};
+use model::expected_machine::ExpectedHostNic;
 use model::expected_switch::ExpectedSwitch;
 use model::machine::MachineInterfaceSnapshot;
 use model::site_explorer::{
-    EndpointExplorationError, EndpointExplorationReport, LockdownStatus, NicMode,
+    EndpointExplorationError, EndpointExplorationReport, EthernetInterface, LockdownStatus, NicMode,
 };
 
 use super::EndpointExplorer;
@@ -148,8 +149,9 @@ impl BmcEndpointExplorer {
         credentials: Credentials,
         boot_interface_mac: Option<MacAddress>,
         vendor: Option<RedfishVendor>,
+        expected: Option<&ExpectedEntity>,
     ) -> Result<EndpointExplorationReport, EndpointExplorationError> {
-        match self.mode {
+        let mut report = match self.mode {
             SiteExplorerExploreMode::LibRedfish => {
                 self.redfish_client
                     .generate_exploration_report(
@@ -195,7 +197,11 @@ impl BmcEndpointExplorer {
                 }
                 libredfish
             }
-        }
+        }?;
+
+        backfill_system_ethernet_interfaces_from_expected_host_nics(&mut report, expected);
+
+        Ok(report)
     }
 
     // Handle machines that still have their bmc root password set to the factory default.
@@ -584,6 +590,7 @@ impl EndpointExplorer for BmcEndpointExplorer {
                         credentials,
                         boot_interface_mac,
                         Some(vendor),
+                        expected,
                     )
                     .await
                 {
@@ -689,6 +696,7 @@ impl EndpointExplorer for BmcEndpointExplorer {
                             bmc_credentials,
                             None,
                             Some(vendor),
+                            expected,
                         )
                         .await?
                     }
@@ -708,6 +716,7 @@ impl EndpointExplorer for BmcEndpointExplorer {
                             bmc_credentials,
                             None,
                             Some(vendor),
+                            expected,
                         )
                         .await?
                     }
@@ -1425,5 +1434,55 @@ fn warn_report_diff(report1: &EndpointExplorationReport, report2: &EndpointExplo
             report1.revision_id,
             report2.revision_id
         )
+    }
+}
+
+fn backfill_system_ethernet_interfaces_from_expected_host_nics(
+    report: &mut EndpointExplorationReport,
+    expected: Option<&ExpectedEntity>,
+) {
+    let Some(ExpectedEntity::Machine(expected_machine)) = expected else {
+        return;
+    };
+    let host_nics = &expected_machine.data.host_nics;
+    if host_nics.is_empty() {
+        return;
+    }
+    if report.is_dpu() || report.is_switch() || report.is_power_shelf() {
+        return;
+    }
+
+    for system in report.systems.iter_mut() {
+        if !system.ethernet_interfaces.is_empty() {
+            continue;
+        }
+        tracing::info!(
+            system_id = %system.id,
+            host_nic_count = host_nics.len(),
+            "System EthernetInterfaces missing from Redfish; synthesizing from ExpectedMachine.host_nics"
+        );
+        system.ethernet_interfaces = host_nics
+            .iter()
+            .enumerate()
+            .map(|(idx, nic)| synthesize_ethernet_interface_from_host_nic(idx, nic))
+            .collect();
+    }
+}
+
+fn synthesize_ethernet_interface_from_host_nic(
+    idx: usize,
+    nic: &ExpectedHostNic,
+) -> EthernetInterface {
+    let id = match nic.nic_type.as_deref() {
+        Some(t) if !t.is_empty() => format!("expected-{t}-{idx}"),
+        _ => format!("expected-host-nic-{idx}"),
+    };
+    EthernetInterface {
+        description: Some("Synthesized from ExpectedMachine.host_nics".to_string()),
+        id: Some(id),
+        interface_enabled: None,
+        mac_address: Some(nic.mac_address),
+        link_status: None,
+        uefi_device_path: None,
     }
 }
