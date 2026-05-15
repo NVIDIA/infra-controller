@@ -668,6 +668,10 @@ pub struct NvueGnmiConfig {
     #[serde(with = "humantime_serde")]
     pub request_timeout: Duration,
 
+    /// Enable gNMI ON_CHANGE subscription for live system-event messages.
+    #[serde(alias = "system_events_subscription_enabled", alias = "events_enabled")]
+    pub system_events_enabled: bool,
+
     /// gNMI SAMPLE subscription paths.
     pub paths: NvueGnmiPaths,
 }
@@ -678,6 +682,7 @@ impl Default for NvueGnmiConfig {
             gnmi_port: 9339,
             sample_interval: Duration::from_secs(300),
             request_timeout: Duration::from_secs(30),
+            system_events_enabled: true,
             paths: NvueGnmiPaths::default(),
         }
     }
@@ -1043,6 +1048,14 @@ mod tests {
             } else {
                 panic!("nvue rest config should be enabled in example config");
             }
+            if let Configurable::Enabled(ref gnmi) = nvue.gnmi {
+                assert_eq!(gnmi.gnmi_port, 9339);
+                assert_eq!(gnmi.sample_interval, Duration::from_secs(300));
+                assert_eq!(gnmi.request_timeout, Duration::from_secs(30));
+                assert!(gnmi.system_events_enabled);
+            } else {
+                panic!("nvue gnmi config should be enabled in example config");
+            }
         } else {
             panic!("nvue config should be enabled in example config");
         }
@@ -1341,6 +1354,37 @@ interfaces_enabled = false
                 assert!(!rest.paths.interfaces_enabled);
             } else {
                 panic!("nvue rest config should be enabled");
+            }
+        } else {
+            panic!("nvue config should be enabled");
+        }
+    }
+
+    #[test]
+    fn test_nvue_gnmi_events_disabled() {
+        let toml_content = r#"
+[endpoint_sources.carbide_api]
+enabled = false
+
+[sinks.health_report]
+enabled = false
+
+[collectors.nvue.gnmi]
+gnmi_port = 9339
+system_events_enabled = false
+"#;
+
+        let config: Config = Figment::new()
+            .merge(Serialized::defaults(Config::default()))
+            .merge(Toml::string(toml_content))
+            .extract()
+            .expect("failed to parse");
+
+        if let Configurable::Enabled(ref nvue) = config.collectors.nvue {
+            if let Configurable::Enabled(ref gnmi) = nvue.gnmi {
+                assert!(!gnmi.system_events_enabled);
+            } else {
+                panic!("gnmi config should be enabled");
             }
         } else {
             panic!("nvue config should be enabled");

@@ -22,7 +22,12 @@ use std::time::Duration;
 use prometheus::{Counter, Gauge, Histogram, HistogramOpts, IntGauge, Opts};
 use tokio_util::sync::CancellationToken;
 
-use super::client::{GnmiClient, nvue_subscribe_paths};
+use super::client::{
+    GnmiClient, nvue_subscribe_paths, system_events_prefix, system_events_subscribe_path,
+};
+use super::on_change_processor::{
+    GnmiOnChangeProcessor, ON_CHANGE_STREAM_ID_SYSTEM_EVENTS, OnChangeStreamMetrics,
+};
 use super::proto;
 use super::sample_processor::{GnmiSampleProcessor, NVUE_GNMI_SAMPLE_STREAM_ID, now_unix_secs};
 use crate::HealthError;
@@ -221,25 +226,71 @@ pub fn spawn_gnmi_collector(
     let sample_stream_metrics = GnmiStreamMetrics::new(registry, &prefix, "", sample_const_labels)?;
 
     let sample_config = GnmiStreamConfig {
-        client,
+        client: client.clone(),
         paths: nvue_subscribe_paths(&gnmi_config.paths),
         sample_interval_nanos: gnmi_config.sample_interval.as_nanos() as u64,
     };
 
     let sample_processor = GnmiSampleProcessor {
-        data_sink,
+        data_sink: data_sink.clone(),
         event_context: sample_event_context,
-        switch_id,
+        switch_id: switch_id.clone(),
+    };
+
+    let on_change_state = if gnmi_config.system_events_enabled {
+        let on_change_const_labels = HashMap::from([
+            (
+                "collector_type".to_string(),
+                ON_CHANGE_STREAM_ID_SYSTEM_EVENTS.to_string(),
+            ),
+            ("endpoint_key".to_string(), endpoint.hash_key().into_owned()),
+        ]);
+
+        let on_change_stream_metrics =
+            GnmiStreamMetrics::new(registry, &prefix, "_events", on_change_const_labels.clone())?;
+        let on_change_row_metrics = OnChangeStreamMetrics::new(
+            registry,
+            &prefix,
+            ON_CHANGE_STREAM_ID_SYSTEM_EVENTS,
+            on_change_const_labels,
+        )?;
+        let on_change_event_context =
+            EventContext::from_endpoint(endpoint, ON_CHANGE_STREAM_ID_SYSTEM_EVENTS);
+        let on_change_processor = GnmiOnChangeProcessor::new(
+            ON_CHANGE_STREAM_ID_SYSTEM_EVENTS.to_string(),
+            on_change_row_metrics,
+            data_sink,
+            on_change_event_context,
+            switch_id,
+        );
+
+        Some((client, on_change_stream_metrics, on_change_processor))
+    } else {
+        None
     };
 
     Ok(Collector::spawn_task(move |cancel_token| async move {
-        gnmi_sample_task(
-            cancel_token,
+        let sample_handle = tokio::spawn(gnmi_sample_task(
+            cancel_token.clone(),
             sample_config,
             sample_stream_metrics,
             sample_processor,
-        )
-        .await;
+        ));
+
+        let on_change_handle =
+            on_change_state.map(|(client, stream_metrics, on_change_processor)| {
+                tokio::spawn(gnmi_on_change_task(
+                    cancel_token,
+                    client,
+                    stream_metrics,
+                    on_change_processor,
+                ))
+            });
+
+        let _ = sample_handle.await;
+        if let Some(handle) = on_change_handle {
+            let _ = handle.await;
+        }
     }))
 }
 
@@ -323,6 +374,108 @@ async fn gnmi_sample_task(
                                 error = ?e,
                                 switch_id = %sample_processor.switch_id,
                                 "nvue_gnmi SAMPLE: stream error, reconnecting"
+                            );
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if cancel_token
+            .run_until_cancelled(tokio::time::sleep(backoff.next_delay()))
+            .await
+            .is_none()
+        {
+            stream_metrics.connection_state.set(SHUTDOWN);
+            return;
+        }
+    }
+}
+
+async fn gnmi_on_change_task(
+    cancel_token: CancellationToken,
+    client: GnmiClient,
+    stream_metrics: GnmiStreamMetrics,
+    on_change_processor: GnmiOnChangeProcessor,
+) {
+    let mut backoff = ExponentialBackoff::new(&BackoffConfig {
+        initial: Duration::from_secs(2),
+        max: Duration::from_secs(60),
+    });
+    let prefix = system_events_prefix();
+    let paths = system_events_subscribe_path();
+
+    loop {
+        stream_metrics.connection_state.set(CONNECTING);
+
+        let Some(stream) = cancel_token
+            .run_until_cancelled(client.subscribe_on_change(&prefix, &paths))
+            .await
+        else {
+            stream_metrics.connection_state.set(SHUTDOWN);
+            return;
+        };
+
+        match stream {
+            Err(e) => {
+                stream_metrics.connection_state.set(TRANSIENT_FAILURE);
+                stream_metrics.reconnections_total.inc();
+                tracing::warn!(
+                    error = ?e,
+                    switch_id = %on_change_processor.switch_id,
+                    stream = %on_change_processor.collector_name,
+                    "nvue_gnmi ON_CHANGE: connection failed, backing off"
+                );
+            }
+            Ok(mut stream) => {
+                stream_metrics.connection_state.set(READY);
+                stream_metrics
+                    .connection_established_timestamp
+                    .set(now_unix_secs());
+                let _conn_guard = StreamingConnectionGuard::inc(stream_metrics.connected.clone());
+                backoff.reset();
+                tracing::info!(
+                    switch_id = %on_change_processor.switch_id,
+                    stream = %on_change_processor.collector_name,
+                    "nvue_gnmi ON_CHANGE: stream connected"
+                );
+
+                loop {
+                    let Some(msg) = cancel_token.run_until_cancelled(stream.message()).await else {
+                        stream_metrics.connection_state.set(SHUTDOWN);
+                        tracing::info!(
+                            switch_id = %on_change_processor.switch_id,
+                            stream = %on_change_processor.collector_name,
+                            "nvue_gnmi ON_CHANGE: cancelled, shutting down"
+                        );
+                        return;
+                    };
+
+                    match msg {
+                        Ok(Some(resp)) => {
+                            on_change_processor.process_subscribe_response(&resp, &stream_metrics);
+                        }
+                        Ok(None) => {
+                            stream_metrics.connection_state.set(IDLE);
+                            stream_metrics.server_initiated_closures_total.inc();
+                            tracing::info!(
+                                switch_id = %on_change_processor.switch_id,
+                                stream = %on_change_processor.collector_name,
+                                "nvue_gnmi ON_CHANGE: stream closed by server, reconnecting"
+                            );
+                            backoff.reset();
+                            break;
+                        }
+                        Err(e) => {
+                            stream_metrics.connection_state.set(TRANSIENT_FAILURE);
+                            stream_metrics.stream_errors_total.inc();
+                            stream_metrics.reconnections_total.inc();
+                            tracing::warn!(
+                                error = ?e,
+                                switch_id = %on_change_processor.switch_id,
+                                stream = %on_change_processor.collector_name,
+                                "nvue_gnmi ON_CHANGE: stream error, reconnecting"
                             );
                             break;
                         }

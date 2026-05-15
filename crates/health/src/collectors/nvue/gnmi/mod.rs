@@ -16,6 +16,7 @@
  */
 
 pub(crate) mod client;
+pub(crate) mod on_change_processor;
 pub(crate) mod sample_processor;
 pub(crate) mod subscriber;
 

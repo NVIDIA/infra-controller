@@ -183,6 +183,77 @@ impl GnmiClient {
 
         Ok(response.into_inner())
     }
+
+    /// open a gNMI ON_CHANGE streaming subscription
+    pub async fn subscribe_on_change(
+        &self,
+        prefix: &Path,
+        paths: &[Path],
+    ) -> Result<tonic::Streaming<proto::SubscribeResponse>, HealthError> {
+        let mut client = self.connect().await?;
+
+        let subscribe_request = build_on_change_subscribe_request(prefix, paths);
+
+        let auth = build_auth_metadata(&self.username, &self.password)?;
+        let stream = tokio_stream::once(subscribe_request);
+        let request = Request::from_parts(auth, Extensions::default(), stream);
+
+        let response = client.subscribe(request).await.map_err(|e| {
+            HealthError::GnmiError(format!(
+                "switch {}: subscribe_on_change RPC failed: {e}",
+                self.switch_id
+            ))
+        })?;
+
+        tracing::debug!(
+            switch_id = %self.switch_id,
+            "gNMI ON_CHANGE stream opened"
+        );
+
+        Ok(response.into_inner())
+    }
+}
+
+pub(crate) fn system_events_prefix() -> Path {
+    Path {
+        target: "nvos".to_string(),
+        elem: vec![PathElem {
+            name: "system-events".to_string(),
+            key: Default::default(),
+        }],
+        ..Default::default()
+    }
+}
+
+/// gNMI path for ON_CHANGE system event subscriptions. An empty path subscribes
+/// to all events below the `system-events` prefix.
+pub(crate) fn system_events_subscribe_path() -> Vec<Path> {
+    vec![Path::default()]
+}
+
+fn build_on_change_subscribe_request(prefix: &Path, paths: &[Path]) -> SubscribeRequest {
+    let subscription_list = SubscriptionList {
+        prefix: Some(prefix.clone()),
+        subscription: paths
+            .iter()
+            .map(|path| Subscription {
+                path: Some(path.clone()),
+                mode: SubscriptionMode::OnChange.into(),
+                ..Default::default()
+            })
+            .collect(),
+        mode: SubscriptionListMode::Stream.into(),
+        encoding: Encoding::Json.into(),
+        updates_only: true,
+        ..Default::default()
+    };
+
+    SubscribeRequest {
+        request: Some(proto::subscribe_request::Request::Subscribe(
+            subscription_list,
+        )),
+        extension: vec![],
+    }
 }
 
 fn build_sample_subscribe_request(paths: &[Path], sample_interval_nanos: u64) -> SubscribeRequest {
@@ -466,5 +537,60 @@ mod tests {
             );
             assert!(sub.path.is_some(), "each subscription must have a path");
         }
+    }
+
+    #[test]
+    fn test_system_events_prefix() {
+        let prefix = system_events_prefix();
+        assert_eq!(prefix.target, "nvos");
+        assert_eq!(prefix.elem.len(), 1);
+        assert_eq!(prefix.elem[0].name, "system-events");
+    }
+
+    #[test]
+    fn test_system_events_subscribe_path() {
+        let paths = system_events_subscribe_path();
+        assert_eq!(paths.len(), 1);
+        assert!(
+            paths[0].elem.is_empty(),
+            "empty path subscribes to all events under prefix"
+        );
+    }
+
+    #[test]
+    fn test_build_on_change_subscribe_request() {
+        let prefix = system_events_prefix();
+        let paths = system_events_subscribe_path();
+
+        let req = build_on_change_subscribe_request(&prefix, &paths);
+
+        let sub_list = match req.request {
+            Some(proto::subscribe_request::Request::Subscribe(sl)) => sl,
+            _ => panic!("expected Subscribe variant"),
+        };
+
+        assert_eq!(
+            sub_list.mode,
+            i32::from(SubscriptionListMode::Stream),
+            "must use Stream mode"
+        );
+        assert_eq!(
+            sub_list.encoding,
+            i32::from(Encoding::Json),
+            "encoding must be JSON"
+        );
+        assert!(sub_list.updates_only, "ON_CHANGE must use updates_only");
+
+        let req_prefix = sub_list.prefix.expect("prefix must be set");
+        assert_eq!(req_prefix.target, "nvos");
+        assert_eq!(req_prefix.elem.len(), 1);
+        assert_eq!(req_prefix.elem[0].name, "system-events");
+
+        assert_eq!(sub_list.subscription.len(), 1);
+        assert_eq!(
+            sub_list.subscription[0].mode,
+            i32::from(SubscriptionMode::OnChange),
+            "subscription must use OnChange mode"
+        );
     }
 }
