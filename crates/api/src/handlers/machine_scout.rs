@@ -75,6 +75,8 @@ pub(crate) async fn cleanup_machine_completed(
                 cleanup_context: CleanupContext::InitialDiscovery,
                 ..
             } => FailureSource::StateMachineArea(StateMachineArea::HostInit),
+            // Preserve the original HostInit context across cleanup retries so recovery returns to
+            // HostInit/WaitingForDiscovery instead of the deprovision cleanup flow.
             ManagedHostState::Failed {
                 details:
                     FailureDetails {

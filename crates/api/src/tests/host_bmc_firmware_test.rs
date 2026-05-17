@@ -2759,7 +2759,8 @@ async fn test_forge_agent_control_waiting_for_scout_upgrade_returns_task_without
     sqlx::query("UPDATE machines SET last_cleanup_time = NULL WHERE id = $1")
         .bind(mh.host().id)
         .execute(txn.as_mut())
-        .await?;
+        .await
+        .unwrap();
     txn.commit().await.unwrap();
 
     let mut txn = env.pool.begin().await.unwrap();

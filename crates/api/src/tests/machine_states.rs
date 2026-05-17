@@ -42,12 +42,14 @@ use measured_boot::pcr::PcrRegisterValue;
 use measured_boot::records::MeasurementBundleState;
 use measured_boot::report::MeasurementReport;
 use model::controller_outcome::PersistentStateHandlerOutcome;
+use model::firmware::FirmwareComponentType;
 use model::hardware_info::TpmEkCertificate;
 use model::machine::health_override::HARDWARE_HEALTH_OVERRIDE_PREFIX;
 use model::machine::{
     CleanupContext, CleanupState, DpuInitState, DpuReprovisionStates, FailureCause, FailureDetails,
-    FailureSource, InstanceState, LockdownMode, MachineState, MachineValidatingState,
-    ManagedHostState, MeasuringState, RetryInfo, SpdmMeasuringState, ValidationState,
+    FailureSource, HostReprovisionState, InstanceState, LockdownMode, MachineState,
+    MachineValidatingState, ManagedHostState, MeasuringState, RetryInfo, SpdmMeasuringState,
+    StateMachineArea, ValidationState,
 };
 use rpc::forge::forge_server::Forge;
 use rpc::forge::{HealthReportEntry, InsertMachineHealthReportRequest, TpmCaCert, TpmCaCertId};
@@ -712,6 +714,114 @@ async fn test_nvme_clean_failed_state_host(pool: sqlx::PgPool) {
         host.current_state(),
         ManagedHostState::WaitingForCleanup { .. }
     ));
+}
+
+#[crate::sqlx_test]
+async fn test_repeated_initial_discovery_cleanup_failure_preserves_host_init_source(
+    pool: sqlx::PgPool,
+) {
+    fn cleanup_failed_request(machine_id: MachineId) -> Request<rpc::MachineCleanupInfo> {
+        Request::new(rpc::MachineCleanupInfo {
+            machine_id: machine_id.into(),
+            nvme: Some(
+                rpc::protos::forge::machine_cleanup_info::CleanupStepResult {
+                    result: rpc::protos::forge::machine_cleanup_info::CleanupResult::Error as i32,
+                    message: "test nvme failure".to_string(),
+                },
+            ),
+            ..Default::default()
+        })
+    }
+
+    let env = create_test_env(pool).await;
+    let mh = common::api_fixtures::create_managed_host(&env).await;
+    let waiting_for_initial_discovery_cleanup = ManagedHostState::WaitingForCleanup {
+        cleanup_state: CleanupState::HostCleanup {
+            boss_controller_id: None,
+        },
+        cleanup_context: CleanupContext::InitialDiscovery,
+    };
+
+    let mut txn = env.db_txn().await;
+    let host = mh.host().db_machine(&mut txn).await;
+    db::machine::advance(
+        &host,
+        &mut txn,
+        &waiting_for_initial_discovery_cleanup,
+        None,
+    )
+    .await
+    .unwrap();
+    txn.commit().await.unwrap();
+
+    env.api
+        .cleanup_machine_completed(cleanup_failed_request(mh.id))
+        .await
+        .unwrap();
+    env.run_machine_state_controller_iteration().await;
+
+    let mut txn = env.db_txn().await;
+    let host = mh.host().db_machine(&mut txn).await;
+    assert!(matches!(
+        host.current_state(),
+        ManagedHostState::Failed {
+            details: FailureDetails {
+                cause: FailureCause::NVMECleanFailed { .. },
+                source: FailureSource::StateMachineArea(StateMachineArea::HostInit),
+                ..
+            },
+            ..
+        }
+    ));
+    assert!(matches!(
+        host.failure_details.source,
+        FailureSource::StateMachineArea(StateMachineArea::HostInit)
+    ));
+    txn.commit().await.unwrap();
+
+    env.api
+        .cleanup_machine_completed(cleanup_failed_request(mh.id))
+        .await
+        .unwrap();
+
+    let mut txn = env.db_txn().await;
+    let host = mh.host().db_machine(&mut txn).await;
+    assert!(matches!(
+        host.failure_details.source,
+        FailureSource::StateMachineArea(StateMachineArea::HostInit)
+    ));
+    txn.commit().await.unwrap();
+
+    env.api
+        .cleanup_machine_completed(Request::new(rpc::MachineCleanupInfo {
+            machine_id: mh.id.into(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+
+    // Make the recovery timestamp unambiguously newer than the failed state version and failed_at.
+    let mut txn = env.db_txn().await;
+    sqlx::query(
+        "UPDATE machines SET last_cleanup_time = NOW() + INTERVAL '1 second' WHERE id = $1",
+    )
+    .bind(mh.id)
+    .execute(txn.as_mut())
+    .await
+    .unwrap();
+    txn.commit().await.unwrap();
+
+    env.run_machine_state_controller_iteration().await;
+
+    let mut txn = env.db_txn().await;
+    let host = mh.host().db_machine(&mut txn).await;
+    assert!(matches!(
+        host.current_state(),
+        ManagedHostState::HostInit {
+            machine_state: MachineState::WaitingForDiscovery
+        }
+    ));
+    txn.commit().await.unwrap();
 }
 
 #[crate::sqlx_test]
@@ -1815,6 +1925,61 @@ async fn test_measurement_host_init_failed_to_waiting_for_measurements_to_pendin
         ManagedHostState::Ready,
     )
     .await;
+}
+
+#[crate::sqlx_test]
+async fn test_forge_agent_control_host_reprovision_scout_upgrade_does_not_reset_without_cleanup_timestamp(
+    pool: sqlx::PgPool,
+) {
+    let env = create_test_env(pool).await;
+    let mh = create_managed_host(&env).await;
+    let upgrade_task_id = uuid::Uuid::new_v4().to_string();
+    let task_json = serde_json::json!({
+        "upgrade_task_id": &upgrade_task_id,
+        "component_type": "bmc",
+        "target_version": "1.2.3",
+        "script": {
+            "url": "http://pxe/scripts/upgrade.sh",
+            "sha256": "script-sha",
+        },
+        "execution_timeout_seconds": 30,
+        "artifact_download_timeout_seconds": 10,
+        "file_artifacts": [{
+            "url": "http://pxe/firmware.bin",
+            "sha256": "firmware-sha",
+        }],
+    })
+    .to_string();
+
+    let state = ManagedHostState::HostReprovision {
+        reprovision_state: HostReprovisionState::WaitingForScoutUpgrade {
+            upgrade_task_id,
+            firmware_type: FirmwareComponentType::Bmc,
+            final_version: "1.2.3".to_string(),
+            power_drains_needed: None,
+            started_at: chrono::Utc::now(),
+            deadline: chrono::Utc::now() + chrono::TimeDelta::minutes(60),
+            task_json,
+            result: None,
+        },
+        retry_count: 0,
+    };
+
+    let mut txn = env.db_txn().await;
+    let host = mh.host().db_machine(&mut txn).await;
+    db::machine::advance(&host, &mut txn, &state, None)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE machines SET last_cleanup_time = NULL WHERE id = $1")
+        .bind(mh.host().id)
+        .execute(txn.as_mut())
+        .await
+        .unwrap();
+    txn.commit().await.unwrap();
+
+    let response = mh.host().forge_agent_control().await;
+    assert!(matches!(response.action, Some(Action::FirmwareUpgrade(_))));
+    assert_eq!(response.legacy_action, LegacyAction::FirmwareUpgrade as i32);
 }
 
 #[crate::sqlx_test]
