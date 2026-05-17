@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-buse std::collections::HashMap;
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::net::IpAddr;
 use std::str::FromStr;
