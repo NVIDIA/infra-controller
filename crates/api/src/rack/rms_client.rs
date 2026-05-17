@@ -850,6 +850,12 @@ pub mod test_support {
                 .pop_front()
                 .unwrap_or(Ok(rms::SetScaleUpFabricStateResponse::default()))
         }
+        async fn set_scale_up_fabric_state(
+            &self,
+            _cmd: rms::SetScaleUpFabricStateRequest,
+        ) -> Result<rms::SetScaleUpFabricStateResponse, RackManagerError> {
+            Ok(rms::SetScaleUpFabricStateResponse::default())
+        }
         async fn fetch_switch_system_image(
             &self,
             _cmd: rms::FetchSwitchSystemImageRequest,

@@ -2021,6 +2021,10 @@ pub async fn handle_maintenance(
                     },
                 }))
             }
+            ConfigureNmxClusterState::DisableScaleUpFabricState
+            | ConfigureNmxClusterState::ConfigureScaleUpFabricManager => Ok(
+                StateHandlerOutcome::wait("ConfigureNmxCluster sub-state is not wired yet".into()),
+            ),
             ConfigureNmxClusterState::WaitForFabricStatus => {
                 let switch_inventory = load_rack_switch_firmware_inventory(
                     &ctx.services.db_pool,
