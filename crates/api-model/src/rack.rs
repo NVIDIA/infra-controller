@@ -456,13 +456,16 @@ impl Display for RackMaintenanceState {
 
 /// Sub-states of `RackMaintenanceState::ConfigureNmxCluster`.
 ///
-/// `Start` selects a primary switch and asks RMS to configure the
-/// NMX cluster. `WaitForFabricStatus` polls
-/// `GetScaleUpFabricServicesStatus` and persists the per-switch
-/// `fabric_manager_status` before advancing.
+/// `Start` selects and persists the primary switch. `DisableScaleUpFabricState`
+/// disables ScaleUpFabric state on all scoped switches before
+/// `ConfigureScaleUpFabricManager` configures only the primary switch.
+/// `WaitForFabricStatus` polls `GetScaleUpFabricServicesStatus` and persists
+/// the per-switch `fabric_manager_status` before advancing.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConfigureNmxClusterState {
     Start,
+    DisableScaleUpFabricState,
+    ConfigureScaleUpFabricManager,
     WaitForFabricStatus,
 }
 
@@ -470,6 +473,12 @@ impl Display for ConfigureNmxClusterState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ConfigureNmxClusterState::Start => write!(f, "Start"),
+            ConfigureNmxClusterState::DisableScaleUpFabricState => {
+                write!(f, "DisableScaleUpFabricState")
+            }
+            ConfigureNmxClusterState::ConfigureScaleUpFabricManager => {
+                write!(f, "ConfigureScaleUpFabricManager")
+            }
             ConfigureNmxClusterState::WaitForFabricStatus => write!(f, "WaitForFabricStatus"),
         }
     }
