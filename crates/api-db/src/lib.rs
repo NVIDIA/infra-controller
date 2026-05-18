@@ -58,7 +58,6 @@ pub mod machine_validation_config;
 pub mod machine_validation_result;
 pub mod machine_validation_suites;
 pub mod managed_host;
-pub mod measured_boot;
 pub mod migrations;
 pub mod network_devices;
 pub mod network_prefix;
@@ -578,11 +577,6 @@ impl From<ResourcePoolDatabaseError> for DatabaseError {
             ResourcePoolDatabaseError::ResourcePool(e) => DatabaseError::ResourcePoolError(e),
             ResourcePoolDatabaseError::Database(e) => *e,
         }
-    }
-}
-impl From<::measured_boot::Error> for DatabaseError {
-    fn from(value: ::measured_boot::Error) -> Self {
-        DatabaseError::internal(value.to_string())
     }
 }
 

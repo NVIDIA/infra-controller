@@ -25,15 +25,15 @@ use carbide_uuid::measured_boot::{
     MeasurementApprovedMachineId, MeasurementApprovedProfileId, MeasurementSystemProfileId,
     TrustedMachineId,
 };
-use measured_boot::records::{
-    MeasurementApprovedMachineRecord, MeasurementApprovedProfileRecord, MeasurementApprovedType,
-};
-use measured_boot::site::MachineAttestationSummary;
+use db::DatabaseError;
+use db::db_read::DbReader;
 use sqlx::PgConnection;
 
-use crate::DatabaseError;
-use crate::db_read::DbReader;
-use crate::measured_boot::interface::common;
+use crate::db::interface::common;
+use crate::records::{
+    MeasurementApprovedMachineRecord, MeasurementApprovedProfileRecord, MeasurementApprovedType,
+};
+use crate::site::MachineAttestationSummary;
 
 pub async fn insert_into_approved_machines(
     txn: &mut PgConnection,

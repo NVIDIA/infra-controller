@@ -23,7 +23,7 @@ use std::str::FromStr;
 
 use ::rpc::errors::RpcDataConversionError;
 use carbide_uuid::machine::MachineId;
-use db::measured_boot::interface::machine::get_candidate_machine_records;
+use measured_boot::db::interface::machine::get_candidate_machine_records;
 use measured_boot::pcr::PcrRegisterValue;
 use rpc::protos::measured_boot::{
     AttestCandidateMachineRequest, AttestCandidateMachineResponse, ListCandidateMachinesRequest,
@@ -41,7 +41,7 @@ pub async fn handle_attest_candidate_machine(
     req: AttestCandidateMachineRequest,
 ) -> Result<AttestCandidateMachineResponse, Status> {
     let mut txn = api.txn_begin().await?;
-    let report = db::measured_boot::report::new(
+    let report = measured_boot::db::report::new(
         &mut txn,
         MachineId::from_str(&req.machine_id).map_err(|_| {
             CarbideError::from(RpcDataConversionError::InvalidMachineId(req.machine_id))
@@ -68,7 +68,7 @@ pub async fn handle_show_candidate_machine(
     let machine = match req.selector {
         // Show a machine with the given ID.
         Some(show_candidate_machine_request::Selector::MachineId(machine_uuid)) => {
-            db::measured_boot::machine::from_id(
+            measured_boot::db::machine::from_id(
                 &mut txn,
                 MachineId::from_str(&machine_uuid).map_err(|_| {
                     CarbideError::from(RpcDataConversionError::InvalidMachineId(machine_uuid))
@@ -96,7 +96,7 @@ pub async fn handle_show_candidate_machines(
     _req: ShowCandidateMachinesRequest,
 ) -> Result<ShowCandidateMachinesResponse, Status> {
     Ok(ShowCandidateMachinesResponse {
-        machines: db::measured_boot::machine::get_all(&mut api.db_reader())
+        machines: measured_boot::db::machine::get_all(&mut api.db_reader())
             .await
             .map_err(|e| CarbideError::Internal {
                 message: format!("{e}"),

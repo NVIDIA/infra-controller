@@ -26,30 +26,30 @@ use carbide_uuid::machine::MachineId;
 use carbide_uuid::measured_boot::{
     MeasurementBundleId, MeasurementReportId, MeasurementSystemProfileId, TrustedMachineId,
 };
-use measured_boot::bundle::MeasurementBundle;
-use measured_boot::journal::MeasurementJournal;
-use measured_boot::pcr::{PcrRegisterValue, PcrSet, parse_pcr_index_input};
-use measured_boot::records::{
-    MeasurementApprovedType, MeasurementBundleState, MeasurementMachineState,
-    MeasurementReportRecord, MeasurementReportValueRecord,
-};
-use measured_boot::report::MeasurementReport;
+use db::db_read::DbReader;
+use db::{DatabaseError, DatabaseResult};
 use sqlx::{PgConnection, PgTransaction};
 
-use crate::db_read::DbReader;
-use crate::measured_boot::interface::common;
-use crate::measured_boot::interface::common::pcr_register_values_to_map;
-use crate::measured_boot::interface::report::{
+use crate::bundle::MeasurementBundle;
+use crate::db::interface::common;
+use crate::db::interface::common::pcr_register_values_to_map;
+use crate::db::interface::report::{
     delete_report_for_id, delete_report_values_for_id, get_measurement_report_record_by_id,
     get_measurement_report_values_for_report_id, insert_measurement_report_record,
     insert_measurement_report_value_records, update_report_tstamp, update_report_values_tstamp,
 };
-use crate::measured_boot::interface::site::{
+use crate::db::interface::site::{
     get_approval_for_machine_id, get_approval_for_profile_id,
     remove_from_approved_machines_by_approval_id, remove_from_approved_profiles_by_approval_id,
 };
-use crate::measured_boot::machine::bundle_state_to_machine_state;
-use crate::{DatabaseError, DatabaseResult};
+use crate::db::machine::bundle_state_to_machine_state;
+use crate::journal::MeasurementJournal;
+use crate::pcr::{PcrRegisterValue, PcrSet, parse_pcr_index_input};
+use crate::records::{
+    MeasurementApprovedType, MeasurementBundleState, MeasurementMachineState,
+    MeasurementReportRecord, MeasurementReportValueRecord,
+};
+use crate::report::MeasurementReport;
 
 pub async fn new(
     txn: &mut PgTransaction<'_>,
@@ -160,7 +160,7 @@ pub async fn create_measurement_report(
     // time to make a new journal entry that captures the [possible]
     // bundle_id, the profile_id, and the values to log to the journal.
     let journal = if new_report_created {
-        crate::measured_boot::journal::new(
+        crate::db::journal::new(
             txn,
             report.machine_id,
             report.report_id,
@@ -170,7 +170,7 @@ pub async fn create_measurement_report(
         )
         .await?
     } else {
-        crate::measured_boot::journal::update_measurement_journal(
+        crate::db::journal::update_measurement_journal(
             txn,
             report.report_id,
             journal_data.profile_id,
@@ -299,15 +299,12 @@ impl JournalData {
         let state: MeasurementMachineState;
         let bundle_id: Option<MeasurementBundleId>;
 
-        let machine = crate::measured_boot::machine::from_id(txn, machine_id).await?;
-        let discovery_attributes = crate::measured_boot::machine::discovery_attributes(&machine)?;
+        let machine = crate::db::machine::from_id(txn, machine_id).await?;
+        let discovery_attributes = crate::db::machine::discovery_attributes(&machine)?;
         let profile =
-            crate::measured_boot::profile::match_from_attrs_or_new(txn, &discovery_attributes)
-                .await?;
+            crate::db::profile::match_from_attrs_or_new(txn, &discovery_attributes).await?;
 
-        match crate::measured_boot::bundle::match_from_values(txn, profile.profile_id, values)
-            .await?
-        {
+        match crate::db::bundle::match_from_values(txn, profile.profile_id, values).await? {
             Some(bundle) => {
                 state = bundle_state_to_machine_state(&bundle.state);
                 bundle_id = Some(bundle.bundle_id);
@@ -424,10 +421,9 @@ pub async fn create_bundle_with_state(
 ) -> DatabaseResult<MeasurementBundle> {
     // Get machine + profile information for the journal entry
     // that needs to be associated with the bundle change.
-    let machine = crate::measured_boot::machine::from_id(txn, report.machine_id).await?;
-    let discovery_attributes = crate::measured_boot::machine::discovery_attributes(&machine)?;
-    let profile =
-        crate::measured_boot::profile::match_from_attrs_or_new(txn, &discovery_attributes).await?;
+    let machine = crate::db::machine::from_id(txn, report.machine_id).await?;
+    let discovery_attributes = crate::db::machine::discovery_attributes(&machine)?;
+    let profile = crate::db::profile::match_from_attrs_or_new(txn, &discovery_attributes).await?;
 
     // Convert the input MeasurementReportValueRecord entries
     // into a list of PcrRegisterValue entries for the purpose
@@ -456,7 +452,7 @@ pub async fn create_bundle_with_state(
         None => report.pcr_values(),
     };
 
-    crate::measured_boot::bundle::new(txn, profile.profile_id, None, &values, Some(state)).await
+    crate::db::bundle::new(txn, profile.profile_id, None, &values, Some(state)).await
 }
 
 enum SameOrNot {
@@ -470,9 +466,7 @@ async fn same_as_previous_one(
     values: &[PcrRegisterValue],
 ) -> DatabaseResult<SameOrNot> {
     let latest_journal =
-        match crate::measured_boot::journal::get_latest_journal_for_id(&mut *txn, machine_id)
-            .await?
-        {
+        match crate::db::journal::get_latest_journal_for_id(&mut *txn, machine_id).await? {
             Some(journal) => journal,
             None => return Ok(SameOrNot::Different),
         };

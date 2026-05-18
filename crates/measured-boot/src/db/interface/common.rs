@@ -27,12 +27,12 @@ use std::ops::DerefMut;
 use std::vec::Vec;
 
 use carbide_uuid::{DbPrimaryUuid, DbTable};
-use measured_boot::pcr::PcrRegisterValue;
+use db::db_read::DbReader;
+use db::{DatabaseError, DatabaseResult};
 use sqlx::postgres::PgRow;
 use sqlx::{Encode, PgConnection, PgTransaction, Postgres};
 
-use crate::db_read::DbReader;
-use crate::{DatabaseError, DatabaseResult};
+use crate::pcr::PcrRegisterValue;
 
 // DISCOVERY_PROFILE_ATTRS are the attributes we pull
 // from DiscoveryInfo for a given machine when

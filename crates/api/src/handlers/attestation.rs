@@ -361,7 +361,7 @@ pub(crate) async fn attest_quote(
     // the resulting report (at least not yet), so just
     // throw it away.
     let report =
-        db::measured_boot::report::new(&mut txn, machine_id, pcr_values.into_inner().as_slice())
+        measured_boot::db::report::new(&mut txn, machine_id, pcr_values.into_inner().as_slice())
             .await
             .map_err(|e| CarbideError::Internal {
                 message: format!(

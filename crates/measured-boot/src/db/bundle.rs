@@ -24,30 +24,28 @@ use std::collections::{BTreeMap, HashMap};
 
 use carbide_uuid::machine::MachineId;
 use carbide_uuid::measured_boot::{MeasurementBundleId, MeasurementSystemProfileId};
+use db::db_read::DbReader;
+use db::{DatabaseError, DatabaseResult};
 use itertools::Itertools;
-use measured_boot::bundle::MeasurementBundle;
-use measured_boot::journal::MeasurementJournal;
-use measured_boot::pcr::PcrRegisterValue;
-use measured_boot::records::{
-    MeasurementBundleRecord, MeasurementBundleState, MeasurementBundleValueRecord,
-};
 use sqlx::{PgConnection, PgTransaction};
 
-use crate::db_read::DbReader;
-use crate::measured_boot::interface::bundle::{
+use crate::bundle::MeasurementBundle;
+use crate::db::interface::bundle::{
     delete_bundle_for_id, delete_bundle_values_for_id, get_machines_for_bundle_id,
     get_measurement_bundle_by_id, get_measurement_bundle_for_name, get_measurement_bundle_records,
     get_measurement_bundle_records_for_profile_id, get_measurement_bundle_values_for_bundle_id,
     insert_measurement_bundle_record, insert_measurement_bundle_value_records,
     rename_bundle_for_bundle_id, rename_bundle_for_bundle_name, update_state_for_bundle_id,
 };
-use crate::measured_boot::interface::common;
-use crate::measured_boot::interface::common::{
-    acquire_advisory_txn_lock, pcr_register_values_to_map,
+use crate::db::interface::common;
+use crate::db::interface::common::{acquire_advisory_txn_lock, pcr_register_values_to_map};
+use crate::db::interface::report::match_latest_reports;
+use crate::db::machine::bundle_state_to_machine_state;
+use crate::journal::MeasurementJournal;
+use crate::pcr::PcrRegisterValue;
+use crate::records::{
+    MeasurementBundleRecord, MeasurementBundleState, MeasurementBundleValueRecord,
 };
-use crate::measured_boot::interface::report::match_latest_reports;
-use crate::measured_boot::machine::bundle_state_to_machine_state;
-use crate::{DatabaseError, DatabaseResult};
 
 pub async fn new(
     txn: &mut PgTransaction<'_>,
@@ -353,11 +351,10 @@ async fn update_journal(
     let reports = match_latest_reports(txn.as_mut(), &measurement_bundle.pcr_values()).await?;
     let mut updates: Vec<MeasurementJournal> = Vec::new();
     for report in reports.iter() {
-        let machine = crate::measured_boot::machine::from_id(txn, report.machine_id).await?;
-        let discovery_attributes = crate::measured_boot::machine::discovery_attributes(&machine)?;
+        let machine = crate::db::machine::from_id(txn, report.machine_id).await?;
+        let discovery_attributes = crate::db::machine::discovery_attributes(&machine)?;
         let profile =
-            crate::measured_boot::profile::match_from_attrs_or_new(txn, &discovery_attributes)
-                .await?;
+            crate::db::profile::match_from_attrs_or_new(txn, &discovery_attributes).await?;
 
         // Don't update journal entries for profiles
         // that aren't mine, since, in theory, two
@@ -367,7 +364,7 @@ async fn update_journal(
             continue;
         }
         updates.push(
-            crate::measured_boot::journal::new(
+            crate::db::journal::new(
                 txn,
                 report.machine_id,
                 report.report_id,

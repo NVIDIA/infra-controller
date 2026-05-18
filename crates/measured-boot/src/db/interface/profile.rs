@@ -25,13 +25,13 @@ use std::collections::HashMap;
 use carbide_uuid::machine::MachineId;
 use carbide_uuid::measured_boot::{MeasurementBundleId, MeasurementSystemProfileId};
 use carbide_uuid::{DbPrimaryUuid, DbTable};
-use measured_boot::records::{MeasurementSystemProfileAttrRecord, MeasurementSystemProfileRecord};
+use db::DatabaseError;
+use db::db_read::DbReader;
 use sqlx::query_builder::QueryBuilder;
 use sqlx::{PgConnection, Postgres};
 
-use crate::DatabaseError;
-use crate::db_read::DbReader;
-use crate::measured_boot::interface::common;
+use crate::db::interface::common;
+use crate::records::{MeasurementSystemProfileAttrRecord, MeasurementSystemProfileRecord};
 
 /// insert_measurement_profile_record is a very basic insert of a
 /// new row into the measurement_system_profiles table, where only a name

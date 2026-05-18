@@ -22,19 +22,19 @@
  * This also provides code for importing/exporting (and working with) SiteModels.
  */
 
-use measured_boot::site::SiteModel;
+use db::DatabaseResult;
+use db::db_read::DbReader;
 use sqlx::PgConnection;
 
-use crate::DatabaseResult;
-use crate::db_read::DbReader;
-use crate::measured_boot::interface::bundle::{
+use crate::db::interface::bundle::{
     get_measurement_bundle_records, get_measurement_bundles_values, import_measurement_bundles,
     import_measurement_bundles_values,
 };
-use crate::measured_boot::interface::profile::{
+use crate::db::interface::profile::{
     export_measurement_profile_records, export_measurement_system_profiles_attrs,
     import_measurement_system_profiles, import_measurement_system_profiles_attrs,
 };
+use crate::site::SiteModel;
 
 /// import takes a populated SiteModel and imports it by
 /// populating the corresponding profile and bundle records

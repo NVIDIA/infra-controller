@@ -24,7 +24,7 @@ use std::str::FromStr;
 use ::rpc::errors::RpcDataConversionError;
 use carbide_uuid::machine::MachineId;
 use carbide_uuid::measured_boot::TrustedMachineId;
-use db::measured_boot::interface::site::{
+use measured_boot::db::interface::site::{
     get_approved_machines, get_approved_profiles, insert_into_approved_machines,
     insert_into_approved_profiles, list_attestation_summary,
     remove_from_approved_machines_by_approval_id, remove_from_approved_machines_by_machine_id,
@@ -74,7 +74,7 @@ pub async fn handle_import_site_measurements(
     };
 
     // And now import it!
-    let result = db::measured_boot::site::import(&mut txn, &site_model)
+    let result = measured_boot::db::site::import(&mut txn, &site_model)
         .await
         .map_err(|e| CarbideError::Internal {
             message: format!("site import failed: {e}"),
@@ -93,7 +93,7 @@ pub async fn handle_export_site_measurements(
     api: &Api,
     _req: ExportSiteMeasurementsRequest,
 ) -> Result<ExportSiteMeasurementsResponse, Status> {
-    let site_model = db::measured_boot::site::export(&mut api.db_reader())
+    let site_model = measured_boot::db::site::export(&mut api.db_reader())
         .await
         .map_err(|e| CarbideError::Internal {
             message: format!("export failed: {e}"),

@@ -23,6 +23,9 @@ pub mod records;
 pub mod report;
 pub mod site;
 
+#[cfg(feature = "sqlx")]
+pub mod db;
+
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
     #[error("{0}")]
@@ -32,3 +35,9 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl From<Error> for ::db::DatabaseError {
+    fn from(value: Error) -> Self {
+        ::db::DatabaseError::internal(value.to_string())
+    }
+}

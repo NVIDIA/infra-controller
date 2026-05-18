@@ -25,21 +25,21 @@ use std::collections::HashMap;
 use carbide_uuid::DbTable;
 use carbide_uuid::machine::{MachineId, MachineType};
 use chrono::Utc;
-use measured_boot::journal::MeasurementJournal;
-use measured_boot::machine::CandidateMachine;
-use measured_boot::records::{MeasurementBundleState, MeasurementMachineState};
+use db::db_read::DbReader;
+use db::{DatabaseError, DatabaseResult};
 use model::machine::topology::TopologyData;
 use serde::Serialize;
 use sqlx::{FromRow, PgConnection};
 
-use crate::db_read::DbReader;
-use crate::measured_boot::interface::bundle::get_measurement_bundle_by_id;
-use crate::measured_boot::interface::common;
-use crate::measured_boot::interface::machine::{
+use crate::db::interface::bundle::get_measurement_bundle_by_id;
+use crate::db::interface::common;
+use crate::db::interface::machine::{
     get_candidate_machine_record_by_id, get_candidate_machine_records, get_candidate_machine_state,
 };
-use crate::measured_boot::journal::get_latest_journal_for_id;
-use crate::{DatabaseError, DatabaseResult};
+use crate::db::journal::get_latest_journal_for_id;
+use crate::journal::MeasurementJournal;
+use crate::machine::CandidateMachine;
+use crate::records::{MeasurementBundleState, MeasurementMachineState};
 
 /// CandidateMachineRecord defines a single row from
 /// the machine_topologies table. Sort of. Where other records

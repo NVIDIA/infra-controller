@@ -22,7 +22,7 @@
 use std::collections::HashMap;
 
 use carbide_uuid::measured_boot::MeasurementSystemProfileId;
-use db::measured_boot::interface::profile::{
+use measured_boot::db::interface::profile::{
     export_measurement_profile_records, get_bundles_for_profile_id, get_bundles_for_profile_name,
     get_machines_for_profile_id, get_machines_for_profile_name,
 };
@@ -65,7 +65,7 @@ pub async fn handle_create_system_measurement_profile(
         vals.insert(kv_pair.key, kv_pair.value);
     }
 
-    let system_profile = db::measured_boot::profile::new(&mut txn, req.name, &vals)
+    let system_profile = measured_boot::db::profile::new(&mut txn, req.name, &vals)
         .await
         .map_err(|e| CarbideError::InvalidArgument(e.to_string()))?;
 
@@ -86,7 +86,7 @@ pub async fn handle_rename_measurement_system_profile(
         // Rename for the given system_profile ID.
         Some(rename_measurement_system_profile_request::Selector::ProfileId(
             system_profile_uuid,
-        )) => db::measured_boot::profile::rename_for_id(
+        )) => measured_boot::db::profile::rename_for_id(
             &mut txn,
             system_profile_uuid,
             req.new_profile_name,
@@ -99,7 +99,7 @@ pub async fn handle_rename_measurement_system_profile(
         // Rename for the given system_profile name.
         Some(rename_measurement_system_profile_request::Selector::ProfileName(
             system_profile_name,
-        )) => db::measured_boot::profile::rename_for_name(
+        )) => measured_boot::db::profile::rename_for_name(
             &mut txn,
             system_profile_name,
             req.new_profile_name,
@@ -168,7 +168,7 @@ pub async fn handle_show_measurement_system_profile(
     let system_profile = match req.selector {
         // Show a system profile with the given profile ID.
         Some(show_measurement_system_profile_request::Selector::ProfileId(profile_uuid)) => {
-            db::measured_boot::profile::load_from_id(&mut txn, profile_uuid)
+            measured_boot::db::profile::load_from_id(&mut txn, profile_uuid)
                 .await
                 .map_err(|e| CarbideError::Internal {
                     message: format!("{e}"),
@@ -176,7 +176,7 @@ pub async fn handle_show_measurement_system_profile(
         }
         // Show a system profile with the given profile name.
         Some(show_measurement_system_profile_request::Selector::ProfileName(profile_name)) => {
-            db::measured_boot::profile::load_from_name(&mut txn, profile_name)
+            measured_boot::db::profile::load_from_name(&mut txn, profile_name)
                 .await
                 .map_err(|e| CarbideError::Internal {
                     message: format!("{e}"),
@@ -199,7 +199,7 @@ pub async fn handle_show_measurement_system_profiles(
     _req: ShowMeasurementSystemProfilesRequest,
 ) -> Result<ShowMeasurementSystemProfilesResponse, Status> {
     Ok(ShowMeasurementSystemProfilesResponse {
-        system_profiles: db::measured_boot::profile::get_all(&mut api.db_reader())
+        system_profiles: measured_boot::db::profile::get_all(&mut api.db_reader())
             .await
             .map_err(|e| CarbideError::Internal {
                 message: format!("{e}"),
@@ -308,7 +308,7 @@ async fn delete_for_uuid(
     txn: &mut PgConnection,
     profile_id: MeasurementSystemProfileId,
 ) -> Result<Option<MeasurementSystemProfile>, Status> {
-    match db::measured_boot::profile::delete_for_id(txn, profile_id).await {
+    match measured_boot::db::profile::delete_for_id(txn, profile_id).await {
         Ok(optional_profile) => Ok(optional_profile),
         Err(e) => Err(CarbideError::Internal {
             message: format!("error deleting profile: {e}"),
@@ -323,7 +323,7 @@ async fn delete_for_name(
     txn: &mut PgConnection,
     profile_name: String,
 ) -> Result<Option<MeasurementSystemProfile>, Status> {
-    match db::measured_boot::profile::delete_for_name(txn, profile_name).await {
+    match measured_boot::db::profile::delete_for_name(txn, profile_name).await {
         Ok(optional_profile) => Ok(optional_profile),
         Err(e) => Err(CarbideError::Internal {
             message: format!("error deleting profile: {e}"),

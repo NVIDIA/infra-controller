@@ -24,11 +24,11 @@ use carbide_uuid::machine::MachineId;
 use carbide_uuid::measured_boot::{
     MeasurementBundleId, MeasurementJournalId, MeasurementReportId, MeasurementSystemProfileId,
 };
-use measured_boot::records::{MeasurementJournalRecord, MeasurementMachineState};
+use db::DatabaseError;
 use sqlx::PgConnection;
 
-use crate::DatabaseError;
-use crate::measured_boot::interface::common;
+use crate::db::interface::common;
+use crate::records::{MeasurementJournalRecord, MeasurementMachineState};
 
 /// insert_measurement_journal_record is a very basic insert of a
 /// new row into the measurement_journals table. Is it expected that

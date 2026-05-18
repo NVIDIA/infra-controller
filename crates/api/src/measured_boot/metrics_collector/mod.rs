@@ -98,24 +98,24 @@ impl MeasuredBootMetricsCollector {
 
         let mut txn = db::Transaction::begin(&self.database_connection).await?;
 
-        let profiles = db::measured_boot::profile::get_all(&mut txn).await?;
+        let profiles = measured_boot::db::profile::get_all(&mut txn).await?;
         for system_profile in profiles.iter() {
             let machines =
-                db::measured_boot::profile::get_machines(system_profile, &mut txn).await?;
+                measured_boot::db::profile::get_machines(system_profile, &mut txn).await?;
             metrics
                 .num_machines_per_profile
                 .insert(system_profile.profile_id, machines.len());
         }
         metrics.num_profiles = profiles.len();
 
-        let bundles = db::measured_boot::bundle::get_all(&mut txn).await?;
+        let bundles = measured_boot::db::bundle::get_all(&mut txn).await?;
         let bundle_map: HashMap<MeasurementBundleId, MeasurementBundleState> = bundles
             .iter()
             .map(|bundle| (bundle.bundle_id, bundle.state))
             .collect();
 
         for bundle in bundles.iter() {
-            let machines = db::measured_boot::bundle::get_machines(bundle, &mut txn).await?;
+            let machines = measured_boot::db::bundle::get_machines(bundle, &mut txn).await?;
             metrics
                 .num_machines_per_bundle
                 .insert(bundle.bundle_id, machines.len());
@@ -128,7 +128,7 @@ impl MeasuredBootMetricsCollector {
         }
         metrics.num_bundles = bundles.len();
 
-        let machines = db::measured_boot::machine::get_all(&mut txn).await?;
+        let machines = measured_boot::db::machine::get_all(&mut txn).await?;
         for machine in machines.iter() {
             let bundle_state = get_bundle_state(&bundle_map, &machine.journal);
             *metrics

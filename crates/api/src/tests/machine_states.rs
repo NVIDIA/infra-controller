@@ -1288,7 +1288,7 @@ async fn test_measurement_failed_state_transition(pool: sqlx::PgPool) {
     let bundle = MeasurementBundle::from_grpc(Some(&bundles_response.bundles[0])).unwrap();
     assert_eq!(bundle.state, MeasurementBundleState::Active);
     let mut txn = env.db_txn().await;
-    let retired_bundle = db::measured_boot::bundle::set_state_for_id(
+    let retired_bundle = measured_boot::db::bundle::set_state_for_id(
         &mut txn,
         bundle.bundle_id,
         MeasurementBundleState::Retired,
@@ -1320,7 +1320,7 @@ async fn test_measurement_failed_state_transition(pool: sqlx::PgPool) {
 
     // ..and now reactivate the bundle.
     let mut txn = env.db_txn().await;
-    let reactivated_bundle = db::measured_boot::bundle::set_state_for_id(
+    let reactivated_bundle = measured_boot::db::bundle::set_state_for_id(
         &mut txn,
         retired_bundle.bundle_id,
         MeasurementBundleState::Active,
@@ -1390,7 +1390,7 @@ async fn test_measurement_ready_to_retired_to_ca_fail_to_revoked_to_ready(pool: 
     let bundle = MeasurementBundle::from_grpc(Some(&bundles_response.bundles[0])).unwrap();
     assert_eq!(bundle.state, MeasurementBundleState::Active);
     let mut txn = env.db_txn().await;
-    let retired_bundle = db::measured_boot::bundle::set_state_for_id(
+    let retired_bundle = measured_boot::db::bundle::set_state_for_id(
         &mut txn,
         bundle.bundle_id,
         MeasurementBundleState::Retired,
@@ -1434,7 +1434,7 @@ async fn test_measurement_ready_to_retired_to_ca_fail_to_revoked_to_ready(pool: 
         .unwrap();
     // "resurrect" the bundle
     let mut txn = env.db_txn().await;
-    let reactivated_bundle = db::measured_boot::bundle::set_state_for_id(
+    let reactivated_bundle = measured_boot::db::bundle::set_state_for_id(
         &mut txn,
         retired_bundle.bundle_id,
         MeasurementBundleState::Active,
@@ -1475,7 +1475,7 @@ async fn test_measurement_ready_to_retired_to_ca_fail_to_revoked_to_ready(pool: 
 
     // before advancing the state, change the bundle state to revoked
     let mut txn = env.db_txn().await;
-    let _revoked_bundle = db::measured_boot::bundle::set_state_for_id(
+    let _revoked_bundle = measured_boot::db::bundle::set_state_for_id(
         &mut txn,
         bundle.bundle_id,
         MeasurementBundleState::Revoked,
@@ -1504,7 +1504,7 @@ async fn test_measurement_ready_to_retired_to_ca_fail_to_revoked_to_ready(pool: 
     ));
 
     // and now reactivate the state so that it would get to ready
-    let _reactivated_bundle = db::measured_boot::bundle::set_state_for_id(
+    let _reactivated_bundle = measured_boot::db::bundle::set_state_for_id(
         &mut txn,
         retired_bundle.bundle_id,
         MeasurementBundleState::Active,

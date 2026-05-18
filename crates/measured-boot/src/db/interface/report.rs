@@ -22,13 +22,13 @@
 
 use carbide_uuid::machine::MachineId;
 use carbide_uuid::measured_boot::MeasurementReportId;
-use measured_boot::pcr::PcrRegisterValue;
-use measured_boot::records::{MeasurementReportRecord, MeasurementReportValueRecord};
+use db::DatabaseError;
+use db::db_read::DbReader;
 use sqlx::{PgConnection, Postgres, QueryBuilder};
 
-use crate::DatabaseError;
-use crate::db_read::DbReader;
-use crate::measured_boot::interface::common;
+use crate::db::interface::common;
+use crate::pcr::PcrRegisterValue;
+use crate::records::{MeasurementReportRecord, MeasurementReportValueRecord};
 
 /// match_latest_reports takes a list of PcrRegisterValues (i.e. register:shaXXX)
 /// and returns all latest matching report entries for it.

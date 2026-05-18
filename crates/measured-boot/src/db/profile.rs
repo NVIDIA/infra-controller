@@ -24,14 +24,13 @@ use std::collections::HashMap;
 
 use carbide_uuid::machine::MachineId;
 use carbide_uuid::measured_boot::MeasurementSystemProfileId;
-use measured_boot::profile::MeasurementSystemProfile;
-use measured_boot::records::{MeasurementSystemProfileAttrRecord, MeasurementSystemProfileRecord};
+use db::db_read::DbReader;
+use db::{DatabaseError, DatabaseResult};
 use sqlx::{PgConnection, PgTransaction};
 
-use crate::db_read::DbReader;
-use crate::measured_boot::interface::common;
-use crate::measured_boot::interface::common::acquire_advisory_txn_lock;
-use crate::measured_boot::interface::profile::{
+use crate::db::interface::common;
+use crate::db::interface::common::acquire_advisory_txn_lock;
+use crate::db::interface::profile::{
     delete_profile_attr_records_for_id, delete_profile_record_for_id,
     get_all_measurement_profile_records, get_machines_for_profile_id,
     get_measurement_profile_attrs_for_profile_id, get_measurement_profile_record_by_attrs,
@@ -39,7 +38,8 @@ use crate::measured_boot::interface::profile::{
     insert_measurement_profile_attr_records, insert_measurement_profile_record,
     rename_profile_for_profile_id, rename_profile_for_profile_name,
 };
-use crate::{DatabaseError, DatabaseResult};
+use crate::profile::MeasurementSystemProfile;
+use crate::records::{MeasurementSystemProfileAttrRecord, MeasurementSystemProfileRecord};
 
 pub async fn new(
     txn: &mut PgTransaction<'_>,

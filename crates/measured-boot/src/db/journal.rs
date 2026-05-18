@@ -24,18 +24,18 @@ use carbide_uuid::machine::MachineId;
 use carbide_uuid::measured_boot::{
     MeasurementBundleId, MeasurementJournalId, MeasurementReportId, MeasurementSystemProfileId,
 };
-use measured_boot::journal::MeasurementJournal;
-use measured_boot::records::{MeasurementJournalRecord, MeasurementMachineState};
+use db::db_read::DbReader;
+use db::{DatabaseError, DatabaseResult};
 use sqlx::PgConnection;
 
-use crate::db_read::DbReader;
-use crate::measured_boot::interface::common;
-use crate::measured_boot::interface::journal::{
+use crate::db::interface::common;
+use crate::db::interface::journal::{
     delete_journal_where_id, get_measurement_journal_record_by_id,
     get_measurement_journal_record_by_report_id, insert_measurement_journal_record,
     update_measurement_journal_record,
 };
-use crate::{DatabaseError, DatabaseResult};
+use crate::journal::MeasurementJournal;
+use crate::records::{MeasurementJournalRecord, MeasurementMachineState};
 
 pub async fn new(
     txn: &mut PgConnection,
@@ -240,11 +240,10 @@ async fn get_measurement_journals_for_machine_id(
     txn: &mut PgConnection,
     machine_id: MachineId,
 ) -> DatabaseResult<Vec<MeasurementJournal>> {
-    let records =
-        crate::measured_boot::interface::journal::get_measurement_journal_records_for_machine_id(
-            txn, machine_id,
-        )
-        .await?;
+    let records = crate::db::interface::journal::get_measurement_journal_records_for_machine_id(
+        txn, machine_id,
+    )
+    .await?;
     Ok(records
         .iter()
         .map(|record| MeasurementJournal {

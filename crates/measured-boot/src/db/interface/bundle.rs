@@ -23,15 +23,15 @@
 use carbide_uuid::machine::MachineId;
 use carbide_uuid::measured_boot::{MeasurementBundleId, MeasurementSystemProfileId};
 use carbide_uuid::{DbPrimaryUuid, DbTable};
-use measured_boot::pcr::PcrRegisterValue;
-use measured_boot::records::{
-    MeasurementBundleRecord, MeasurementBundleState, MeasurementBundleValueRecord,
-};
+use db::DatabaseError;
+use db::db_read::DbReader;
 use sqlx::PgConnection;
 
-use crate::DatabaseError;
-use crate::db_read::DbReader;
-use crate::measured_boot::interface::common;
+use crate::db::interface::common;
+use crate::pcr::PcrRegisterValue;
+use crate::records::{
+    MeasurementBundleRecord, MeasurementBundleState, MeasurementBundleValueRecord,
+};
 
 /// insert_measurement_bundle_record is a very basic insert of a
 /// new row into the measurement_bundles table, where only a profile_id

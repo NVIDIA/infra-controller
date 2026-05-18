@@ -1309,9 +1309,7 @@ dependencies = [
  "carbide-ipxe-renderer",
  "carbide-libmlx-model",
  "carbide-macros",
- "carbide-measured-boot",
  "carbide-network",
- "carbide-rpc",
  "carbide-secrets",
  "carbide-sqlx-testing",
  "carbide-utils",
@@ -2171,16 +2169,22 @@ dependencies = [
 name = "carbide-measured-boot"
 version = "0.0.0"
 dependencies = [
+ "carbide-api-db",
+ "carbide-api-model",
  "carbide-rpc",
  "carbide-uuid",
  "chrono",
  "clap",
  "eyre",
+ "itertools 0.14.0",
+ "names",
  "prettytable-rs",
  "serde",
  "sqlx",
  "thiserror 2.0.18",
  "tonic",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

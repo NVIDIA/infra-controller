@@ -23,7 +23,7 @@ use std::str::FromStr;
 
 use ::rpc::errors::RpcDataConversionError;
 use carbide_uuid::machine::MachineId;
-use db::measured_boot::interface::report::{
+use measured_boot::db::interface::report::{
     get_all_measurement_report_records, get_measurement_report_records_for_machine_id,
     match_latest_reports,
 };
@@ -50,7 +50,7 @@ pub async fn handle_create_measurement_report(
     req: CreateMeasurementReportRequest,
 ) -> Result<CreateMeasurementReportResponse, Status> {
     let mut txn = api.txn_begin().await?;
-    let report = db::measured_boot::report::new(
+    let report = measured_boot::db::report::new(
         &mut txn,
         MachineId::from_str(&req.machine_id).map_err(|_| {
             CarbideError::from(RpcDataConversionError::InvalidMachineId(req.machine_id))
@@ -75,7 +75,7 @@ pub async fn handle_delete_measurement_report(
     req: DeleteMeasurementReportRequest,
 ) -> Result<DeleteMeasurementReportResponse, Status> {
     let mut txn = api.txn_begin().await?;
-    let report = db::measured_boot::report::delete_for_id(
+    let report = measured_boot::db::report::delete_for_id(
         &mut txn,
         req.report_id
             .ok_or(CarbideError::MissingArgument("report_id"))?,
@@ -105,7 +105,7 @@ pub async fn handle_promote_measurement_report(
         false => None,
     };
 
-    let report = db::measured_boot::report::from_id(
+    let report = measured_boot::db::report::from_id(
         &mut txn,
         req.report_id
             .ok_or(CarbideError::MissingArgument("report_id"))?,
@@ -115,7 +115,7 @@ pub async fn handle_promote_measurement_report(
         message: format!("promotion failed fetching report: {e}"),
     })?;
 
-    let bundle = db::measured_boot::report::create_active_bundle(&mut txn, &report, &pcr_set)
+    let bundle = measured_boot::db::report::create_active_bundle(&mut txn, &report, &pcr_set)
         .await
         .map_err(|e| CarbideError::Internal {
             message: format!("promotion failed promoting into active bundle: {e}"),
@@ -141,7 +141,7 @@ pub async fn handle_revoke_measurement_report(
         })?),
     };
 
-    let report = db::measured_boot::report::from_id(
+    let report = measured_boot::db::report::from_id(
         &mut txn,
         req.report_id
             .ok_or(CarbideError::MissingArgument("report_id"))?,
@@ -151,7 +151,7 @@ pub async fn handle_revoke_measurement_report(
         message: format!("promotion failed fetching report: {e}"),
     })?;
 
-    let bundle = db::measured_boot::report::create_revoked_bundle(&mut txn, &report, &pcr_set)
+    let bundle = measured_boot::db::report::create_revoked_bundle(&mut txn, &report, &pcr_set)
         .await
         .map_err(|e| CarbideError::Internal {
             message: format!("promotion failed promoting into revoked bundle: {e}"),
@@ -172,7 +172,7 @@ pub async fn handle_show_measurement_report_for_id(
     let mut txn = api.txn_begin().await?;
     let result = Ok(ShowMeasurementReportForIdResponse {
         report: Some(
-            db::measured_boot::report::from_id(
+            measured_boot::db::report::from_id(
                 &mut txn,
                 req.report_id
                     .ok_or(CarbideError::MissingArgument("report_id"))?,
@@ -196,7 +196,7 @@ pub async fn handle_show_measurement_reports_for_machine(
 ) -> Result<ShowMeasurementReportsForMachineResponse, Status> {
     let mut txn = api.txn_begin().await?;
     let result = Ok(ShowMeasurementReportsForMachineResponse {
-        reports: db::measured_boot::report::get_all_for_machine_id(
+        reports: measured_boot::db::report::get_all_for_machine_id(
             &mut txn,
             MachineId::from_str(&req.machine_id).map_err(|_| {
                 CarbideError::from(RpcDataConversionError::InvalidMachineId(req.machine_id))
@@ -221,7 +221,7 @@ pub async fn handle_show_measurement_reports(
     _req: ShowMeasurementReportsRequest,
 ) -> Result<ShowMeasurementReportsResponse, Status> {
     Ok(ShowMeasurementReportsResponse {
-        reports: db::measured_boot::report::get_all(&mut api.db_reader())
+        reports: measured_boot::db::report::get_all(&mut api.db_reader())
             .await
             .map_err(|e| CarbideError::Internal {
                 message: format!("{e}"),

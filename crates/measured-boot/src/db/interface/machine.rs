@@ -21,13 +21,13 @@
  */
 
 use carbide_uuid::machine::MachineId;
-use measured_boot::records::{MeasurementJournalRecord, MeasurementMachineState};
+use db::DatabaseError;
+use db::db_read::DbReader;
 use sqlx::PgConnection;
 
-use crate::DatabaseError;
-use crate::db_read::DbReader;
-use crate::measured_boot::interface::common;
-use crate::measured_boot::machine::CandidateMachineRecord;
+use crate::db::interface::common;
+use crate::db::machine::CandidateMachineRecord;
+use crate::records::{MeasurementJournalRecord, MeasurementMachineState};
 
 /// get_candidate_machine_state figures out the current state of the given
 /// machine ID by checking its most recent bundle (or lack thereof), and
