@@ -321,13 +321,13 @@ async fn attach_switches_with_nvos_credentials(
         )?;
 
         let new_switch = NewSwitch {
-            id: switch_id.clone(),
+            id: switch_id,
             config: SwitchConfig {
                 name: expected_switch.metadata.name.clone(),
                 enable_nmxc: false,
                 fabric_manager_config: None,
             },
-            bmc_mac_address: Some(expected_switch.bmc_mac_address.clone()),
+            bmc_mac_address: Some(expected_switch.bmc_mac_address),
             metadata: None,
             rack_id: Some(rack_id.clone()),
             slot_number: Some(index as i32),
@@ -344,7 +344,7 @@ async fn attach_switches_with_nvos_credentials(
             .set_credentials(
                 &CredentialKey::BmcCredentials {
                     credential_type: BmcCredentialType::BmcRoot {
-                        bmc_mac_address: expected_switch.bmc_mac_address.clone(),
+                        bmc_mac_address: expected_switch.bmc_mac_address,
                     },
                 },
                 &Credentials::UsernamePassword {
@@ -2288,7 +2288,6 @@ async fn test_configure_nmx_cluster_disable_scale_up_fabric_state_runs_on_all_sw
                 failed_nodes: 0,
                 ..Default::default()
             }),
-            ..Default::default()
         }))
         .await;
 
@@ -2398,8 +2397,8 @@ async fn test_configure_nmx_cluster_configure_selects_persists_and_configures_pr
     drop(txn);
 
     let switch_ids = attach_switches_with_nvos_credentials(&env, &rack_id, 2).await?;
-    let secondary_switch_id = switch_ids[0].clone();
-    let primary_switch_id = switch_ids[1].clone();
+    let secondary_switch_id = switch_ids[0];
+    let primary_switch_id = switch_ids[1];
     let topology_type = RackHardwareTopology::Gb200Nvl72r1C2g4Topology.to_string();
 
     env.rms_sim
@@ -2551,8 +2550,8 @@ async fn test_configure_nmx_cluster_runs_start_disable_configure_to_wait_for_fab
     drop(txn);
 
     let switch_ids = attach_switches_with_nvos_credentials(&env, &rack_id, 2).await?;
-    let secondary_switch_id = switch_ids[0].clone();
-    let primary_switch_id = switch_ids[1].clone();
+    let secondary_switch_id = switch_ids[0];
+    let primary_switch_id = switch_ids[1];
     let topology_type = RackHardwareTopology::Gb200Nvl72r1C2g4Topology.to_string();
 
     env.rms_sim
@@ -2563,7 +2562,6 @@ async fn test_configure_nmx_cluster_runs_start_disable_configure_to_wait_for_fab
                 failed_nodes: 0,
                 ..Default::default()
             }),
-            ..Default::default()
         }))
         .await;
     env.rms_sim
@@ -2815,7 +2813,6 @@ async fn test_configure_nmx_cluster_disable_scale_up_fabric_state_failure_stops_
                 message: "disable rejected".to_string(),
                 ..Default::default()
             }),
-            ..Default::default()
         }))
         .await;
 
@@ -3015,7 +3012,7 @@ async fn test_configure_nmx_cluster_configure_failure_advances_to_wait_for_fabri
     drop(txn);
 
     let switch_ids = attach_switches_with_nvos_credentials(&env, &rack_id, 2).await?;
-    let primary_switch_id = switch_ids[0].clone();
+    let primary_switch_id = switch_ids[0];
     let topology_type = RackHardwareTopology::Gb200Nvl72r1C2g4Topology.to_string();
 
     env.rms_sim
