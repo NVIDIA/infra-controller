@@ -374,6 +374,10 @@ async fn test_dpu_for_reprovisioning_with_no_firmware_upgrade(pool: sqlx::PgPool
 
 #[crate::sqlx_test]
 async fn test_instance_reprov_with_firmware_upgrade(pool: sqlx::PgPool) {
+    Box::pin(test_instance_reprov_with_firmware_upgrade_impl(pool)).await;
+}
+
+async fn test_instance_reprov_with_firmware_upgrade_impl(pool: sqlx::PgPool) {
     let env = create_test_env(pool).await;
     let segment_id = env.create_vpc_and_tenant_segment().await;
     let mh = create_managed_host(&env).await;
