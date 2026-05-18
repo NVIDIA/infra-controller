@@ -3511,7 +3511,7 @@ async fn test_site_explorer_power_shelf_creation_limit(
                     id: "powershelf".to_string(),
                     manufacturer: Some("lite-on technology corp.".to_string()),
                     part_number: Some("PS123456789".to_string()),
-                    serial_number: Some("PS123456789".to_string()),
+                    serial_number: Some(power_shelf.serial_number.clone()),
                     ..Default::default()
                 }],
                 service: Vec::new(),
