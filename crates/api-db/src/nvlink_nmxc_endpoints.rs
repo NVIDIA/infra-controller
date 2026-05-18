@@ -15,17 +15,11 @@
  * limitations under the License.
  */
 
+use model::nmxc::NvlinkNmxcEndpoint;
 use sqlx::PgConnection;
 
 use crate::db_read::DbReader;
 use crate::{DatabaseError, DatabaseResult};
-
-/// Row from `nvlink_nmxc_endpoints`: chassis serial and NMX-C gRPC endpoint URL.
-#[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
-pub struct NvlinkNmxcEndpoint {
-    pub chassis_serial: String,
-    pub endpoint: String,
-}
 
 pub async fn find_by_chassis_serial(
     txn: impl DbReader<'_>,
@@ -98,13 +92,4 @@ pub async fn update(
         .fetch_optional(txn)
         .await
         .map_err(|e| DatabaseError::new(Q, e))
-}
-
-impl From<NvlinkNmxcEndpoint> for rpc::forge::NvlinkNmxcEndpoint {
-    fn from(row: NvlinkNmxcEndpoint) -> Self {
-        Self {
-            chassis_serial: row.chassis_serial,
-            endpoint: row.endpoint,
-        }
-    }
 }
