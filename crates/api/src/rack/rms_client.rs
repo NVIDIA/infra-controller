@@ -82,6 +82,19 @@ pub mod test_support {
         switch_system_image_job_statuses:
             Arc<Mutex<HashMap<String, rms::GetSwitchSystemImageJobStatusResponse>>>,
         switch_system_image_job_errors: Arc<Mutex<HashMap<String, String>>>,
+        submitted_get_device_info_by_device_list_requests:
+            Arc<Mutex<Vec<rms::GetDeviceInfoByDeviceListRequest>>>,
+        queued_get_device_info_by_device_list_responses:
+            Arc<Mutex<VecDeque<Result<rms::GetDeviceInfoByDeviceListResponse, RackManagerError>>>>,
+        submitted_configure_scale_up_fabric_manager_requests:
+            Arc<Mutex<Vec<rms::ConfigureScaleUpFabricManagerRequest>>>,
+        queued_configure_scale_up_fabric_manager_responses: Arc<
+            Mutex<VecDeque<Result<rms::ConfigureScaleUpFabricManagerResponse, RackManagerError>>>,
+        >,
+        submitted_set_scale_up_fabric_state_requests:
+            Arc<Mutex<Vec<rms::SetScaleUpFabricStateRequest>>>,
+        queued_set_scale_up_fabric_state_responses:
+            Arc<Mutex<VecDeque<Result<rms::SetScaleUpFabricStateResponse, RackManagerError>>>>,
         submitted_set_power_state_by_device_list_requests:
             Arc<Mutex<Vec<rms::SetPowerStateByDeviceListRequest>>>,
         queued_set_power_state_by_device_list_responses:
@@ -111,6 +124,18 @@ pub mod test_support {
                 queued_apply_switch_system_image_responses: Arc::new(Mutex::new(VecDeque::new())),
                 switch_system_image_job_statuses: Arc::new(Mutex::new(HashMap::new())),
                 switch_system_image_job_errors: Arc::new(Mutex::new(HashMap::new())),
+                submitted_get_device_info_by_device_list_requests: Arc::new(Mutex::new(Vec::new())),
+                queued_get_device_info_by_device_list_responses: Arc::new(Mutex::new(
+                    VecDeque::new(),
+                )),
+                submitted_configure_scale_up_fabric_manager_requests: Arc::new(Mutex::new(
+                    Vec::new(),
+                )),
+                queued_configure_scale_up_fabric_manager_responses: Arc::new(Mutex::new(
+                    VecDeque::new(),
+                )),
+                submitted_set_scale_up_fabric_state_requests: Arc::new(Mutex::new(Vec::new())),
+                queued_set_scale_up_fabric_state_responses: Arc::new(Mutex::new(VecDeque::new())),
                 submitted_set_power_state_by_device_list_requests: Arc::new(Mutex::new(Vec::new())),
                 queued_set_power_state_by_device_list_responses: Arc::new(Mutex::new(
                     VecDeque::new(),
@@ -161,6 +186,24 @@ pub mod test_support {
                     .clone(),
                 switch_system_image_job_statuses: self.switch_system_image_job_statuses.clone(),
                 switch_system_image_job_errors: self.switch_system_image_job_errors.clone(),
+                submitted_get_device_info_by_device_list_requests: self
+                    .submitted_get_device_info_by_device_list_requests
+                    .clone(),
+                queued_get_device_info_by_device_list_responses: self
+                    .queued_get_device_info_by_device_list_responses
+                    .clone(),
+                submitted_configure_scale_up_fabric_manager_requests: self
+                    .submitted_configure_scale_up_fabric_manager_requests
+                    .clone(),
+                queued_configure_scale_up_fabric_manager_responses: self
+                    .queued_configure_scale_up_fabric_manager_responses
+                    .clone(),
+                submitted_set_scale_up_fabric_state_requests: self
+                    .submitted_set_scale_up_fabric_state_requests
+                    .clone(),
+                queued_set_scale_up_fabric_state_responses: self
+                    .queued_set_scale_up_fabric_state_responses
+                    .clone(),
                 submitted_set_power_state_by_device_list_requests: self
                     .submitted_set_power_state_by_device_list_requests
                     .clone(),
@@ -302,6 +345,63 @@ pub mod test_support {
                 .clone()
         }
 
+        pub async fn queue_get_device_info_by_device_list_response(
+            &self,
+            response: Result<rms::GetDeviceInfoByDeviceListResponse, RackManagerError>,
+        ) {
+            self.queued_get_device_info_by_device_list_responses
+                .lock()
+                .await
+                .push_back(response);
+        }
+
+        pub async fn submitted_get_device_info_by_device_list_requests(
+            &self,
+        ) -> Vec<rms::GetDeviceInfoByDeviceListRequest> {
+            self.submitted_get_device_info_by_device_list_requests
+                .lock()
+                .await
+                .clone()
+        }
+
+        pub async fn queue_configure_scale_up_fabric_manager_response(
+            &self,
+            response: Result<rms::ConfigureScaleUpFabricManagerResponse, RackManagerError>,
+        ) {
+            self.queued_configure_scale_up_fabric_manager_responses
+                .lock()
+                .await
+                .push_back(response);
+        }
+
+        pub async fn submitted_configure_scale_up_fabric_manager_requests(
+            &self,
+        ) -> Vec<rms::ConfigureScaleUpFabricManagerRequest> {
+            self.submitted_configure_scale_up_fabric_manager_requests
+                .lock()
+                .await
+                .clone()
+        }
+
+        pub async fn queue_set_scale_up_fabric_state_response(
+            &self,
+            response: Result<rms::SetScaleUpFabricStateResponse, RackManagerError>,
+        ) {
+            self.queued_set_scale_up_fabric_state_responses
+                .lock()
+                .await
+                .push_back(response);
+        }
+
+        pub async fn submitted_set_scale_up_fabric_state_requests(
+            &self,
+        ) -> Vec<rms::SetScaleUpFabricStateRequest> {
+            self.submitted_set_scale_up_fabric_state_requests
+                .lock()
+                .await
+                .clone()
+        }
+
         /// Queue a `Result` to be returned on the next call to
         /// `set_power_state_by_device_list`. Used by power-shelf maintenance
         /// tests to drive both the success and failure paths of the
@@ -352,6 +452,19 @@ pub mod test_support {
         switch_system_image_job_statuses:
             Arc<Mutex<HashMap<String, rms::GetSwitchSystemImageJobStatusResponse>>>,
         switch_system_image_job_errors: Arc<Mutex<HashMap<String, String>>>,
+        submitted_get_device_info_by_device_list_requests:
+            Arc<Mutex<Vec<rms::GetDeviceInfoByDeviceListRequest>>>,
+        queued_get_device_info_by_device_list_responses:
+            Arc<Mutex<VecDeque<Result<rms::GetDeviceInfoByDeviceListResponse, RackManagerError>>>>,
+        submitted_configure_scale_up_fabric_manager_requests:
+            Arc<Mutex<Vec<rms::ConfigureScaleUpFabricManagerRequest>>>,
+        queued_configure_scale_up_fabric_manager_responses: Arc<
+            Mutex<VecDeque<Result<rms::ConfigureScaleUpFabricManagerResponse, RackManagerError>>>,
+        >,
+        submitted_set_scale_up_fabric_state_requests:
+            Arc<Mutex<Vec<rms::SetScaleUpFabricStateRequest>>>,
+        queued_set_scale_up_fabric_state_responses:
+            Arc<Mutex<VecDeque<Result<rms::SetScaleUpFabricStateResponse, RackManagerError>>>>,
         submitted_set_power_state_by_device_list_requests:
             Arc<Mutex<Vec<rms::SetPowerStateByDeviceListRequest>>>,
         queued_set_power_state_by_device_list_responses:
@@ -362,9 +475,17 @@ pub mod test_support {
     impl RmsApi for MockRmsClient {
         async fn get_device_info_by_device_list(
             &self,
-            _cmd: rms::GetDeviceInfoByDeviceListRequest,
+            cmd: rms::GetDeviceInfoByDeviceListRequest,
         ) -> Result<rms::GetDeviceInfoByDeviceListResponse, RackManagerError> {
-            Ok(rms::GetDeviceInfoByDeviceListResponse::default())
+            self.submitted_get_device_info_by_device_list_requests
+                .lock()
+                .await
+                .push(cmd);
+            self.queued_get_device_info_by_device_list_responses
+                .lock()
+                .await
+                .pop_front()
+                .unwrap_or(Ok(rms::GetDeviceInfoByDeviceListResponse::default()))
         }
         async fn get_node_device_info(
             &self,
@@ -703,15 +824,31 @@ pub mod test_support {
         }
         async fn configure_scale_up_fabric_manager(
             &self,
-            _cmd: rms::ConfigureScaleUpFabricManagerRequest,
+            cmd: rms::ConfigureScaleUpFabricManagerRequest,
         ) -> Result<rms::ConfigureScaleUpFabricManagerResponse, RackManagerError> {
-            Ok(rms::ConfigureScaleUpFabricManagerResponse::default())
+            self.submitted_configure_scale_up_fabric_manager_requests
+                .lock()
+                .await
+                .push(cmd);
+            self.queued_configure_scale_up_fabric_manager_responses
+                .lock()
+                .await
+                .pop_front()
+                .unwrap_or(Ok(rms::ConfigureScaleUpFabricManagerResponse::default()))
         }
         async fn set_scale_up_fabric_state(
             &self,
-            _cmd: rms::SetScaleUpFabricStateRequest,
+            cmd: rms::SetScaleUpFabricStateRequest,
         ) -> Result<rms::SetScaleUpFabricStateResponse, RackManagerError> {
-            Ok(rms::SetScaleUpFabricStateResponse::default())
+            self.submitted_set_scale_up_fabric_state_requests
+                .lock()
+                .await
+                .push(cmd);
+            self.queued_set_scale_up_fabric_state_responses
+                .lock()
+                .await
+                .pop_front()
+                .unwrap_or(Ok(rms::SetScaleUpFabricStateResponse::default()))
         }
         async fn fetch_switch_system_image(
             &self,
