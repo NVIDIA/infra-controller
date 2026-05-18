@@ -108,6 +108,8 @@ navigation:
 
     - section: Operations
       contents:
+        - page: Day One Operations
+          path: manuals/day_one_operations.md
         - page: NVLink Partitioning
           path: manuals/nvlink_partitioning.md
         - page: Release Instance API Enhancements
