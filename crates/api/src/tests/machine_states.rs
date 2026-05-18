@@ -303,7 +303,7 @@ async fn test_dpu_and_host_till_ready(pool: sqlx::PgPool) {
         (r#"{state="hostnotready",substate="discovered"}"#, 1),
         (
             r#"{state="hostnotready",substate="waitingfordiscovery"}"#,
-            1,
+            2,
         ),
         (r#"{state="hostnotready",substate="pollingbiossetup"}"#, 1),
         (
@@ -345,7 +345,7 @@ async fn test_dpu_and_host_till_ready(pool: sqlx::PgPool) {
         ("{state=\"hostnotready\",substate=\"discovered\"}", 1),
         (
             "{state=\"hostnotready\",substate=\"waitingfordiscovery\"}",
-            1,
+            2,
         ),
         ("{state=\"hostnotready\",substate=\"pollingbiossetup\"}", 1),
         (
