@@ -456,11 +456,12 @@ impl Display for RackMaintenanceState {
 
 /// Sub-states of `RackMaintenanceState::ConfigureNmxCluster`.
 ///
-/// `Start` selects and persists the primary switch. `DisableScaleUpFabricState`
+/// `Start` advances into the NMX cluster sequence. `DisableScaleUpFabricState`
 /// disables ScaleUpFabric state on all scoped switches before
-/// `ConfigureScaleUpFabricManager` configures only the primary switch.
-/// `WaitForFabricStatus` polls `GetScaleUpFabricServicesStatus` and persists
-/// the per-switch `fabric_manager_status` before advancing.
+/// `ConfigureScaleUpFabricManager` selects, persists, and configures only the
+/// primary switch. `WaitForFabricStatus` polls
+/// `GetScaleUpFabricServicesStatus` and persists the per-switch
+/// `fabric_manager_status` before advancing.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConfigureNmxClusterState {
     Start,
