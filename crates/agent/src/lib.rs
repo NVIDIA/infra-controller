@@ -90,7 +90,7 @@ pub const NVUE_MINIMUM_HBN_VERSION: &str = "2.0.0-doca2.5.0";
 // Downloads cert (pem) file in case of dpu-agent is running as initcontainer.
 async fn download_cert() -> eyre::Result<()> {
     let url = "http://carbide-pxe.forge/api/v0/tls/root_ca";
-    let output_file = "/opt/forge/forge_root.pem";
+    let output_file = "/opt/nico/forge_root.pem";
     let permissions = std::fs::Permissions::from_mode(0o644);
 
     let response = reqwest::get(url).await?;
