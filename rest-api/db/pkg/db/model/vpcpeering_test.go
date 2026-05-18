@@ -1,0 +1,742 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package model
+
+import (
+	"context"
+	"testing"
+
+	"github.com/NVIDIA/infra-controller-rest/db/pkg/db"
+	"github.com/NVIDIA/infra-controller-rest/db/pkg/db/paginator"
+	stracer "github.com/NVIDIA/infra-controller-rest/db/pkg/tracer"
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
+	otrace "go.opentelemetry.io/otel/trace"
+)
+
+var (
+	mockID = uuid.MustParse("123e4567-e89b-12d3-a456-426614174000")
+)
+
+func testVpcPeeringSetupSchema(t *testing.T, dbSession *db.Session) {
+	testInterfaceSetupSchema(t, dbSession)
+
+	err := dbSession.DB.ResetModel(context.Background(), (*VpcPeering)(nil))
+	assert.Nil(t, err)
+}
+
+func TestVpcPeeringSQLDAO_Create(t *testing.T) {
+	ctx := context.Background()
+	dbSession := testInstanceInitDB(t)
+	defer dbSession.Close()
+
+	testVpcPeeringSetupSchema(t, dbSession)
+	ip := testInstanceBuildInfrastructureProvider(t, dbSession, "testIP")
+	site := testInstanceBuildSite(t, dbSession, ip, "testSite")
+	tenant1 := testInstanceBuildTenant(t, dbSession, "testTenant1")
+	tenant2 := testInstanceBuildTenant(t, dbSession, "testTenant2")
+	user := testInstanceBuildUser(t, dbSession, "testUser")
+	vpc1 := testInstanceBuildVpc(t, dbSession, ip, site, tenant1, "testVpc1")
+	vpc2 := testInstanceBuildVpc(t, dbSession, ip, site, tenant1, "testVpc2")
+	vpc3 := testInstanceBuildVpc(t, dbSession, ip, site, tenant1, "testVpc3")
+	vpc4 := testInstanceBuildVpc(t, dbSession, ip, site, tenant2, "testVpc4")
+
+	vpsd := NewVpcPeeringDAO(dbSession)
+
+	_, _, ctx = testCommonTraceProviderSetup(t, ctx)
+
+	tests := []struct {
+		desc               string
+		vps                []VpcPeering
+		expectError        bool
+		verifyChildSpanner bool
+	}{
+		{
+			desc: "Create multiple VPC peerings",
+			vps: []VpcPeering{
+				{
+					Vpc1ID: vpc1.ID, Vpc2ID: vpc2.ID, SiteID: site.ID, IsMultiTenant: false, CreatedBy: user.ID,
+				},
+				{
+					Vpc1ID: vpc1.ID, Vpc2ID: vpc3.ID, SiteID: site.ID, IsMultiTenant: false, CreatedBy: user.ID,
+				},
+				{
+					Vpc1ID: vpc2.ID, Vpc2ID: vpc3.ID, SiteID: site.ID, IsMultiTenant: false, CreatedBy: user.ID,
+				},
+			},
+			expectError:        false,
+			verifyChildSpanner: true,
+		},
+		{
+			desc: "Create succeeds with IsMultiTenant=true",
+			vps: []VpcPeering{
+				{
+					Vpc1ID: vpc1.ID, Vpc2ID: vpc4.ID, SiteID: site.ID, IsMultiTenant: true, InfrastructureProviderID: &ip.ID, CreatedBy: user.ID,
+				},
+			},
+			expectError:        false,
+			verifyChildSpanner: true,
+		},
+		{
+			desc: "Create succeeds with TenantID set",
+			vps: []VpcPeering{
+				{
+					Vpc1ID: vpc1.ID, Vpc2ID: vpc2.ID, SiteID: site.ID, IsMultiTenant: false, TenantID: &tenant1.ID, CreatedBy: user.ID,
+				},
+			},
+			expectError:        false,
+			verifyChildSpanner: true,
+		},
+		{
+			desc: "Create fails due to constraint that two VPC ids cannot be the same",
+			vps: []VpcPeering{
+				{
+					Vpc1ID: vpc1.ID, Vpc2ID: vpc1.ID, SiteID: site.ID, IsMultiTenant: false, CreatedBy: user.ID,
+				},
+			},
+			expectError:        true,
+			verifyChildSpanner: true,
+		},
+		{
+			desc: "Create fails due to foreign key constraint on Vpc1ID",
+			vps: []VpcPeering{
+				{
+					Vpc1ID: mockID, Vpc2ID: vpc1.ID, SiteID: site.ID, IsMultiTenant: false, CreatedBy: user.ID,
+				},
+			},
+			expectError: true,
+		},
+		{
+			desc: "Create fails due to foreign key constraint on Vpc2ID",
+			vps: []VpcPeering{
+				{
+					Vpc1ID: vpc1.ID, Vpc2ID: mockID, SiteID: site.ID, IsMultiTenant: false, CreatedBy: user.ID,
+				},
+			},
+			expectError:        true,
+			verifyChildSpanner: true,
+		},
+		{
+			desc: "Create fails due to foreign key constraint on InfrastructureProviderID",
+			vps: []VpcPeering{
+				{
+					Vpc1ID: vpc1.ID, Vpc2ID: vpc2.ID, SiteID: site.ID, IsMultiTenant: true, InfrastructureProviderID: &mockID, CreatedBy: user.ID,
+				},
+			},
+			expectError: true,
+		},
+		{
+			desc: "Create fails due to foreign key constraint on TenantID",
+			vps: []VpcPeering{
+				{
+					Vpc1ID: vpc1.ID, Vpc2ID: vpc2.ID, SiteID: site.ID, IsMultiTenant: false, TenantID: &mockID, CreatedBy: user.ID,
+				},
+			},
+			expectError: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.desc, func(t *testing.T) {
+
+			for _, i := range tc.vps {
+				got, err := vpsd.Create(ctx, nil, VpcPeeringCreateInput{
+					Vpc1ID:                   i.Vpc1ID,
+					Vpc2ID:                   i.Vpc2ID,
+					SiteID:                   i.SiteID,
+					IsMultiTenant:            i.IsMultiTenant,
+					InfrastructureProviderID: i.InfrastructureProviderID,
+					TenantID:                 i.TenantID,
+					CreatedByID:              i.CreatedBy,
+				})
+				assert.Equal(t, tc.expectError, err != nil)
+				if !tc.expectError {
+					assert.NotNil(t, got)
+					assert.Equal(t, i.SiteID, got.SiteID)
+					assert.Equal(t, i.IsMultiTenant, got.IsMultiTenant)
+					assert.Equal(t, i.InfrastructureProviderID, got.InfrastructureProviderID)
+					assert.Equal(t, i.TenantID, got.TenantID)
+					assert.Equal(t, i.CreatedBy, got.CreatedBy)
+				}
+				if tc.verifyChildSpanner {
+					span := otrace.SpanFromContext(ctx)
+					assert.True(t, span.SpanContext().IsValid())
+					_, ok := ctx.Value(stracer.TracerKey).(otrace.Tracer)
+					assert.True(t, ok)
+				}
+			}
+		})
+	}
+}
+
+func TestVpcPeeringSQLDAO_GetAll(t *testing.T) {
+	ctx := context.Background()
+	dbSession := testInstanceInitDB(t)
+	defer dbSession.Close()
+
+	testVpcPeeringSetupSchema(t, dbSession)
+	ip := testInstanceBuildInfrastructureProvider(t, dbSession, "testIP")
+	site := testInstanceBuildSite(t, dbSession, ip, "testSite")
+	user := testInstanceBuildUser(t, dbSession, "testUser")
+	tenant := testInstanceBuildTenant(t, dbSession, "testTenant")
+	tenant2 := testInstanceBuildTenant(t, dbSession, "testTenant2")
+	vpc1 := testInstanceBuildVpc(t, dbSession, ip, site, tenant, "testVpc1")
+	vpc2 := testInstanceBuildVpc(t, dbSession, ip, site, tenant, "testVpc2")
+	vpc3 := testInstanceBuildVpc(t, dbSession, ip, site, tenant, "testVpc3")
+	vpc4 := testInstanceBuildVpc(t, dbSession, ip, site, tenant2, "testVpc4")
+
+	vpsd := NewVpcPeeringDAO(dbSession)
+
+	_, _, ctx = testCommonTraceProviderSetup(t, ctx)
+
+	vp12, err := vpsd.Create(ctx, nil, VpcPeeringCreateInput{
+		Vpc1ID:                   vpc1.ID,
+		Vpc2ID:                   vpc2.ID,
+		SiteID:                   site.ID,
+		IsMultiTenant:            false,
+		InfrastructureProviderID: nil,
+		TenantID:                 &tenant.ID,
+		CreatedByID:              user.ID,
+	})
+	assert.Nil(t, err)
+	assert.NotNil(t, vp12)
+
+	vp13, err := vpsd.Create(ctx, nil, VpcPeeringCreateInput{
+		Vpc1ID:                   vpc1.ID,
+		Vpc2ID:                   vpc3.ID,
+		SiteID:                   site.ID,
+		IsMultiTenant:            false,
+		InfrastructureProviderID: nil,
+		TenantID:                 &tenant.ID,
+		CreatedByID:              user.ID,
+	})
+	assert.Nil(t, err)
+	assert.NotNil(t, vp13)
+
+	vp23, err := vpsd.Create(ctx, nil, VpcPeeringCreateInput{
+		Vpc1ID: vpc2.ID,
+		Vpc2ID: vpc3.ID,
+		SiteID: site.ID,
+	})
+	assert.Nil(t, err)
+	assert.NotNil(t, vp23)
+
+	vp14, err := vpsd.Create(ctx, nil, VpcPeeringCreateInput{
+		Vpc1ID:                   vpc1.ID,
+		Vpc2ID:                   vpc4.ID,
+		SiteID:                   site.ID,
+		IsMultiTenant:            true,
+		InfrastructureProviderID: &ip.ID,
+		TenantID:                 nil,
+		CreatedByID:              user.ID,
+	})
+	assert.Nil(t, err)
+	assert.NotNil(t, vp14)
+
+	tests := []struct {
+		desc string
+
+		paramOffset  *int
+		paramLimit   *int
+		paramOrderBy *paginator.OrderBy
+
+		ids                       []uuid.UUID
+		vpcIDs                    []uuid.UUID
+		siteIDs                   []uuid.UUID
+		isMultiTenant             *bool
+		infrastructureProviderIDs []uuid.UUID
+		tenantIDs                 []uuid.UUID
+		statuses                  []string
+
+		expectError bool
+		expectCount int
+
+		includeRelations []string
+
+		verifyChildSpanner bool
+	}{
+		{
+			desc:               "GetAll with no filters",
+			ids:                nil,
+			vpcIDs:             nil,
+			siteIDs:            nil,
+			statuses:           nil,
+			expectError:        false,
+			expectCount:        4,
+			verifyChildSpanner: true,
+		},
+		{
+			desc:               "GetAll with filters on IDs",
+			ids:                []uuid.UUID{vp12.ID, vp13.ID},
+			vpcIDs:             nil,
+			siteIDs:            nil,
+			statuses:           nil,
+			expectError:        false,
+			expectCount:        2,
+			verifyChildSpanner: true,
+		},
+		{
+			desc:               "GetAll with filters on VpcIDs",
+			ids:                nil,
+			vpcIDs:             []uuid.UUID{vpc1.ID},
+			siteIDs:            nil,
+			statuses:           nil,
+			expectError:        false,
+			expectCount:        3,
+			verifyChildSpanner: true,
+		},
+		{
+			desc:                      "GetAll with filters on IsMultiTenant",
+			isMultiTenant:             db.GetBoolPtr(true),
+			infrastructureProviderIDs: nil,
+			tenantIDs:                 nil,
+			expectError:               false,
+			expectCount:               1,
+			verifyChildSpanner:        true,
+		},
+		{
+			desc:                      "GetAll with filters on InfrastructureProviderIDs",
+			infrastructureProviderIDs: []uuid.UUID{ip.ID},
+			expectError:               false,
+			expectCount:               1,
+			verifyChildSpanner:        true,
+		},
+		{
+			desc:                      "GetAll with filters on TenantIDs and InfrastructureProviderIDs",
+			tenantIDs:                 []uuid.UUID{tenant.ID},
+			infrastructureProviderIDs: []uuid.UUID{ip.ID},
+			expectError:               false,
+			expectCount:               4,
+			verifyChildSpanner:        true,
+		},
+		{
+			desc:               "GetAll with filters on TenantIDs",
+			tenantIDs:          []uuid.UUID{tenant2.ID},
+			expectError:        false,
+			expectCount:        1,
+			verifyChildSpanner: true,
+		},
+		{
+			desc:               "GetAll with filters on pending statuses",
+			ids:                nil,
+			vpcIDs:             nil,
+			siteIDs:            nil,
+			statuses:           []string{VpcPeeringStatusPending},
+			expectError:        false,
+			expectCount:        4,
+			verifyChildSpanner: true,
+		},
+		{
+			desc:               "GetAll with filters on deleting statuses",
+			ids:                nil,
+			vpcIDs:             nil,
+			statuses:           []string{VpcPeeringStatusDeleting},
+			expectError:        false,
+			expectCount:        0,
+			verifyChildSpanner: true,
+		},
+		{
+			desc:               "GetAll with empty IDs",
+			ids:                []uuid.UUID{},
+			vpcIDs:             nil,
+			statuses:           []string{VpcPeeringStatusDeleting},
+			expectError:        false,
+			expectCount:        0,
+			verifyChildSpanner: true,
+		},
+		{
+			desc:               "GetAll with empty statuses",
+			ids:                nil,
+			vpcIDs:             nil,
+			statuses:           []string{},
+			expectError:        false,
+			expectCount:        0,
+			verifyChildSpanner: true,
+		},
+		{
+			desc:               "GetAll with empty site IDs",
+			ids:                nil,
+			vpcIDs:             nil,
+			siteIDs:            []uuid.UUID{},
+			statuses:           nil,
+			expectError:        false,
+			expectCount:        0,
+			verifyChildSpanner: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.desc, func(t *testing.T) {
+			got, count, err := vpsd.GetAll(
+				ctx,
+				nil,
+				VpcPeeringFilterInput{
+					IDs:                       tc.ids,
+					VpcIDs:                    tc.vpcIDs,
+					SiteIDs:                   tc.siteIDs,
+					IsMultiTenant:             tc.isMultiTenant,
+					InfrastructureProviderIDs: tc.infrastructureProviderIDs,
+					TenantIDs:                 tc.tenantIDs,
+					Statuses:                  tc.statuses,
+				},
+				paginator.PageInput{Offset: tc.paramOffset, Limit: tc.paramLimit, OrderBy: tc.paramOrderBy}, tc.includeRelations)
+			assert.Equal(t, tc.expectError, err != nil)
+			if !tc.expectError {
+				assert.NotNil(t, got)
+				assert.Equal(t, tc.expectCount, count)
+			}
+			if tc.verifyChildSpanner {
+				span := otrace.SpanFromContext(ctx)
+				assert.True(t, span.SpanContext().IsValid())
+				_, ok := ctx.Value(stracer.TracerKey).(otrace.Tracer)
+				assert.True(t, ok)
+			}
+		})
+	}
+}
+
+func TestVpcPeeringSQLDAO_GetByID(t *testing.T) {
+	ctx := context.Background()
+	dbSession := testInstanceInitDB(t)
+	defer dbSession.Close()
+
+	testVpcPeeringSetupSchema(t, dbSession)
+	ip := testInstanceBuildInfrastructureProvider(t, dbSession, "testIP")
+	site := testInstanceBuildSite(t, dbSession, ip, "testSite")
+	tenant := testInstanceBuildTenant(t, dbSession, "testTenant")
+	vpc1 := testInstanceBuildVpc(t, dbSession, ip, site, tenant, "testVpc1")
+	vpc2 := testInstanceBuildVpc(t, dbSession, ip, site, tenant, "testVpc2")
+
+	vpsd := NewVpcPeeringDAO(dbSession)
+
+	_, _, ctx = testCommonTraceProviderSetup(t, ctx)
+
+	vp12, err := vpsd.Create(ctx, nil, VpcPeeringCreateInput{
+		Vpc1ID: vpc1.ID,
+		Vpc2ID: vpc2.ID,
+		SiteID: site.ID,
+	})
+	assert.Nil(t, err)
+	assert.NotNil(t, vp12)
+
+	tests := []struct {
+		desc string
+
+		id uuid.UUID
+
+		expectError bool
+
+		includeRelations   []string
+		verifyChildSpanner bool
+	}{
+		{
+			desc:               "GetByID",
+			id:                 vp12.ID,
+			expectError:        false,
+			verifyChildSpanner: true,
+		},
+		{
+			desc:               "GetByID fails for non-existent ID",
+			id:                 mockID,
+			expectError:        true,
+			verifyChildSpanner: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.desc, func(t *testing.T) {
+			got, err := vpsd.GetByID(
+				ctx,
+				nil,
+				tc.id,
+				tc.includeRelations,
+			)
+			assert.Equal(t, tc.expectError, err != nil)
+			if !tc.expectError {
+				assert.NotNil(t, got)
+			}
+			if tc.verifyChildSpanner {
+				span := otrace.SpanFromContext(ctx)
+				assert.True(t, span.SpanContext().IsValid())
+				_, ok := ctx.Value(stracer.TracerKey).(otrace.Tracer)
+				assert.True(t, ok)
+			}
+		})
+	}
+}
+
+func TestVpcPeeringSQLDAO_UpdateStatusByID(t *testing.T) {
+	ctx := context.Background()
+	dbSession := testInstanceInitDB(t)
+	defer dbSession.Close()
+
+	testVpcPeeringSetupSchema(t, dbSession)
+
+	testVpcPeeringSetupSchema(t, dbSession)
+	ip := testInstanceBuildInfrastructureProvider(t, dbSession, "testIP")
+	site := testInstanceBuildSite(t, dbSession, ip, "testSite")
+	tenant := testInstanceBuildTenant(t, dbSession, "testTenant")
+	vpc1 := testInstanceBuildVpc(t, dbSession, ip, site, tenant, "testVpc1")
+	vpc2 := testInstanceBuildVpc(t, dbSession, ip, site, tenant, "testVpc2")
+
+	vpsd := NewVpcPeeringDAO(dbSession)
+
+	_, _, ctx = testCommonTraceProviderSetup(t, ctx)
+
+	vp, err := vpsd.Create(ctx, nil, VpcPeeringCreateInput{
+		Vpc1ID: vpc1.ID,
+		Vpc2ID: vpc2.ID,
+		SiteID: site.ID,
+	})
+	assert.Nil(t, err)
+	assert.NotNil(t, vp)
+	assert.Equal(t, vp.Status, VpcPeeringStatusPending)
+
+	originalTS := vp.Updated
+	originalStatus := vp.Status
+
+	// Test updating status to valid status
+	err = vpsd.UpdateStatusByID(ctx, nil, vp.ID, VpcPeeringStatusConfiguring)
+	assert.NoError(t, err)
+	updatedVP, err := vpsd.GetByID(ctx, nil, vp.ID, nil)
+	assert.NoError(t, err)
+	assert.NotEqual(t, originalStatus, updatedVP.Status)
+	assert.True(t, updatedVP.Updated.After(originalTS))
+
+	// Test updating status to invalid status string
+	err = vpsd.UpdateStatusByID(ctx, nil, vp.ID, "invalid_status")
+	assert.Error(t, err)
+}
+
+func TestVpcPeeringSQLDAO_Delete(t *testing.T) {
+	ctx := context.Background()
+	dbSession := testInstanceInitDB(t)
+	defer dbSession.Close()
+
+	testVpcPeeringSetupSchema(t, dbSession)
+
+	testVpcPeeringSetupSchema(t, dbSession)
+	ip := testInstanceBuildInfrastructureProvider(t, dbSession, "testIP")
+	site := testInstanceBuildSite(t, dbSession, ip, "testSite")
+	tenant := testInstanceBuildTenant(t, dbSession, "testTenant")
+	vpc1 := testInstanceBuildVpc(t, dbSession, ip, site, tenant, "testVpc1")
+	vpc2 := testInstanceBuildVpc(t, dbSession, ip, site, tenant, "testVpc2")
+
+	vpsd := NewVpcPeeringDAO(dbSession)
+
+	// Create a VPC peering
+	vp, err := vpsd.Create(ctx, nil, VpcPeeringCreateInput{
+		Vpc1ID: vpc1.ID,
+		Vpc2ID: vpc2.ID,
+		SiteID: site.ID,
+	})
+	assert.NoError(t, err)
+	assert.NotNil(t, vp)
+	assert.Equal(t, vp.Status, VpcPeeringStatusPending)
+
+	_, _, ctx = testCommonTraceProviderSetup(t, ctx)
+
+	tests := []struct {
+		desc          string
+		id            uuid.UUID
+		expectedError bool
+	}{
+		{
+			desc:          "delete existing peering",
+			id:            vp.ID,
+			expectedError: false,
+		},
+		{
+			desc:          "delete non-existing peering",
+			id:            uuid.New(),
+			expectedError: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.desc, func(t *testing.T) {
+			err := vpsd.Delete(ctx, nil, tc.id)
+			assert.Equal(t, tc.expectedError, err != nil)
+			if !tc.expectedError {
+				// Check soft-deleted entry
+				deleted := &VpcPeering{}
+				err = dbSession.DB.NewSelect().
+					Model(deleted).
+					Where("id = ?", vp.ID).
+					WhereDeleted().
+					Scan(ctx)
+				assert.NoError(t, err)
+				assert.NotNil(t, deleted.Deleted)
+			}
+		})
+	}
+}
+
+func TestVpcPeeringSQLDAO_DeleteByVpcID(t *testing.T) {
+	ctx := context.Background()
+	dbSession := testInstanceInitDB(t)
+	defer dbSession.Close()
+
+	testVpcPeeringSetupSchema(t, dbSession)
+
+	testVpcPeeringSetupSchema(t, dbSession)
+	ip := testInstanceBuildInfrastructureProvider(t, dbSession, "testIP")
+	site := testInstanceBuildSite(t, dbSession, ip, "testSite")
+	tenant := testInstanceBuildTenant(t, dbSession, "testTenant")
+	vpc1 := testInstanceBuildVpc(t, dbSession, ip, site, tenant, "testVpc1")
+	vpc2 := testInstanceBuildVpc(t, dbSession, ip, site, tenant, "testVpc2")
+	vpc3 := testInstanceBuildVpc(t, dbSession, ip, site, tenant, "testVpc3")
+	vpc4 := testInstanceBuildVpc(t, dbSession, ip, site, tenant, "testVpc4")
+	vpc5 := testInstanceBuildVpc(t, dbSession, ip, site, tenant, "testVpc5")
+
+	vpsd := NewVpcPeeringDAO(dbSession)
+
+	// Create a VPC peering
+	vp12, err := vpsd.Create(ctx, nil, VpcPeeringCreateInput{
+		Vpc1ID: vpc1.ID,
+		Vpc2ID: vpc2.ID,
+		SiteID: site.ID,
+	})
+	assert.Nil(t, err)
+	assert.NotNil(t, vp12)
+	vp13, err := vpsd.Create(ctx, nil, VpcPeeringCreateInput{
+		Vpc1ID: vpc1.ID,
+		Vpc2ID: vpc3.ID,
+		SiteID: site.ID,
+	})
+	assert.Nil(t, err)
+	assert.NotNil(t, vp13)
+	vp23, err := vpsd.Create(ctx, nil, VpcPeeringCreateInput{
+		Vpc1ID: vpc2.ID,
+		Vpc2ID: vpc3.ID,
+		SiteID: site.ID,
+	})
+	assert.Nil(t, err)
+	assert.NotNil(t, vp23)
+	vp45, err := vpsd.Create(ctx, nil, VpcPeeringCreateInput{
+		Vpc1ID: vpc4.ID,
+		Vpc2ID: vpc5.ID,
+		SiteID: site.ID,
+	})
+	assert.NoError(t, err)
+
+	_, _, ctx = testCommonTraceProviderSetup(t, ctx)
+
+	tests := []struct {
+		desc          string
+		vpcID         uuid.UUID
+		expectedError bool
+		vpIDs         []uuid.UUID
+	}{
+		{
+			desc:          "delete peerings involving VPC4 (single peering with VPC5)",
+			vpcID:         vpc4.ID,
+			expectedError: false,
+			vpIDs:         []uuid.UUID{vp45.ID},
+		},
+		{
+			desc:          "delete all peerings involving VPC1 (peerings with VPC2 and VPC3)",
+			vpcID:         vpc1.ID,
+			expectedError: false,
+			vpIDs:         []uuid.UUID{vp12.ID, vp13.ID},
+		},
+		{
+			desc:          "delete all peerings involving VPC2 (peerings with VPC1 and VPC3)",
+			vpcID:         vpc2.ID,
+			expectedError: false,
+			vpIDs:         []uuid.UUID{vp12.ID, vp23.ID},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.desc, func(t *testing.T) {
+			err := vpsd.DeleteByVpcID(ctx, nil, tc.vpcID)
+			assert.Equal(t, tc.expectedError, err != nil)
+			if tc.vpIDs != nil {
+				for _, vpID := range tc.vpIDs {
+					// Check soft-deleted entry
+					deleted := &VpcPeering{}
+					err = dbSession.DB.NewSelect().
+						Model(deleted).
+						Where("id = ?", vpID).
+						WhereDeleted().
+						Scan(ctx)
+					assert.NoError(t, err)
+					assert.NotNil(t, deleted.Deleted)
+				}
+			}
+		})
+	}
+}
+
+func TestVpcPeeringSQLDAO_RecreateAfterDeletion(t *testing.T) {
+	ctx := context.Background()
+	dbSession := testInstanceInitDB(t)
+	defer dbSession.Close()
+
+	testVpcPeeringSetupSchema(t, dbSession)
+
+	testVpcPeeringSetupSchema(t, dbSession)
+	ip := testInstanceBuildInfrastructureProvider(t, dbSession, "testIP")
+	site := testInstanceBuildSite(t, dbSession, ip, "testSite")
+	tenant := testInstanceBuildTenant(t, dbSession, "testTenant")
+	vpc1 := testInstanceBuildVpc(t, dbSession, ip, site, tenant, "testVpc1")
+	vpc2 := testInstanceBuildVpc(t, dbSession, ip, site, tenant, "testVpc2")
+
+	vpsd := NewVpcPeeringDAO(dbSession)
+
+	// Create a VPC peering
+	vp12, err := vpsd.Create(ctx, nil, VpcPeeringCreateInput{
+		Vpc1ID: vpc1.ID,
+		Vpc2ID: vpc2.ID,
+		SiteID: site.ID,
+	})
+	assert.NoError(t, err)
+
+	err = vpsd.Delete(ctx, nil, vp12.ID)
+	assert.NoError(t, err)
+
+	deleted := &VpcPeering{}
+	err = dbSession.DB.NewSelect().
+		Model(deleted).
+		Where("id = ?", vp12.ID).
+		WhereDeleted().
+		Scan(ctx)
+	assert.NoError(t, err)
+	assert.NotNil(t, deleted.Deleted)
+
+	vp12, err = vpsd.Create(ctx, nil, VpcPeeringCreateInput{
+		Vpc1ID: vpc1.ID,
+		Vpc2ID: vpc2.ID,
+		SiteID: site.ID,
+	})
+	assert.NoError(t, err)
+
+	err = vpsd.Delete(ctx, nil, vp12.ID)
+	assert.NoError(t, err)
+
+	var deletedPeerings []VpcPeering
+	err = dbSession.DB.NewSelect().
+		Model(&deletedPeerings).
+		Where("vpc1_id = ? AND vpc2_id = ?", vpc1.ID, vpc2.ID).
+		WhereDeleted().
+		Scan(ctx)
+	assert.NoError(t, err)
+	assert.Equal(t, len(deletedPeerings), 2)
+
+}
