@@ -34,9 +34,10 @@ use model::rack::{
 };
 use model::rack_type::{
     RackCapabilitiesSet, RackCapabilityCompute, RackCapabilityPowerShelf, RackCapabilitySwitch,
-    RackHardwareClass, RackHardwareType, RackProfile, RackProfileConfig,
+    RackHardwareClass, RackHardwareTopology, RackHardwareType, RackProfile, RackProfileConfig,
 };
 use model::switch::{NewSwitch, SwitchConfig};
+use serde_json::json;
 use tonic::Request;
 
 use crate::state_controller::db_write_batch::DbWriteBatch;
@@ -157,6 +158,70 @@ pub(crate) fn config_with_rack_profiles() -> crate::cfg::file::CarbideConfig {
         .collect(),
     };
     config
+}
+
+fn config_with_nmx_cluster_profile() -> crate::cfg::file::CarbideConfig {
+    let mut config = config_with_rack_profiles();
+    config.rack_profiles.rack_profiles.insert(
+        "NmxCluster".to_string(),
+        RackProfile {
+            rack_hardware_topology: Some(RackHardwareTopology::Gb200Nvl72r1C2g4Topology),
+            ..Default::default()
+        },
+    );
+    config
+}
+
+fn default_lookup_table_json() -> serde_json::Value {
+    json!({
+        "devices": {
+            "Compute Node": {
+                "HMC_prod": {
+                    "filename": "hmc-prod.bin",
+                    "target": "/redfish/v1/Chassis/HGX_Chassis_0",
+                    "component": "HMC",
+                    "bundle": "bundle-hmc",
+                    "firmware_type": "prod",
+                    "version": "1.0.0"
+                },
+                "BMC_prod": {
+                    "filename": "bmc-prod.bin",
+                    "target": "FW_BMC_0",
+                    "component": "BMC",
+                    "bundle": "bundle-bmc",
+                    "firmware_type": "prod",
+                    "version": "1.0.0"
+                }
+            }
+        }
+    })
+}
+
+async fn insert_default_rack_firmware(
+    pool: &sqlx::PgPool,
+    firmware_id: &str,
+    rack_hardware_type: RackHardwareType,
+    available: bool,
+) {
+    let mut txn = pool.begin().await.unwrap();
+    db::rack_firmware::create(
+        &mut txn,
+        firmware_id,
+        rack_hardware_type,
+        json!({ "Id": firmware_id }),
+        Some(default_lookup_table_json()),
+    )
+    .await
+    .unwrap();
+    if available {
+        db::rack_firmware::set_available(&mut txn, firmware_id, true)
+            .await
+            .unwrap();
+    }
+    db::rack_firmware::set_default(&mut txn, firmware_id)
+        .await
+        .unwrap();
+    txn.commit().await.unwrap();
 }
 
 async fn create_single_compute_rack(
@@ -2303,6 +2368,159 @@ async fn test_configure_nmx_cluster_disable_scale_up_fabric_state_runs_on_all_sw
             .await
             .is_empty()
     );
+
+    Ok(())
+}
+
+#[crate::sqlx_test]
+async fn test_configure_nmx_cluster_configure_selects_persists_and_configures_primary_switch(
+    pool: sqlx::PgPool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let env = create_test_env_with_overrides(
+        pool.clone(),
+        TestEnvOverrides {
+            config: Some(config_with_nmx_cluster_profile()),
+            ..Default::default()
+        },
+    )
+    .await;
+
+    let rack_id = new_rack_id();
+    let mut txn = pool.acquire().await?;
+    db_rack::create(
+        &mut txn,
+        &rack_id,
+        Some(&RackProfileId::new("NmxCluster")),
+        &RackConfig::default(),
+        None,
+    )
+    .await?;
+    drop(txn);
+
+    let switch_ids = attach_switches_with_nvos_credentials(&env, &rack_id, 2).await?;
+    let secondary_switch_id = switch_ids[0].clone();
+    let primary_switch_id = switch_ids[1].clone();
+    let topology_type = RackHardwareTopology::Gb200Nvl72r1C2g4Topology.to_string();
+
+    env.rms_sim
+        .queue_get_device_info_by_device_list_response(Ok(rms::GetDeviceInfoByDeviceListResponse {
+            status: rms::ReturnCode::Success as i32,
+            node_device_info: vec![
+                rms::NodeDeviceInfo {
+                    node_id: secondary_switch_id.to_string(),
+                    tray_index: Some(2),
+                    slot_number: Some(2),
+                    ..Default::default()
+                },
+                rms::NodeDeviceInfo {
+                    node_id: primary_switch_id.to_string(),
+                    tray_index: Some(1),
+                    slot_number: Some(1),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }))
+        .await;
+    env.rms_sim
+        .queue_configure_scale_up_fabric_manager_response(Ok(
+            rms::ConfigureScaleUpFabricManagerResponse {
+                status: rms::ReturnCode::Success as i32,
+                topology_used: topology_type.clone(),
+                scale_up_fabric_state_enabled: false,
+                grpc_enabled: true,
+                ..Default::default()
+            },
+        ))
+        .await;
+
+    let mut rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
+
+    let handler_instance = RackStateHandler::default();
+    let mut services = env.state_handler_services();
+    let mut metrics = RackMetrics::default();
+    let mut db_writes = DbWriteBatch::default();
+    let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
+        services: &mut services,
+        metrics: &mut metrics,
+        pending_db_writes: &mut db_writes,
+    };
+
+    let nmx_state = RackState::Maintenance {
+        maintenance_state: RackMaintenanceState::ConfigureNmxCluster {
+            configure_nmx_cluster: ConfigureNmxClusterState::ConfigureScaleUpFabricManager,
+        },
+    };
+    let outcome = handler_instance
+        .handle_object_state(&rack_id, &mut rack, &nmx_state, &mut ctx)
+        .await?;
+
+    match outcome {
+        StateHandlerOutcome::Transition { next_state, .. } => {
+            assert!(
+                matches!(
+                    next_state,
+                    RackState::Maintenance {
+                        maintenance_state: RackMaintenanceState::ConfigureNmxCluster {
+                            configure_nmx_cluster: ConfigureNmxClusterState::WaitForFabricStatus,
+                        },
+                    }
+                ),
+                "ConfigureScaleUpFabricManager should transition to WaitForFabricStatus, got {:?}",
+                next_state
+            );
+        }
+        other => panic!(
+            "Expected Transition, got {:?}",
+            std::mem::discriminant(&other)
+        ),
+    }
+
+    assert!(
+        env.rms_sim
+            .submitted_set_scale_up_fabric_state_requests()
+            .await
+            .is_empty()
+    );
+
+    let device_info_requests = env
+        .rms_sim
+        .submitted_get_device_info_by_device_list_requests()
+        .await;
+    assert_eq!(device_info_requests.len(), 1);
+    let device_info_nodes = device_info_requests[0]
+        .nodes
+        .as_ref()
+        .expect("device-info request should include nodes")
+        .devices
+        .as_slice();
+    assert_eq!(device_info_nodes.len(), switch_ids.len());
+
+    let configure_requests = env
+        .rms_sim
+        .submitted_configure_scale_up_fabric_manager_requests()
+        .await;
+    assert_eq!(configure_requests.len(), 1);
+    let configure_request = &configure_requests[0];
+    assert_eq!(configure_request.topology_type, topology_type);
+    assert_eq!(
+        configure_request
+            .device
+            .as_ref()
+            .expect("configure request should include a primary switch")
+            .node_id,
+        primary_switch_id.to_string()
+    );
+
+    let mut txn = pool.acquire().await?;
+    let primary_switch = db_switch::find_by_id(&mut txn, &primary_switch_id)
+        .await?
+        .expect("primary switch should exist");
+    let secondary_switch = db_switch::find_by_id(&mut txn, &secondary_switch_id)
+        .await?
+        .expect("secondary switch should exist");
+    assert!(primary_switch.is_primary);
+    assert!(!secondary_switch.is_primary);
 
     Ok(())
 }
