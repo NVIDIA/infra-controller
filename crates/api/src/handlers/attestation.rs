@@ -281,7 +281,7 @@ pub(crate) async fn get_machine_attestations_status(
 
     Ok(Response::new(rpc::SpdmMachineAttestationStatusResponse {
         machine_id: Some(*machine_id),
-        attestation_status: attestation_status.into(),
+        attestation_status: rpc::SpdmAttestationStatus::from(attestation_status).into(),
     }))
 }
 
