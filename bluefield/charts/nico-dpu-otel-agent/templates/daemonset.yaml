@@ -80,7 +80,7 @@ spec:
               subPath: config.toml
               readOnly: true
             - name: nico-certs
-              mountPath: /opt/nico
+              mountPath: {{ .Values.certsDir | default "/opt/nico" }}
               readOnly: true
             - name: ssl-certs
               mountPath: /etc/ssl/certs
@@ -92,7 +92,7 @@ spec:
             name: {{ include "nico-dpu-otel-agent.fullname" . }}-config
         - name: nico-certs
           hostPath:
-            path: /opt/nico
+            path: {{ .Values.certsDir | default "/opt/nico" }}
             type: DirectoryOrCreate
         - name: ssl-certs
           hostPath:

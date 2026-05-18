@@ -73,7 +73,7 @@ spec:
             - name: proc-mem-info
               mountPath: /host-mem-info
             - name: nico-certs
-              mountPath: /opt/nico
+              mountPath: {{ .Values.certsDir | default "/opt/nico" }}
             - name: host-resolv-conf
               mountPath: /host-resolv.conf
               readOnly: true
@@ -135,14 +135,14 @@ spec:
                   key: {{ .Values.hbn.nvue_password_key }}
           volumeMounts:
             - name: nico-certs
-              mountPath: /opt/nico
+              mountPath: {{ .Values.certsDir | default "/opt/nico" }}
             - name: hw-cache
               mountPath: /data
               readOnly: true
       volumes:
         - name: nico-certs
           hostPath:
-            path: /opt/nico
+            path: {{ .Values.certsDir | default "/opt/nico" }}
             type: DirectoryOrCreate
         - name: hw-cache
           emptyDir: {}
