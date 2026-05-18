@@ -37,10 +37,10 @@ use model::expected_machine::ExpectedMachine;
 use model::hardware_info::HardwareInfo;
 use model::machine::health_override::HARDWARE_HEALTH_OVERRIDE_PREFIX;
 use model::machine::{
-    BomValidating, BomValidatingContext, DpfState, DpuInitState, FailureCause, FailureDetails,
-    FailureSource, LockdownInfo, LockdownMode, LockdownState, MachineState, MachineValidatingState,
-    ManagedHostState, ManagedHostStateSnapshot, MeasuringState, SpdmMeasuringState,
-    ValidationState,
+    BomValidating, BomValidatingContext, CleanupContext, CleanupState, DpfState, DpuInitState,
+    FailureCause, FailureDetails, FailureSource, LockdownInfo, LockdownMode, LockdownState,
+    MachineState, MachineValidatingState, ManagedHostState, ManagedHostStateSnapshot,
+    MeasuringState, SpdmMeasuringState, ValidationState,
 };
 use model::power_shelf::power_shelf_id::from_hardware_info;
 use model::power_shelf::{NewPowerShelf, PowerShelfConfig};
@@ -73,6 +73,81 @@ use crate::tests::common::api_fixtures::{
 };
 use crate::tests::common::mac_address_pool::EXPECTED_SWITCH_NVOS_MAC_ADDRESS_POOL;
 use crate::tests::common::rpc_builder::DhcpDiscovery;
+
+async fn complete_initial_discovery_cleanup_if_needed(env: &TestEnv, host_machine_id: MachineId) {
+    // Keep the shared fixture usable with both lifecycle shapes: older flows stay in discovery,
+    // while newer flows require state-machine-owned cleanup before discovery can complete.
+    let state = env
+        .run_machine_state_controller_iteration_until_state_condition(
+            &host_machine_id,
+            1,
+            |machine| {
+                matches!(
+                    machine.current_state(),
+                    ManagedHostState::HostInit {
+                        machine_state: MachineState::WaitingForDiscovery
+                    } | ManagedHostState::WaitingForCleanup {
+                        cleanup_context: CleanupContext::InitialDiscovery,
+                        ..
+                    }
+                )
+            },
+        )
+        .await;
+
+    if matches!(
+        state,
+        ManagedHostState::HostInit {
+            machine_state: MachineState::WaitingForDiscovery
+        }
+    ) {
+        return;
+    }
+
+    if !matches!(
+        state,
+        ManagedHostState::WaitingForCleanup {
+            cleanup_state: CleanupState::HostCleanup { .. },
+            cleanup_context: CleanupContext::InitialDiscovery,
+        }
+    ) {
+        env.run_machine_state_controller_iteration_until_state_condition(
+            &host_machine_id,
+            3,
+            |machine| {
+                matches!(
+                    machine.current_state(),
+                    ManagedHostState::WaitingForCleanup {
+                        cleanup_state: CleanupState::HostCleanup { .. },
+                        cleanup_context: CleanupContext::InitialDiscovery,
+                    }
+                )
+            },
+        )
+        .await;
+    }
+
+    let response = forge_agent_control(env, host_machine_id).await;
+    assert!(matches!(response.action, Some(Action::Reset(_))));
+    assert_eq!(response.legacy_action, LegacyAction::Reset as i32);
+
+    env.api
+        .cleanup_machine_completed(Request::new(rpc::MachineCleanupInfo {
+            machine_id: host_machine_id.into(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+
+    env.run_machine_state_controller_iteration_until_state_matches(
+        &host_machine_id,
+        3,
+        ManagedHostState::HostInit {
+            machine_state: MachineState::WaitingForDiscovery,
+        },
+    )
+    .await;
+}
 
 /// MockExploredHost presents a fluent interface for declaring a mock host and running it through
 /// the site-explorer ingestion lifecycle. Its methods are intended to be chained together to
@@ -700,6 +775,7 @@ impl<'a> MockExploredHost<'a> {
             .await
             .expect("Failed to add hardware health report to newly created machine");
 
+        complete_initial_discovery_cleanup_if_needed(self.test_env, host_machine_id).await;
         discovery_completed(self.test_env, host_machine_id).await;
         self.test_env.run_ib_fabric_monitor_iteration().await;
         host_uefi_setup(self.test_env, &host_machine_id).await;
@@ -924,6 +1000,7 @@ impl<'a> MockExploredHost<'a> {
             .await
             .expect("Failed to add hardware health report to newly created machine");
 
+        complete_initial_discovery_cleanup_if_needed(self.test_env, host_machine_id).await;
         discovery_completed(self.test_env, host_machine_id).await;
         self.test_env.run_ib_fabric_monitor_iteration().await;
         host_uefi_setup(self.test_env, &host_machine_id).await;
