@@ -69,6 +69,9 @@ pub mod protos;
 pub mod secrets;
 pub mod utils;
 
+#[cfg(feature = "model")]
+pub mod model;
+
 #[cfg(feature = "cli")]
 pub mod admin_cli;
 

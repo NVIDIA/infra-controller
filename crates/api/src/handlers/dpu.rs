@@ -20,6 +20,7 @@ use std::net::IpAddr;
 use std::str::FromStr;
 
 use ::rpc::errors::RpcDataConversionError;
+use ::rpc::model::{RpcInto, RpcTryFrom};
 use ::rpc::{common as rpc_common, forge as rpc};
 use carbide_network::virtualization::VpcVirtualizationType;
 use carbide_utils::arch::CpuArchitecture;
@@ -98,7 +99,7 @@ pub(crate) async fn get_managed_host_network_config_inner(
     };
 
     let maybe_instance =
-        Option::<rpc::Instance>::try_from(snapshot.clone()).map_err(CarbideError::from)?;
+        Option::<rpc::Instance>::rpc_try_from(snapshot.clone()).map_err(CarbideError::from)?;
 
     let primary_dpu_snapshot = snapshot
         .host_snapshot
@@ -1076,7 +1077,7 @@ pub(crate) async fn dpu_agent_upgrade_policy_action(
     let req = request.into_inner();
     let mut did_change = false;
     if let Some(new_policy) = req.new_policy {
-        let policy: AgentUpgradePolicy = new_policy.into();
+        let policy: AgentUpgradePolicy = new_policy.rpc_into();
 
         dpu_agent_upgrade_policy::set(&mut txn, policy).await?;
         did_change = true;
@@ -1092,7 +1093,7 @@ pub(crate) async fn dpu_agent_upgrade_policy_action(
     txn.commit().await?;
 
     let response = rpc::DpuAgentUpgradePolicyResponse {
-        active_policy: active_policy.into(),
+        active_policy: rpc::AgentUpgradePolicy::from(active_policy) as i32,
         did_change,
     };
     Ok(tonic::Response::new(response))
