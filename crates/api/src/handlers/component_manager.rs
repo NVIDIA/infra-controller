@@ -29,7 +29,7 @@ use component_manager::power_shelf_manager::{PowerShelfEndpoint, PowerShelfVendo
 use db::{self, WithTransaction};
 use futures_util::FutureExt;
 use mac_address::MacAddress;
-use model::component_manager::{PowerAction, PowerShelfComponent};
+use model::component_manager::{NvSwitchComponent, PowerAction, PowerShelfComponent};
 use model::rack::{FirmwareUpgradeJob, MaintenanceActivity};
 use tonic::{Code, Request, Response, Status};
 
@@ -733,7 +733,12 @@ pub(crate) async fn update_component_firmware(
                 let mut results: Vec<_> = endpoints
                     .unresolved
                     .iter()
-                    .map(|u| error_result(&u.id.to_string(), u.reason.clone()))
+                    .map(|id| {
+                        error_result(
+                            &id.to_string(),
+                            "could not resolve endpoint for switch".into(),
+                        )
+                    })
                     .collect();
 
                 let backend_results = cm
