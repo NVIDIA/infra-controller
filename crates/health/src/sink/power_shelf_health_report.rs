@@ -35,6 +35,7 @@ struct PowerShelfHealthReportKey {
 
 pub struct PowerShelfHealthReportSink {
     queue: Arc<DedupQueue<PowerShelfHealthReportKey, Arc<HealthReport>>>,
+    skip_empty_reports: bool,
 }
 
 impl PowerShelfHealthReportSink {
@@ -89,7 +90,10 @@ impl PowerShelfHealthReportSink {
             });
         }
 
-        Ok(Self { queue })
+        Ok(Self {
+            queue,
+            skip_empty_reports: config.skip_empty_reports,
+        })
     }
 }
 
@@ -104,6 +108,14 @@ impl DataSink for PowerShelfHealthReportSink {
         };
 
         if report.target != Some(HealthReportTarget::PowerShelf) {
+            return;
+        }
+
+        if self.skip_empty_reports && report.is_empty() {
+            tracing::debug!(
+                source = ?report.source,
+                "Skipping empty power shelf health report"
+            );
             return;
         }
 
