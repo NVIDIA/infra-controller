@@ -101,7 +101,7 @@ fn expand_dispatch(input: DeriveInput) -> syn::Result<TokenStream> {
             async fn dispatch(
                 self,
                 mut ctx: crate::cfg::runtime::RuntimeContext,
-            ) -> ::rpc::admin_cli::CarbideCliResult<()> {
+            ) -> crate::errors::CarbideCliResult<()> {
                 use crate::cfg::run::Run;
                 #dispatch_import
                 match self {

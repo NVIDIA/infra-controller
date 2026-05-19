@@ -17,10 +17,7 @@
 
 //!
 //! `measurement journal` subcommand dispatcher + backing functions.
-
-use ::rpc::admin_cli::{
-    CarbideCliError, CarbideCliResult, ToTable, cli_output, just_print_summary,
-};
+use ::rpc::admin_cli::{ToTable, just_print_summary};
 use ::rpc::protos::measured_boot::ShowMeasurementJournalRequest;
 use measured_boot::bundle::MeasurementBundle;
 use measured_boot::journal::MeasurementJournal;
@@ -31,6 +28,8 @@ use crate::attestation::measured_boot::global;
 use crate::attestation::measured_boot::journal::args::{CmdJournal, Delete, List, Promote, Show};
 use crate::attestation::measured_boot::report::args::Promote as ReportPromoteArgs;
 use crate::attestation::measured_boot::report::cmds::promote as report_promote;
+use crate::cli_output;
+use crate::errors::{CarbideCliError, CarbideCliResult};
 use crate::rpc::ApiClient;
 
 /// dispatch matches + dispatches the correct command for

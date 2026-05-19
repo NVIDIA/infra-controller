@@ -51,14 +51,16 @@ spec:
             - /busybox/sh
             - -c
             - |
-              echo "Waiting for nico certificates in /opt/nico ..."
-              while [ ! -f /opt/nico/nico_root.pem ] || [ ! -f /opt/nico/machine_cert.pem ] || [ ! -f /opt/nico/machine_cert.key ]; do
+              {{- $dir := .Values.certsDir | default "/opt/nico" }}
+              {{- $rootCa := .Values.rootCaFile | default "nico_root.pem" }}
+              echo "Waiting for certificates in {{ $dir }} ..."
+              while [ ! -f {{ $dir }}/{{ $rootCa }} ] || [ ! -f {{ $dir }}/machine_cert.pem ] || [ ! -f {{ $dir }}/machine_cert.key ]; do
                 sleep 5
               done
               echo "Certificates found, starting nico-fmds."
           volumeMounts:
             - name: nico-certs
-              mountPath: /opt/nico
+              mountPath: {{ .Values.certsDir | default "/opt/nico" }}
               readOnly: true
       containers:
         - name: nico-fmds
@@ -66,10 +68,12 @@ spec:
             {{- toYaml .Values.securityContext | nindent 12 }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           args:
+            {{- $dir := .Values.certsDir | default "/opt/nico" }}
+            {{- $rootCa := .Values.rootCaFile | default "nico_root.pem" }}
             - "--grpc-address=$(POD_IP):50052"
-            - "--root-ca=/opt/nico/nico_root.pem"
-            - "--client-cert=/opt/nico/machine_cert.pem"
-            - "--client-key=/opt/nico/machine_cert.key"
+            - "--root-ca={{ $dir }}/{{ $rootCa }}"
+            - "--client-cert={{ $dir }}/machine_cert.pem"
+            - "--client-key={{ $dir }}/machine_cert.key"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           {{- with toYaml .Values.serviceDaemonSet.resources }}
           resources:
@@ -103,12 +107,12 @@ spec:
                   fieldPath: metadata.namespace
           volumeMounts:
             - name: nico-certs
-              mountPath: /opt/nico
+              mountPath: {{ .Values.certsDir | default "/opt/nico" }}
               readOnly: true
       volumes:
         - name: nico-certs
           hostPath:
-            path: /opt/nico
+            path: {{ .Values.certsDir | default "/opt/nico" }}
             type: DirectoryOrCreate
       {{- with .Values.tolerations }}
       tolerations:

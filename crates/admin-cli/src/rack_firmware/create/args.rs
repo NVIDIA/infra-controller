@@ -17,8 +17,9 @@
 
 use std::path::PathBuf;
 
-use ::rpc::admin_cli::CarbideCliError;
 use clap::Parser;
+
+use crate::errors::CarbideCliError;
 
 #[derive(Parser, Debug)]
 pub struct Args {

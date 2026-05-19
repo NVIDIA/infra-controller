@@ -21,10 +21,11 @@ use carbide_uuid::machine::MachineId;
 use chrono::{DateTime, Utc};
 use clap::Parser;
 use prettytable::{Cell, Row, Table};
-use rpc::admin_cli::{CarbideCliResult, OutputFormat};
+use rpc::admin_cli::OutputFormat;
 
 use crate::cfg::dispatch::Dispatch;
 use crate::cfg::runtime::RuntimeContext;
+use crate::errors::CarbideCliResult;
 use crate::rpc::ApiClient;
 
 #[cfg(test)]

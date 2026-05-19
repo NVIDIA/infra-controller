@@ -15,12 +15,13 @@
  * limitations under the License.
  */
 
-use ::rpc::admin_cli::{CarbideCliError, OutputFormat};
+use ::rpc::admin_cli::OutputFormat;
 use ::rpc::forge::ComputeTrayComponent;
 use prettytable::{Cell, Row, Table};
 
 use super::args::Args;
 use crate::component_manager::common;
+use crate::errors::CarbideCliError;
 use crate::rpc::ApiClient;
 
 /// Formats a raw proto `ComputeTrayComponent` value for display.

@@ -26,7 +26,6 @@
  *  - `mock-machine list``: Lists all mock machines.
  */
 
-use ::rpc::admin_cli::CarbideCliError;
 use ::rpc::protos::measured_boot::{
     AttestCandidateMachineRequest, ShowCandidateMachineRequest, show_candidate_machine_request,
 };
@@ -35,6 +34,7 @@ use clap::Parser;
 use measured_boot::pcr::PcrRegisterValue;
 
 use crate::cfg::measurement::parse_pcr_register_values;
+use crate::errors::CarbideCliError;
 
 /// CmdMachine provides a container for the `mock-machine`
 /// subcommand, which itself contains other subcommands

@@ -21,7 +21,7 @@
 use std::fs::File;
 use std::io::BufReader;
 
-use ::rpc::admin_cli::{CarbideCliResult, ToTable, cli_output, set_summary};
+use ::rpc::admin_cli::{ToTable, set_summary};
 use ::rpc::protos::measured_boot::ImportSiteMeasurementsRequest;
 use measured_boot::records::{MeasurementApprovedMachineRecord, MeasurementApprovedProfileRecord};
 use measured_boot::site::{ImportResult, SiteModel};
@@ -33,6 +33,8 @@ use crate::attestation::measured_boot::site::args::{
     RemoveMachineByApprovalId, RemoveMachineByMachineId, RemoveProfile, RemoveProfileByApprovalId,
     RemoveProfileByProfileId, TrustedMachine, TrustedProfile,
 };
+use crate::cli_output;
+use crate::errors::CarbideCliResult;
 use crate::rpc::ApiClient;
 
 /// dispatch matches + dispatches the correct command

@@ -9,6 +9,10 @@ exposedPorts:
   labels: {}
   ports: {}
 
+### Cert directory + root CA filename overrides.
+certsDir: /opt/forge
+rootCaFile: forge_root.pem
+
 ### Service specific values ###
 image:
   repository: ""

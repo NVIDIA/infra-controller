@@ -22,6 +22,7 @@ use model::rack::{Rack, RackConfig, RackState};
 
 use crate::state_controller::rack::context::RackStateHandlerContextObjects;
 use crate::state_controller::rack::maintenance::first_maintenance_state;
+use crate::state_controller::rack::ready::all_components_ready;
 use crate::state_controller::state_handler::{
     StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
@@ -65,6 +66,15 @@ pub async fn handle_error(
             maintenance_state: first_maintenance_state(scope),
         })
         .with_txn(txn));
+    }
+
+    if all_components_ready(id, ctx).await? {
+        tracing::info!(
+            "Rack {} components all Ready, transitioning from Error back to Ready",
+            id
+        );
+        let txn = ctx.services.db_pool.begin().await?;
+        return Ok(StateHandlerOutcome::transition(RackState::Ready).with_txn(txn));
     }
 
     tracing::error!("Rack {} is in error state: {}", id, cause);
