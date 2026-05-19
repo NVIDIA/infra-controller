@@ -52,7 +52,7 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
-            - "--config-path=/etc/nico-dpu-otel-agent/config.toml"
+            - "--config-path=/etc/forge-dpu-otel-agent/config.toml"
             - "run"
           {{- with toYaml .Values.serviceDaemonSet.resources }}
           resources:
@@ -76,7 +76,7 @@ spec:
                   fieldPath: metadata.namespace
           volumeMounts:
             - name: config
-              mountPath: /etc/nico-dpu-otel-agent/config.toml
+              mountPath: /etc/forge-dpu-otel-agent/config.toml
               subPath: config.toml
               readOnly: true
             - name: nico-certs

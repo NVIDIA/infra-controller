@@ -361,11 +361,11 @@ processors:
 
 exporters:
   otlp/site:
-    endpoint: otel-receiver.nico:443
+    endpoint: otel-receiver.forge:443
     tls:
-      ca_file: /opt/nico/nico_root.pem
-      cert_file: /opt/nico/machine_cert.pem
-      key_file: /opt/nico/machine_cert.key
+      ca_file: /opt/forge/forge_root.pem
+      cert_file: /opt/forge/machine_cert.pem
+      key_file: /opt/forge/machine_cert.key
       reload_interval: 1h
     retry_on_failure:
       enabled: true
