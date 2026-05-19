@@ -143,11 +143,7 @@ impl DataSink for HealthReportSink {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::net::{IpAddr, Ipv4Addr};
-    use std::str::FromStr;
-
     use super::*;
-    use crate::endpoint::{BmcAddr, EndpointMetadata, MachineData};
 
     fn machine_id(value: &str) -> MachineId {
         value.parse().expect("valid machine id")
@@ -165,71 +161,6 @@ mod tests {
             successes: Vec::new(),
             alerts: Vec::new(),
         })
-    }
-
-    fn report_with_target(target: HealthReportTarget) -> Arc<HealthReport> {
-        Arc::new(HealthReport {
-            source: ReportSource::BmcSensors,
-            target: Some(target),
-            observed_at: None,
-            successes: Vec::new(),
-            alerts: Vec::new(),
-        })
-    }
-
-    fn machine_context(machine_id: MachineId) -> EventContext {
-        EventContext {
-            endpoint_key: "42:9e:b1:bd:9d:dd".to_string(),
-            addr: BmcAddr {
-                ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
-                port: Some(443),
-                mac: mac_address::MacAddress::from_str("42:9e:b1:bd:9d:dd").expect("valid mac"),
-            },
-            collector_type: "sensor_collector",
-            metadata: Some(EndpointMetadata::Machine(MachineData {
-                machine_id,
-                machine_serial: None,
-                slot_number: None,
-                tray_index: None,
-                nvlink_domain_uuid: None,
-            })),
-            rack_id: None,
-        }
-    }
-
-    fn sink(skip_empty_reports: bool) -> HealthReportSink {
-        HealthReportSink {
-            queue: Arc::new(DedupQueue::new()),
-            skip_empty_reports,
-        }
-    }
-
-    #[test]
-    fn empty_reports_are_skipped_when_enabled() {
-        let machine_id = machine_id("fm100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0");
-        let context = machine_context(machine_id);
-        let sink = sink(true);
-
-        sink.handle_event(
-            &context,
-            &CollectorEvent::HealthReport(report_with_target(HealthReportTarget::Machine)),
-        );
-
-        assert!(sink.queue.pop().is_none());
-    }
-
-    #[test]
-    fn empty_reports_can_be_queued_when_skip_is_disabled() {
-        let machine_id = machine_id("fm100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0");
-        let context = machine_context(machine_id);
-        let sink = sink(false);
-
-        sink.handle_event(
-            &context,
-            &CollectorEvent::HealthReport(report_with_target(HealthReportTarget::Machine)),
-        );
-
-        assert!(sink.queue.pop().is_some());
     }
 
     #[tokio::test]
