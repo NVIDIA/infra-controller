@@ -1,0 +1,93 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name: NICo REST CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'rest-api/**'
+      - '.github/workflows/rest-*.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  prepare:
+    name: Prepare Build Info
+    uses: ./.github/workflows/rest-prepare-build-info.yml
+    with:
+      runner: ubuntu-latest
+
+  lint-and-test:
+    name: Lint and Test
+    needs: prepare
+    uses: ./.github/workflows/rest-lint-and-test.yml
+
+  build-binaries:
+    name: Build Go Binaries
+    needs:
+      - prepare
+      - lint-and-test
+    with:
+      upload_artifact: true
+    uses: ./.github/workflows/rest-build-binaries.yml
+
+  security-secret-scan:
+    name: Secret Scan with TruffleHog
+    needs: prepare
+    runs-on: linux-amd64-cpu4
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Run TruffleHog Scan
+        uses: NVIDIA/dsx-github-actions/.github/actions/trufflehog-scan@f435aa6bf125fe6f9e5ac438f8cef75f90e29a2b
+        with:
+          extra-args: '--results=verified,unknown --only-verified'
+          post-pr-comment: 'true'
+          fail-on-findings: 'true'
+
+  build-and-push:
+    name: Build and Push Docker Images
+    needs:
+      - prepare
+      - lint-and-test
+    permissions:
+      contents: read
+      packages: write
+      pull-requests: write
+      security-events: write
+    uses: ./.github/workflows/rest-build-push-docker.yml
+    with:
+      runner: ubuntu-latest
+      semantic_version: ${{ needs.prepare.outputs.semantic_version }}
+      short_sha: ${{ needs.prepare.outputs.short_sha }}
+      branch_sha_tag: ${{ needs.prepare.outputs.branch_sha_tag }}
+      target_registry: ${{ needs.prepare.outputs.target_registry }}
+      branch_name: ${{ needs.prepare.outputs.branch_name }}
+      is_main_branch: ${{ needs.prepare.outputs.is_main_branch }}
+      push_enabled: false
+      release_tag: ${{ needs.prepare.outputs.release_tag }}
+    secrets:
+      NVCR_USERNAME: ${{ secrets.NVCR_STG_USERNAME }}
+      NVCR_TOKEN: ${{ secrets.NVCR_STG_TOKEN }}
+
+  helm:
+    name: Helm Charts
+    needs:
+      - prepare
+    if: ${{ !cancelled() && needs.prepare.result == 'success' }}
+    uses: ./.github/workflows/rest-helm-workflows.yml
+    with:
+      app_version: ${{ needs.prepare.outputs.semantic_version }}
+    secrets:
+      NVCR_STG_TOKEN: ${{ secrets.NVCR_STG_TOKEN }}
