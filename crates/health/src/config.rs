@@ -123,6 +123,17 @@ pub struct StaticPowerShelfEndpoint {
     pub serial: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StaticSwitchEndpointRole {
+    Bmc,
+    Host,
+}
+
+fn default_static_switch_endpoint_role() -> StaticSwitchEndpointRole {
+    StaticSwitchEndpointRole::Host
+}
+
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct StaticSwitchEndpoint {
@@ -130,6 +141,12 @@ pub struct StaticSwitchEndpoint {
     pub serial: Option<String>,
     pub slot_number: Option<i32>,
     pub tray_index: Option<i32>,
+    #[serde(default = "default_static_switch_endpoint_role")]
+    pub endpoint_role: StaticSwitchEndpointRole,
+    #[serde(default)]
+    pub is_primary: bool,
+    #[serde(default)]
+    pub nmxt_enabled: Option<bool>,
 }
 
 impl Debug for StaticBmcEndpoint {
