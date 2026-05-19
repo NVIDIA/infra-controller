@@ -59,6 +59,9 @@ pub enum TenantState {
     Failed,
     /// Not sure what happened. Check log for more info
     Invalid,
+    /// Instance is undergoing repair while otherwise tenant-ready (see
+    /// [`crate::rpc_conv::instance::status::tenant::instance_status_tenant_state`]).
+    Repairing,
 }
 
 #[cfg(test)]

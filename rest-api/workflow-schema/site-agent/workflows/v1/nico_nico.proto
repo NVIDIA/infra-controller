@@ -1651,6 +1651,8 @@ enum TenantState {
 
   // Something Wrong happened at nico. Check logs for more info.
   INVALID = 9;
+  // Instance is undergoing online repair on the site.
+  REPAIRING = 10;
 }
 
 // Describe the desired configuration of an IBPartition

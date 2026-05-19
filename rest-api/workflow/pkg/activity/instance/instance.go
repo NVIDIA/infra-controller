@@ -1163,6 +1163,8 @@ func getNICoInstanceStatus(controllerInstanceTenantState cwsv1.TenantState) (str
 		return cdbm.InstanceStatusUpdating, "Instance is receiving system firmware updates"
 	case cwsv1.TenantState_UPDATING:
 		return cdbm.InstanceStatusUpdating, "Instance is receiving system firmware updates"
+	case cwsv1.TenantState_REPAIRING:
+		return cdbm.InstanceStatusRepairing, "Instance is undergoing repair on Site"
 	default:
 		return cdbm.InstanceStatusError, "Instance status is unknown"
 	}

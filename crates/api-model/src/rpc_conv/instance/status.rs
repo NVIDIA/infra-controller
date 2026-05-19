@@ -77,6 +77,7 @@ pub fn instance_status_from_config_and_observation(
     ib_status: Option<&MachineInfinibandStatusObservation>,
     nvlink_status: Option<&MachineNvLinkStatusObservation>,
     is_network_config_request_pending: bool,
+    host_health: &crate::health::HealthReportSources,
 ) -> Result<InstanceStatus, RpcDataConversionError> {
     let mut instance_config_synced = SyncState::Synced;
 
@@ -149,6 +150,7 @@ pub fn instance_status_from_config_and_observation(
                 instance_config.os.phone_home_enabled,
                 phone_home_last_contact,
                 extension_services_ready,
+                host_health.repair_merge_active(),
             )?,
             true => {
                 // If instance deletion was requested, we always confirm the
@@ -186,11 +188,91 @@ impl TryFrom<SyncState> for rpc::SyncState {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::str::FromStr;
 
+    use config_version::ConfigVersion;
+    use health_report::{HealthReport, REPAIR_REQUEST_MERGE_SOURCE};
+    use uuid::Uuid;
+
     use super::*;
+    use crate::health::HealthReportSources;
+    use crate::instance::config::InstanceConfig;
+    use crate::instance::config::extension_services::InstanceExtensionServicesConfig;
+    use crate::instance::config::infiniband::InstanceInfinibandConfig;
+    use crate::instance::config::network::InstanceNetworkConfig;
+    use crate::instance::config::nvlink::InstanceNvLinkConfig;
+    use crate::instance::config::tenant_config::TenantConfig;
+    use crate::instance::status::InstanceStatusObservations;
     use crate::instance::status::tenant::TenantState;
-    use crate::machine::{DpuReprovisionStates, ManagedHostState, ReprovisionState};
+    use crate::machine::{DpuReprovisionStates, InstanceState, ManagedHostState, ReprovisionState};
+    use crate::os::{OperatingSystem, OperatingSystemVariant};
+    use crate::tenant::TenantOrganizationId;
+
+    fn minimal_instance_config() -> InstanceConfig {
+        InstanceConfig {
+            tenant: TenantConfig {
+                tenant_organization_id: TenantOrganizationId::try_from("TenantA".to_string())
+                    .unwrap(),
+                tenant_keyset_ids: vec![],
+                hostname: None,
+            },
+            os: OperatingSystem {
+                user_data: None,
+                variant: OperatingSystemVariant::OsImage(Uuid::nil()),
+                phone_home_enabled: false,
+                run_provisioning_instructions_on_every_boot: false,
+            },
+            network: InstanceNetworkConfig::default(),
+            infiniband: InstanceInfinibandConfig::default(),
+            network_security_group_id: None,
+            extension_services: InstanceExtensionServicesConfig::default(),
+            nvlink: InstanceNvLinkConfig::default(),
+        }
+    }
+
+    #[test]
+    fn repair_merge_active_yields_repairing_via_status_pipeline() {
+        let config = minimal_instance_config();
+        let version = ConfigVersion::initial();
+        let mut health = HealthReportSources::default();
+        health.merges.insert(
+            REPAIR_REQUEST_MERGE_SOURCE.to_string(),
+            HealthReport {
+                source: REPAIR_REQUEST_MERGE_SOURCE.to_string(),
+                ..Default::default()
+            },
+        );
+
+        let status = instance_status_from_config_and_observation(
+            HashMap::new(),
+            Versioned::new(&config, version.clone()),
+            Versioned::new(&config.network, version.clone()),
+            Versioned::new(&config.infiniband, version.clone()),
+            Versioned::new(&config.extension_services, version.clone()),
+            Versioned::new(&config.nvlink, version),
+            &InstanceStatusObservations {
+                network: HashMap::new(),
+                extension_services: HashMap::new(),
+                phone_home_last_contact: None,
+            },
+            ManagedHostState::Assigned {
+                instance_state: InstanceState::Ready,
+            },
+            false,
+            None,
+            None,
+            None,
+            false,
+            &health,
+        )
+        .unwrap();
+
+        assert_eq!(
+            status.tenant.as_ref().map(|t| t.state),
+            Some(TenantState::Repairing)
+        );
+    }
 
     #[test]
     fn test_tenant_state() {
@@ -211,6 +293,7 @@ mod tests {
                 SyncState::Synced,
                 false,
                 None,
+                false,
                 false,
             )
             .unwrap(),

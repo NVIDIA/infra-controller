@@ -135,10 +135,11 @@ pub fn get_health_report(template: HealthReportTemplates, message: Option<String
         // (admin machine force-delete is unchanged). Merge source `request-online-repair` is separate
         // from `tenant-reported-issue`.
         HealthReportTemplates::RequestOnlineRepair => {
-            report.source = "request-online-repair".to_string();
+            report.source = health_report::REQUEST_ONLINE_REPAIR_MERGE_SOURCE.to_string();
             report.alerts[0].id = HealthProbeId::from_str("RequestOnlineRepair")
                 .expect("RequestOnlineRepair is a valid non-empty HealthProbeId");
-            report.alerts[0].target = Some("request-online-repair".to_string());
+            report.alerts[0].target =
+                Some(health_report::REQUEST_ONLINE_REPAIR_MERGE_SOURCE.to_string());
             report.alerts[0].classifications = vec![
                 HealthAlertClassification::prevent_allocations(),
                 HealthAlertClassification::suppress_external_alerting(),
@@ -149,7 +150,7 @@ pub fn get_health_report(template: HealthReportTemplates, message: Option<String
         // Template to indicate that the instance is identified as unhealthy and
         // is ready to be picked by Repair System for diagnosis and fix.
         HealthReportTemplates::RequestRepair => {
-            report.source = "repair-request".to_string();
+            report.source = health_report::REPAIR_REQUEST_MERGE_SOURCE.to_string();
             report.alerts[0].id = HealthProbeId::from_str("RequestRepair")
                 .expect("RequestRepair is a valid non-empty HealthProbeId");
             report.alerts[0].target = Some("repair-requested".to_string());
@@ -260,7 +261,7 @@ mod tests {
             Some("Hardware diagnostics indicate memory failure".to_string()),
         );
 
-        assert_eq!(report.source, "repair-request");
+        assert_eq!(report.source, health_report::REPAIR_REQUEST_MERGE_SOURCE);
         assert_eq!(report.alerts.len(), 1);
 
         let alert = &report.alerts[0];
@@ -298,7 +299,7 @@ mod tests {
     fn test_request_repair_template_with_empty_message() {
         let report = get_health_report(HealthReportTemplates::RequestRepair, None);
 
-        assert_eq!(report.source, "repair-request");
+        assert_eq!(report.source, health_report::REPAIR_REQUEST_MERGE_SOURCE);
         assert_eq!(report.alerts[0].message, "");
     }
 
@@ -349,7 +350,10 @@ mod tests {
             Some("Online repair handoff for stuck repair workflow".to_string()),
         );
 
-        assert_eq!(report.source, "request-online-repair");
+        assert_eq!(
+            report.source,
+            health_report::REQUEST_ONLINE_REPAIR_MERGE_SOURCE
+        );
         assert_eq!(report.alerts.len(), 1);
 
         let alert = &report.alerts[0];
@@ -357,7 +361,10 @@ mod tests {
             alert.id,
             HealthProbeId::from_str("RequestOnlineRepair").unwrap()
         );
-        assert_eq!(alert.target, Some("request-online-repair".to_string()));
+        assert_eq!(
+            alert.target,
+            Some(health_report::REQUEST_ONLINE_REPAIR_MERGE_SOURCE.to_string())
+        );
         assert_eq!(
             alert.message,
             "Online repair handoff for stuck repair workflow"
@@ -386,7 +393,10 @@ mod tests {
     fn test_request_online_repair_template_with_empty_message() {
         let report = get_health_report(HealthReportTemplates::RequestOnlineRepair, None);
 
-        assert_eq!(report.source, "request-online-repair");
+        assert_eq!(
+            report.source,
+            health_report::REQUEST_ONLINE_REPAIR_MERGE_SOURCE
+        );
         assert_eq!(report.alerts[0].message, "");
     }
 

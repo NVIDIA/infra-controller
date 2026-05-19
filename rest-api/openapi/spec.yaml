@@ -15605,6 +15605,7 @@ components:
         - Configuring
         - Ready
         - Updating
+        - Repairing
         - Rebooting
         - Terminating
         - Error

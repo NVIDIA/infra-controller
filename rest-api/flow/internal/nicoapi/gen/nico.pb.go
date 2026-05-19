@@ -372,6 +372,8 @@ const (
 	TenantState_UPDATING TenantState = 8
 	// Something Wrong happened at nico. Check logs for more info.
 	TenantState_INVALID TenantState = 9
+	// Instance is undergoing online repair on the site.
+	TenantState_REPAIRING TenantState = 10
 )
 
 // Enum value maps for TenantState.
@@ -385,8 +387,9 @@ var (
 		5: "FAILED",
 		6: "DPU_REPROVISIONING",
 		7: "HOST_REPROVISIONING",
-		8: "UPDATING",
-		9: "INVALID",
+		8:  "UPDATING",
+		9:  "INVALID",
+		10: "REPAIRING",
 	}
 	TenantState_value = map[string]int32{
 		"PROVISIONING":        0,
@@ -399,6 +402,7 @@ var (
 		"HOST_REPROVISIONING": 7,
 		"UPDATING":            8,
 		"INVALID":             9,
+		"REPAIRING":           10,
 	}
 )
 
