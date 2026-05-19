@@ -18,9 +18,10 @@
 	<thead>
 		<tr>
 			<th>ID</th>
+			<th>Domain UUID</th>
 			<th>Name</th>
 			<th>NMX-M-ID</th>
-			<th>Members></th>
+			<th>Members</th>
 		</tr>
 	</thead>
 	<tbody>
@@ -28,6 +29,7 @@
         	{% for p in physical_partitions %}
 		<tr>
 			<td> {{ p.id }} </td>
+				<td><a href="{{ p.domain_health_url }}">{{ p.domain_uuid }}</a></td>
 			<td> {{ p.name }} </td>
 			<td> {{ p.nmx_m_id }} </td>
 
@@ -60,7 +62,7 @@
 			<th></th>
 			<th></th>
 			<th></th>
+			<th></th>
 </table>
 
 {% endblock %}
-
