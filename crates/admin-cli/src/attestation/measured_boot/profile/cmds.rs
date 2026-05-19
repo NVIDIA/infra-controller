@@ -51,21 +51,21 @@ pub async fn dispatch(
             cli_output(
                 create(cli.grpc_conn, local_args).await?,
                 &cli.args.format,
-                ::rpc::admin_cli::Destination::Stdout(),
+                crate::Destination::Stdout(),
             )?;
         }
         CmdProfile::Delete(local_args) => {
             cli_output(
                 delete(cli.grpc_conn, local_args).await?,
                 &cli.args.format,
-                ::rpc::admin_cli::Destination::Stdout(),
+                crate::Destination::Stdout(),
             )?;
         }
         CmdProfile::Rename(local_args) => {
             cli_output(
                 rename(cli.grpc_conn, local_args).await?,
                 &cli.args.format,
-                ::rpc::admin_cli::Destination::Stdout(),
+                crate::Destination::Stdout(),
             )?;
         }
         CmdProfile::Show(local_args) => {
@@ -73,13 +73,13 @@ pub async fn dispatch(
                 cli_output(
                     show_by_id_or_name(cli.grpc_conn, local_args).await?,
                     &cli.args.format,
-                    ::rpc::admin_cli::Destination::Stdout(),
+                    crate::Destination::Stdout(),
                 )?;
             } else {
                 cli_output(
                     show_all(cli.grpc_conn).await?,
                     &cli.args.format,
-                    ::rpc::admin_cli::Destination::Stdout(),
+                    crate::Destination::Stdout(),
                 )?;
             }
         }
@@ -88,21 +88,21 @@ pub async fn dispatch(
                 cli_output(
                     list_bundles_for_id_or_name(cli.grpc_conn, local_args).await?,
                     &cli.args.format,
-                    ::rpc::admin_cli::Destination::Stdout(),
+                    crate::Destination::Stdout(),
                 )?;
             }
             List::Machines(local_args) => {
                 cli_output(
                     list_machines_for_id_or_name(cli.grpc_conn, local_args).await?,
                     &cli.args.format,
-                    ::rpc::admin_cli::Destination::Stdout(),
+                    crate::Destination::Stdout(),
                 )?;
             }
             List::All(_) => {
                 cli_output(
                     list_all(cli.grpc_conn).await?,
                     &cli.args.format,
-                    ::rpc::admin_cli::Destination::Stdout(),
+                    crate::Destination::Stdout(),
                 )?;
             }
         },

@@ -48,13 +48,13 @@ pub async fn dispatch(
             cli_output(
                 import(cli.grpc_conn, local_args).await?,
                 &cli.args.format,
-                ::rpc::admin_cli::Destination::Stdout(),
+                crate::Destination::Stdout(),
             )?;
         }
         CmdSite::Export(local_args) => {
-            let dest: ::rpc::admin_cli::Destination = match &local_args.path {
-                Some(path) => ::rpc::admin_cli::Destination::Path(path.clone()),
-                None => ::rpc::admin_cli::Destination::Stdout(),
+            let dest: crate::Destination = match &local_args.path {
+                Some(path) => crate::Destination::Path(path.clone()),
+                None => crate::Destination::Stdout(),
             };
             cli_output(
                 export(cli.grpc_conn, local_args).await?,
@@ -67,7 +67,7 @@ pub async fn dispatch(
                 cli_output(
                     approve_machine(cli.grpc_conn, local_args).await?,
                     &cli.args.format,
-                    ::rpc::admin_cli::Destination::Stdout(),
+                    crate::Destination::Stdout(),
                 )?;
             }
             TrustedMachine::Remove(selector) => match selector {
@@ -75,14 +75,14 @@ pub async fn dispatch(
                     cli_output(
                         remove_machine_by_approval_id(cli.grpc_conn, local_args).await?,
                         &cli.args.format,
-                        ::rpc::admin_cli::Destination::Stdout(),
+                        crate::Destination::Stdout(),
                     )?;
                 }
                 RemoveMachine::ByMachineId(local_args) => {
                     cli_output(
                         remove_machine_by_machine_id(cli.grpc_conn, local_args).await?,
                         &cli.args.format,
-                        ::rpc::admin_cli::Destination::Stdout(),
+                        crate::Destination::Stdout(),
                     )?;
                 }
             },
@@ -90,7 +90,7 @@ pub async fn dispatch(
                 cli_output(
                     list_machines(cli.grpc_conn).await?,
                     &cli.args.format,
-                    ::rpc::admin_cli::Destination::Stdout(),
+                    crate::Destination::Stdout(),
                 )?;
             }
         },
@@ -99,7 +99,7 @@ pub async fn dispatch(
                 cli_output(
                     approve_profile(cli.grpc_conn, local_args).await?,
                     &cli.args.format,
-                    ::rpc::admin_cli::Destination::Stdout(),
+                    crate::Destination::Stdout(),
                 )?;
             }
             TrustedProfile::Remove(selector) => match selector {
@@ -107,14 +107,14 @@ pub async fn dispatch(
                     cli_output(
                         remove_profile_by_approval_id(cli.grpc_conn, local_args).await?,
                         &cli.args.format,
-                        ::rpc::admin_cli::Destination::Stdout(),
+                        crate::Destination::Stdout(),
                     )?;
                 }
                 RemoveProfile::ByProfileId(local_args) => {
                     cli_output(
                         remove_profile_by_profile_id(cli.grpc_conn, local_args).await?,
                         &cli.args.format,
-                        ::rpc::admin_cli::Destination::Stdout(),
+                        crate::Destination::Stdout(),
                     )?;
                 }
             },
@@ -122,7 +122,7 @@ pub async fn dispatch(
                 cli_output(
                     list_profiles(cli.grpc_conn).await?,
                     &cli.args.format,
-                    ::rpc::admin_cli::Destination::Stdout(),
+                    crate::Destination::Stdout(),
                 )?;
             }
         },
