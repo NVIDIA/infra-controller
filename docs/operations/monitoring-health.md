@@ -490,13 +490,27 @@ DPU metric groups:
 | DPU network monitor errors | Network monitor errors. |
 | DPU communication errors | Communication errors to a destination DPU. |
 
-## Grafana, Loki, and Logs
+## API Health and Availability
 
-Use Grafana dashboards for fleet-level triage and Loki for source-specific logs.
-Start from aggregate host health, identify the alert source and `inAlertSince`,
-then query logs around that time.
+The NICo API is required for health inspection, health report ingestion,
+administrative workflows, and state-machine visibility. Check API health before
+debugging a host-specific health issue.
 
-Common Loki patterns:
+Check Kubernetes status:
+
+```bash
+kubectl get deploy -n nico-system nico-api
+kubectl get pods -n nico-system -l app.kubernetes.io/name=nico-api
+kubectl get svc -n nico-system nico-api
+```
+
+Check API metrics scraping:
+
+```bash
+kubectl get servicemonitor -n nico-system nico-api-metrics
+```
+
+Use Loki or Grafana Explore to inspect API logs:
 
 ```logql
 {k8s_container_name="nico-api"} |= "<machine-id>"
@@ -505,6 +519,14 @@ Common Loki patterns:
 ```logql
 {k8s_container_name="nico-api"} |= "<bmc-ip>" != "SPAN"
 ```
+
+## Grafana, Loki, and Logs
+
+Use Grafana dashboards for fleet-level triage and Loki for source-specific logs.
+Start from aggregate host health, identify the alert source and `inAlertSince`,
+then query logs around that time.
+
+Common Loki patterns:
 
 ```logql
 {systemd_unit="<dpu-agent-systemd-unit>", machine_id="<machine-id>"}
