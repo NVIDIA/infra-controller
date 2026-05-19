@@ -320,6 +320,7 @@ fn show_managed_host_details_view(m: carbide_rpc_utils::ManagedHostOutput) -> Ca
             m.host_last_reboot_requested_time_and_mode,
         ),
         ("  Serial Number", m.host_serial_number),
+        ("  Rack ID", m.rack_id),
         ("  BIOS Version", m.host_bios_version),
         ("  GPU Count", Some(m.host_gpu_count.to_string())),
         (

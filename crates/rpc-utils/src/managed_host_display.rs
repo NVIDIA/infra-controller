@@ -145,6 +145,7 @@ pub struct ManagedHostOutput {
     pub instance_type_id: Option<String>,
     pub slot_number: Option<i32>,
     pub tray_index: Option<i32>,
+    pub rack_id: Option<String>,
 }
 
 impl From<Machine> for ManagedHostOutput {
@@ -250,6 +251,7 @@ impl From<Machine> for ManagedHostOutput {
             instance_type_id: machine.instance_type_id.clone(),
             slot_number: machine.placement_in_rack.and_then(|p| p.slot_number),
             tray_index: machine.placement_in_rack.and_then(|p| p.tray_index),
+            rack_id: machine.rack_id.as_ref().map(|id| id.to_string()),
             health,
             health_sources,
             ..Default::default()
