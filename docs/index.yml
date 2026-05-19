@@ -108,6 +108,8 @@ navigation:
 
     - section: Operations
       contents:
+        - page: nicocli Reference
+          path: manuals/nicocli-reference.md
         - page: NVLink Partitioning
           path: manuals/nvlink_partitioning.md
         - page: Release Instance API Enhancements
