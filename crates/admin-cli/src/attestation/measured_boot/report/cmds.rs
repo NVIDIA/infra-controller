@@ -18,7 +18,7 @@
 //!
 //! `measurement report` subcommand dispatcher + backing functions.
 
-use ::rpc::admin_cli::{CarbideCliError, CarbideCliResult, ToTable, cli_output};
+use ::rpc::admin_cli::ToTable;
 use ::rpc::protos::measured_boot::ListMeasurementReportRequest;
 use measured_boot::bundle::MeasurementBundle;
 use measured_boot::records::MeasurementReportRecord;
@@ -30,6 +30,8 @@ use crate::attestation::measured_boot::report::args::{
     CmdReport, Create, Delete, List, ListMachines, Match, Promote, Revoke, ShowFor, ShowForId,
     ShowForMachine,
 };
+use crate::cli_output;
+use crate::errors::{CarbideCliError, CarbideCliResult};
 use crate::rpc::ApiClient;
 
 /// dispatch matches + dispatches the correct command for

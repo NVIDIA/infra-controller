@@ -17,6 +17,7 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 
+use ::rpc::errors::RpcDataConversionError;
 use ::rpc::forge::{self as rpc, AdminForceDeleteMachineResponse};
 use carbide_redfish::libredfish::RedfishAuth;
 use carbide_uuid::infiniband::IBPartitionId;
@@ -30,7 +31,6 @@ use health_report::{
 };
 use itertools::Itertools as _;
 use model::ConfigValidationError;
-use model::instance::DeleteInstance;
 use model::instance::config::InstanceConfig;
 use model::instance::config::extension_services::InstanceExtensionServicesConfig;
 use model::instance::config::infiniband::InstanceInfinibandConfig;
@@ -669,15 +669,18 @@ pub(crate) async fn release(
     request: Request<rpc::InstanceReleaseRequest>,
 ) -> Result<Response<rpc::InstanceReleaseResult>, Status> {
     log_request_data(&request);
-    let delete_instance = DeleteInstance::try_from(request.into_inner())?;
+    let delete_instance = request.into_inner();
+    let instance_id = delete_instance
+        .id
+        .ok_or(RpcDataConversionError::MissingArgument("id"))?;
 
     let mut txn = api.txn_begin().await?;
 
-    let instance = db::instance::find_by_id(&mut txn, delete_instance.instance_id)
+    let instance = db::instance::find_by_id(&mut txn, instance_id)
         .await?
         .ok_or_else(|| CarbideError::NotFoundError {
             kind: "instance",
-            id: delete_instance.instance_id.to_string(),
+            id: instance_id.to_string(),
         })?;
 
     log_machine_id(&instance.machine_id);
@@ -697,7 +700,7 @@ pub(crate) async fn release(
     // Instance Release called from the Repair tenant.
     if delete_instance.is_repair_tenant == Some(true) {
         tracing::info!(
-            instance_id = %delete_instance.instance_id,
+            %instance_id,
             machine_id = %instance.machine_id,
             has_issues = delete_instance.issue.is_some(),
             "Instance release requested by repair tenant"
@@ -749,7 +752,7 @@ pub(crate) async fn release(
 
     if instance.deleted.is_some() {
         tracing::info!(
-            instance_id = %delete_instance.instance_id,
+            %instance_id,
             "Instance is already marked for deletion.",
         );
         txn.commit().await?;
@@ -759,7 +762,7 @@ pub(crate) async fn release(
     // TODO: This is racy. If the instance just got deleted we still
     // see an error here that is not returned as `NotFound` error. Ideally
     // we convert this case of the DatabaseError into NotFound too.
-    db::instance::mark_as_deleted(delete_instance.instance_id, &mut txn).await?;
+    db::instance::mark_as_deleted(instance_id, &mut txn).await?;
 
     txn.commit().await?;
 
@@ -1266,7 +1269,7 @@ pub(crate) async fn update_instance_config(
             .unwrap_or(true),
         &instance,
         &mut config.network,
-        mh_snapshot.host_snapshot.current_state(),
+        &mh_snapshot,
         &mut txn,
     )
     .await?;
@@ -1322,11 +1325,55 @@ async fn update_instance_network_config(
     allow_instance_vf: bool,
     instance: &InstanceSnapshot,
     network: &mut InstanceNetworkConfig,
-    mh_state: &ManagedHostState,
+    mh_snapshot: &ManagedHostStateSnapshot,
     txn: &mut sqlx::Transaction<'_, sqlx::Postgres>,
 ) -> Result<(), CarbideError> {
     if instance.update_network_config_request.is_some() {
         return Err(ConfigValidationError::InstanceNetworkConfigUpdateAlreadyInProgress.into());
+    }
+
+    // Auto-ness can't change for an existing instance. If a tenant has created
+    // an instance with auto, it must remain auto until it is released. Maybe
+    // eventually this can change, but for now this is what we support.
+    if network.auto != instance.config.network.auto {
+        return Err(CarbideError::InvalidArgument(format!(
+            "cannot change `InstanceNetworkConfig.auto` on an existing instance (was {}, update requested {})",
+            instance.config.network.auto, network.auto,
+        )));
+    }
+
+    // For auto instances, simply re-resolve from the machine's current
+    // HostInband segments before any diff check. Same machine state == no-op
+    // via the diff check below. Operator-added or removed HostInband segments
+    // since allocation == reflected in the update.
+    if network.auto {
+        // Just to make sure, an auto instance should still be on a zero-DPU
+        // host. If this machine suddenly has DPUs, we should yell, at least
+        // for now. I guess there's a world where we might have a primary NIC
+        // that is a dumb NIC (or DPU in NIC mode), and also happens to have
+        // a secondary DPU into some other leg of the network, but we can
+        // think about that later; that would mean we'd support a mix of
+        // auto AND non-auto interfaces.
+        if !mh_snapshot.is_zero_dpu() {
+            return Err(CarbideError::InvalidArgument(format!(
+                "instance was allocated with `auto: true` but host {} is no longer zero-DPU; cannot update via the auto path",
+                instance.machine_id,
+            )));
+        }
+
+        let inband_segment_ids =
+            db::instance_network_config::batch_get_inband_segments_by_machine_ids(
+                txn.as_mut(),
+                &[instance.machine_id],
+            )
+            .await?
+            .get(&instance.machine_id)
+            .cloned()
+            .unwrap_or_default();
+        *network = db::instance_network_config::add_inband_interfaces_to_config(
+            network.clone(),
+            &inband_segment_ids,
+        )?;
     }
 
     if !instance
@@ -1338,7 +1385,7 @@ async fn update_instance_network_config(
     }
 
     if !matches!(
-        mh_state,
+        mh_snapshot.host_snapshot.current_state(),
         ManagedHostState::Assigned {
             instance_state: InstanceState::Ready,
         }
@@ -1359,17 +1406,6 @@ async fn update_instance_network_config(
     network
         .validate(allow_instance_vf)
         .map_err(CarbideError::from)?;
-
-    let mh_snapshot = db::managed_host::load_snapshot(
-        txn.as_mut(),
-        &instance.machine_id,
-        LoadSnapshotOptions::default(),
-    )
-    .await?
-    .ok_or(CarbideError::NotFoundError {
-        kind: "machine",
-        id: instance.machine_id.to_string(),
-    })?;
 
     // Allocate IPs and add them to the network config
     let updated_network_config = db::instance_network_config::with_allocated_ips(

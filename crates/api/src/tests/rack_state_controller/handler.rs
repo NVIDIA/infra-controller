@@ -2433,6 +2433,337 @@ async fn test_validation_failed_transitions_to_error(
     Ok(())
 }
 
+async fn set_switch_state(
+    txn: &mut sqlx::PgConnection,
+    switch_id: &SwitchId,
+    state: model::switch::SwitchControllerState,
+) {
+    sqlx::query("UPDATE switches SET controller_state = $1 WHERE id = $2")
+        .bind(serde_json::to_value(state).unwrap())
+        .bind(switch_id)
+        .execute(txn)
+        .await
+        .expect("update switch controller_state");
+}
+
+async fn set_power_shelf_state(
+    txn: &mut sqlx::PgConnection,
+    power_shelf_id: &carbide_uuid::power_shelf::PowerShelfId,
+    state: model::power_shelf::PowerShelfControllerState,
+) {
+    sqlx::query("UPDATE power_shelves SET controller_state = $1 WHERE id = $2")
+        .bind(serde_json::to_value(state).unwrap())
+        .bind(power_shelf_id)
+        .execute(txn)
+        .await
+        .expect("update power_shelf controller_state");
+}
+
+async fn create_test_power_shelf(
+    txn: &mut sqlx::PgConnection,
+    rack_id: &RackId,
+    seed: u8,
+) -> carbide_uuid::power_shelf::PowerShelfId {
+    use carbide_uuid::power_shelf::PowerShelfId;
+    let mut bytes = [0u8; 16];
+    bytes[0] = seed;
+    let power_shelf_id = PowerShelfId::from(uuid::Uuid::from_bytes(bytes));
+    let new_power_shelf = model::power_shelf::NewPowerShelf {
+        id: power_shelf_id,
+        config: model::power_shelf::PowerShelfConfig {
+            name: format!("ps-{}", seed),
+            capacity: Some(6000),
+            voltage: Some(480),
+        },
+        bmc_mac_address: None,
+        metadata: None,
+        rack_id: Some(rack_id.clone()),
+    };
+    db::power_shelf::create(txn, &new_power_shelf)
+        .await
+        .expect("create power shelf");
+    power_shelf_id
+}
+
+/// Ready rack moves to Error when one of its switches enters Error.
+#[crate::sqlx_test]
+async fn test_ready_with_failed_switch_transitions_to_error(
+    pool: sqlx::PgPool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let env = create_test_env_with_overrides(pool.clone(), TestEnvOverrides::default()).await;
+    let (rack_id, switch_id) = create_ready_rack_with_switch(&env, &pool).await?;
+
+    set_switch_state(
+        pool.acquire().await?.as_mut(),
+        &switch_id,
+        model::switch::SwitchControllerState::Error {
+            cause: "synthetic switch failure".to_string(),
+        },
+    )
+    .await;
+
+    let mut rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
+
+    let handler = RackStateHandler::default();
+    let mut services = env.state_handler_services();
+    let mut metrics = RackMetrics::default();
+    let mut db_writes = DbWriteBatch::default();
+    let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
+        services: &mut services,
+        metrics: &mut metrics,
+        pending_db_writes: &mut db_writes,
+    };
+
+    let outcome = handler
+        .handle_object_state(&rack_id, &mut rack, &RackState::Ready, &mut ctx)
+        .await?;
+
+    match outcome {
+        StateHandlerOutcome::Transition { next_state, .. } => match next_state {
+            RackState::Error { cause } => {
+                assert!(
+                    cause.contains("switch"),
+                    "Error cause should mention failing switch, got: {}",
+                    cause
+                );
+            }
+            other => panic!("Expected Transition to Error, got {:?}", other),
+        },
+        other => panic!(
+            "Expected Transition to Error, got {:?}",
+            std::mem::discriminant(&other)
+        ),
+    }
+
+    Ok(())
+}
+
+/// Ready rack moves to Error when an attached power shelf enters Error.
+#[crate::sqlx_test]
+async fn test_ready_with_failed_power_shelf_transitions_to_error(
+    pool: sqlx::PgPool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let env = create_test_env_with_overrides(pool.clone(), TestEnvOverrides::default()).await;
+
+    let rack_id = new_rack_id();
+    {
+        let mut txn = pool.begin().await?;
+        db_rack::create(
+            txn.as_mut(),
+            &rack_id,
+            Some(&RackProfileId::new("Empty")),
+            &RackConfig::default(),
+            None,
+        )
+        .await?;
+        let power_shelf_id = create_test_power_shelf(txn.as_mut(), &rack_id, 0xa1).await;
+        set_power_shelf_state(
+            txn.as_mut(),
+            &power_shelf_id,
+            model::power_shelf::PowerShelfControllerState::Error {
+                cause: "synthetic power shelf failure".to_string(),
+            },
+        )
+        .await;
+        let rack = get_db_rack(txn.as_mut(), &rack_id).await;
+        db_rack::try_update_controller_state(
+            txn.as_mut(),
+            &rack_id,
+            rack.controller_state.version,
+            rack.controller_state.version.increment(),
+            &RackState::Ready,
+        )
+        .await?;
+        txn.commit().await?;
+    }
+
+    let mut rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
+
+    let handler = RackStateHandler::default();
+    let mut services = env.state_handler_services();
+    let mut metrics = RackMetrics::default();
+    let mut db_writes = DbWriteBatch::default();
+    let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
+        services: &mut services,
+        metrics: &mut metrics,
+        pending_db_writes: &mut db_writes,
+    };
+
+    let outcome = handler
+        .handle_object_state(&rack_id, &mut rack, &RackState::Ready, &mut ctx)
+        .await?;
+
+    match outcome {
+        StateHandlerOutcome::Transition { next_state, .. } => match next_state {
+            RackState::Error { cause } => {
+                assert!(
+                    cause.contains("power shelf"),
+                    "Error cause should mention failing power shelf, got: {}",
+                    cause
+                );
+            }
+            other => panic!("Expected Transition to Error, got {:?}", other),
+        },
+        other => panic!(
+            "Expected Transition to Error, got {:?}",
+            std::mem::discriminant(&other)
+        ),
+    }
+
+    Ok(())
+}
+
+/// Ready rack with all healthy components stays in Ready.
+#[crate::sqlx_test]
+async fn test_ready_with_all_healthy_components_waits(
+    pool: sqlx::PgPool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let env = create_test_env_with_overrides(pool.clone(), TestEnvOverrides::default()).await;
+    let (rack_id, switch_id) = create_ready_rack_with_switch(&env, &pool).await?;
+
+    set_switch_state(
+        pool.acquire().await?.as_mut(),
+        &switch_id,
+        model::switch::SwitchControllerState::Ready,
+    )
+    .await;
+
+    let mut rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
+
+    let handler = RackStateHandler::default();
+    let mut services = env.state_handler_services();
+    let mut metrics = RackMetrics::default();
+    let mut db_writes = DbWriteBatch::default();
+    let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
+        services: &mut services,
+        metrics: &mut metrics,
+        pending_db_writes: &mut db_writes,
+    };
+
+    let outcome = handler
+        .handle_object_state(&rack_id, &mut rack, &RackState::Ready, &mut ctx)
+        .await?;
+
+    assert!(
+        matches!(
+            outcome,
+            StateHandlerOutcome::Wait { .. } | StateHandlerOutcome::DoNothing { .. }
+        ),
+        "Ready with healthy components should wait, got {:?}",
+        std::mem::discriminant(&outcome)
+    );
+
+    Ok(())
+}
+
+/// Rack in Error transitions back to Ready once every component is Ready.
+#[crate::sqlx_test]
+async fn test_error_recovers_to_ready_when_all_components_ready(
+    pool: sqlx::PgPool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let env = create_test_env_with_overrides(pool.clone(), TestEnvOverrides::default()).await;
+    let (rack_id, switch_id) = create_ready_rack_with_switch(&env, &pool).await?;
+
+    set_switch_state(
+        pool.acquire().await?.as_mut(),
+        &switch_id,
+        model::switch::SwitchControllerState::Ready,
+    )
+    .await;
+    crate::tests::rack_state_controller::fixtures::rack::set_rack_controller_state(
+        pool.acquire().await?.as_mut(),
+        &rack_id,
+        RackState::Error {
+            cause: "synthetic prior failure".to_string(),
+        },
+    )
+    .await?;
+
+    let mut rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
+    let error_state = rack.controller_state.value.clone();
+
+    let handler = RackStateHandler::default();
+    let mut services = env.state_handler_services();
+    let mut metrics = RackMetrics::default();
+    let mut db_writes = DbWriteBatch::default();
+    let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
+        services: &mut services,
+        metrics: &mut metrics,
+        pending_db_writes: &mut db_writes,
+    };
+
+    let outcome = handler
+        .handle_object_state(&rack_id, &mut rack, &error_state, &mut ctx)
+        .await?;
+
+    match outcome {
+        StateHandlerOutcome::Transition { next_state, .. } => {
+            assert!(
+                matches!(next_state, RackState::Ready),
+                "Error with all-Ready components should transition to Ready, got {:?}",
+                next_state
+            );
+        }
+        other => panic!(
+            "Expected Transition to Ready, got {:?}",
+            std::mem::discriminant(&other)
+        ),
+    }
+
+    Ok(())
+}
+
+/// Rack in Error does not auto-recover while any component is not yet Ready.
+#[crate::sqlx_test]
+async fn test_error_stays_in_error_when_components_not_all_ready(
+    pool: sqlx::PgPool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let env = create_test_env_with_overrides(pool.clone(), TestEnvOverrides::default()).await;
+    let (rack_id, switch_id) = create_ready_rack_with_switch(&env, &pool).await?;
+
+    set_switch_state(
+        pool.acquire().await?.as_mut(),
+        &switch_id,
+        model::switch::SwitchControllerState::Initializing {
+            initializing_state: model::switch::InitializingState::WaitForOsMachineInterface,
+        },
+    )
+    .await;
+    crate::tests::rack_state_controller::fixtures::rack::set_rack_controller_state(
+        pool.acquire().await?.as_mut(),
+        &rack_id,
+        RackState::Error {
+            cause: "synthetic prior failure".to_string(),
+        },
+    )
+    .await?;
+
+    let mut rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
+    let error_state = rack.controller_state.value.clone();
+
+    let handler = RackStateHandler::default();
+    let mut services = env.state_handler_services();
+    let mut metrics = RackMetrics::default();
+    let mut db_writes = DbWriteBatch::default();
+    let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
+        services: &mut services,
+        metrics: &mut metrics,
+        pending_db_writes: &mut db_writes,
+    };
+
+    let outcome = handler
+        .handle_object_state(&rack_id, &mut rack, &error_state, &mut ctx)
+        .await?;
+
+    assert!(
+        matches!(outcome, StateHandlerOutcome::Wait { .. }),
+        "Error with non-Ready components must not auto-recover, got {:?}",
+        std::mem::discriminant(&outcome)
+    );
+
+    Ok(())
+}
+
 async fn get_db_rack<DB>(conn: &mut DB, rack_id: &RackId) -> Rack
 where
     for<'db> &'db mut DB: DbReader<'db>,

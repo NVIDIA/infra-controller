@@ -72,6 +72,7 @@ pub mod network_devices;
 pub mod network_prefix;
 pub mod network_security_group;
 pub mod network_segment;
+pub mod nmxc;
 pub mod nvl_logical_partition;
 pub mod nvl_partition;
 pub mod operating_system_definition;
@@ -79,7 +80,6 @@ pub mod os;
 pub mod power_manager;
 pub mod power_shelf;
 pub mod predicted_machine_interface;
-pub mod pxe;
 pub mod rack;
 pub mod rack_firmware;
 pub mod rack_type;
@@ -297,15 +297,6 @@ impl StateSla {
         Self {
             time_in_state_above_sla: time_in_state > sla,
             sla: Some(sla),
-        }
-    }
-}
-
-impl From<StateSla> for rpc::forge::StateSla {
-    fn from(value: StateSla) -> Self {
-        rpc::forge::StateSla {
-            sla: value.sla.map(|sla| sla.into()),
-            time_in_state_above_sla: value.time_in_state_above_sla,
         }
     }
 }

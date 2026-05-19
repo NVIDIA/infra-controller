@@ -880,6 +880,7 @@ dependencies = [
  "flate2",
  "form_urlencoded",
  "futures",
+ "glob",
  "http-body-util",
  "hyper",
  "itertools 0.14.0",
@@ -1047,6 +1048,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "thiserror 2.0.18",
  "tokio",
  "toml 1.1.2+spec-1.1.0",
  "tonic",
@@ -1227,6 +1229,7 @@ dependencies = [
  "k8s-openapi",
  "kube",
  "lazy_static",
+ "libnmxc",
  "libnmxm",
  "libredfish",
  "librms",
@@ -1385,7 +1388,6 @@ dependencies = [
  "carbide-libmlx-model",
  "carbide-network",
  "carbide-rpc",
- "carbide-rpc-utils",
  "carbide-secrets",
  "carbide-sqlx-testing",
  "carbide-utils",
@@ -2232,7 +2234,6 @@ dependencies = [
  "async-trait",
  "carbide-api-db",
  "carbide-api-model",
- "carbide-rpc",
  "carbide-secrets",
  "carbide-utils",
  "carbide-uuid",
@@ -2241,6 +2242,7 @@ dependencies = [
  "duration-str",
  "eyre",
  "http",
+ "libnmxc",
  "libnmxm",
  "opentelemetry",
  "rand 0.10.1",
@@ -6139,6 +6141,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
+name = "libnmxc"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "clap",
+ "http",
+ "prost",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "libnmxm"
 version = "0.1.0"
 dependencies = [
@@ -6159,7 +6179,7 @@ dependencies = [
 [[package]]
 name = "libredfish"
 version = "0.0.0"
-source = "git+https://github.com/NVIDIA/libredfish.git?tag=v0.44.0#64c7d54eac7f33dad5ffb93ee74a5244b7c2c31b"
+source = "git+https://github.com/NVIDIA/libredfish.git?tag=v0.44.2#e2e047cf1fddb4ec8861d7e7f8bdcf7ecbbdb705"
 dependencies = [
  "chrono",
  "clap",
@@ -6711,6 +6731,7 @@ dependencies = [
  "tokio-test",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -6901,6 +6922,16 @@ dependencies = [
  "cfg-if",
  "cfg_aliases",
  "libc",
+]
+
+[[package]]
+name = "nmxc_client"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "libnmxc",
+ "tokio",
+ "tracing-subscriber",
 ]
 
 [[package]]

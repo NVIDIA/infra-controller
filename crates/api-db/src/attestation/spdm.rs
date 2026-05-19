@@ -18,7 +18,7 @@
 use carbide_uuid::machine::MachineId;
 use itertools::Itertools;
 use model::attestation::spdm::{
-    CaCertificate, Evidence, SpdmAttestationState, SpdmDeviceAttestation,
+    CaCertificate, Evidence, SpdmAttestationState, SpdmAttestationStatus, SpdmDeviceAttestation,
     SpdmDeviceAttestationDetails, SpdmMachineDeviceMetadata, SpdmObjectId,
 };
 use model::controller_outcome::PersistentStateHandlerOutcome;
@@ -202,7 +202,7 @@ pub async fn find_machine_ids_for_attestation(
 pub async fn get_attestation_status_for_machine_id(
     txn: &mut PgConnection,
     machine_id: &MachineId,
-) -> Result<rpc::forge::SpdmAttestationStatus, DatabaseError> {
+) -> Result<SpdmAttestationStatus, DatabaseError> {
     // get states for all devices under attestation for a given
     // machine
     let query = r#"
@@ -261,12 +261,12 @@ pub async fn get_attestation_status_for_machine_id(
 
     // some failed and none in progress
     if FAILED_MASK & flags != 0 && INPROGRESS_MASK & flags == 0 {
-        return Ok(rpc::forge::SpdmAttestationStatus::SpdmAttFailed);
+        return Ok(SpdmAttestationStatus::Failed);
     }
     match flags {
-        PASSED_MASK => Ok(rpc::forge::SpdmAttestationStatus::SpdmAttPassed),
-        CANCELLELD_MASK => Ok(rpc::forge::SpdmAttestationStatus::SpdmAttCancelled),
-        _ => Ok(rpc::forge::SpdmAttestationStatus::SpdmAttInProgress),
+        PASSED_MASK => Ok(SpdmAttestationStatus::Passed),
+        CANCELLELD_MASK => Ok(SpdmAttestationStatus::Cancelled),
+        _ => Ok(SpdmAttestationStatus::InProgress),
     }
 }
 

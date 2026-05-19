@@ -21,10 +21,11 @@
 use carbide_libmlx_model::device::info::MlxDeviceInfo;
 use libmlx::device::report::MlxDeviceReport;
 use prettytable::{Cell, Row, Table};
-use rpc::admin_cli::{CarbideCliError, CarbideCliResult, OutputFormat};
+use rpc::admin_cli::OutputFormat;
 use rpc::protos::mlx_device as mlx_device_pb;
 
 use super::args::{InfoCommand, InfoDeviceCommand, InfoMachineCommand};
+use crate::errors::{CarbideCliError, CarbideCliResult};
 use crate::mlx::{CliContext, wrap_text};
 
 // dispatch routes info subcommands to their handlers.

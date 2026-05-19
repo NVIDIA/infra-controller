@@ -15,9 +15,9 @@
  * limitations under the License.
  */
 
-use ::rpc::admin_cli::CarbideCliResult;
 use prettytable::row;
 
+use crate::errors::CarbideCliResult;
 use crate::rpc::ApiClient;
 
 pub async fn service_version(api_client: &ApiClient) -> CarbideCliResult<()> {

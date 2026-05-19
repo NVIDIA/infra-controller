@@ -1,0 +1,84 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package config
+
+import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"github.com/stretchr/testify/assert"
+	"math/big"
+	"os"
+	"testing"
+	"time"
+)
+
+// SetupTestCerts sets up a test key and cert
+func SetupTestCerts(t *testing.T) (string, string) {
+	keyPath := "/tmp/tls.key"
+	certPath := "/tmp/tls.crt"
+
+	// Generate keypair for test
+	privatekey, err := rsa.GenerateKey(rand.Reader, 2048)
+	assert.NoError(t, err)
+	publickey := &privatekey.PublicKey
+
+	// Dump private key to file
+	privateKeyBytes := x509.MarshalPKCS1PrivateKey(privatekey)
+	privateKeyBlock := &pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: privateKeyBytes,
+	}
+
+	privatePem, err := os.Create(keyPath)
+	assert.NoError(t, err)
+
+	err = pem.Encode(privatePem, privateKeyBlock)
+	assert.NoError(t, err)
+
+	tml := x509.Certificate{
+		// you can add any attr that you need
+		NotBefore: time.Now(),
+		NotAfter:  time.Now().AddDate(5, 0, 0),
+		// you have to generate a different serial number each execution
+		SerialNumber: big.NewInt(123123),
+		Subject: pkix.Name{
+			CommonName:   "New Name",
+			Organization: []string{"New Org."},
+		},
+		BasicConstraintsValid: true,
+	}
+	cert, err := x509.CreateCertificate(rand.Reader, &tml, &tml, publickey, privatekey)
+	assert.NoError(t, err)
+
+	// Generate a pem block with the certificate
+	certBlock := &pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: cert,
+	}
+
+	certPem, err := os.Create(certPath)
+	assert.NoError(t, err)
+
+	err = pem.Encode(certPem, certBlock)
+	assert.NoError(t, err)
+
+	return keyPath, certPath
+}

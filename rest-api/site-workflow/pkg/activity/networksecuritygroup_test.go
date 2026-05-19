@@ -1,0 +1,478 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package activity
+
+import (
+	"context"
+	"testing"
+
+	"github.com/stretchr/testify/mock"
+	tmocks "go.temporal.io/sdk/mocks"
+
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
+
+	cClient "github.com/NVIDIA/infra-controller-rest/site-workflow/pkg/grpc/client"
+	"github.com/NVIDIA/infra-controller-rest/site-workflow/pkg/util"
+	cwssaws "github.com/NVIDIA/infra-controller-rest/workflow-schema/schema/site-agent/workflows/v1"
+)
+
+func TestManageNetworkSecurityGroup_UpdateNetworkSecurityGroupOnSite(t *testing.T) {
+	mockNICo := cClient.NewMockNICoClient()
+
+	nicoCoreAtomicClient := cClient.NewNICoCoreAtomicClient(&cClient.NICoCoreClientConfig{})
+	nicoCoreAtomicClient.SwapClient(mockNICo)
+
+	labelKey := "key1"
+	labelValue := "value1"
+
+	type fields struct {
+		NICoCoreAtomicClient *cClient.NICoCoreAtomicClient
+	}
+	type args struct {
+		ctx     context.Context
+		request *cwssaws.UpdateNetworkSecurityGroupRequest
+	}
+	tests := []struct {
+		name    string
+		fields  fields
+		args    args
+		wantErr bool
+	}{
+		{
+			name: "test NetworkSecurityGroup update success",
+			fields: fields{
+				NICoCoreAtomicClient: nicoCoreAtomicClient,
+			},
+			args: args{
+				ctx: context.Background(),
+				request: &cwssaws.UpdateNetworkSecurityGroupRequest{
+					Id:                   uuid.NewString(),
+					TenantOrganizationId: "anything",
+					Metadata: &cwssaws.Metadata{
+						Name:        "updated_name",
+						Description: "updated_description",
+						Labels: []*cwssaws.Label{
+							{
+								Key:   labelKey,
+								Value: &labelValue,
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "test NetworkSecurityGroup update missing id in request fail",
+			fields: fields{
+				NICoCoreAtomicClient: nicoCoreAtomicClient,
+			},
+			args: args{
+				ctx: context.Background(),
+				request: &cwssaws.UpdateNetworkSecurityGroupRequest{
+					Id:                   "",
+					TenantOrganizationId: "anything",
+					Metadata: &cwssaws.Metadata{
+						Name:        "updated_name",
+						Description: "updated_description",
+						Labels: []*cwssaws.Label{
+							{
+								Key:   labelKey,
+								Value: &labelValue,
+							},
+						},
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "test NetworkSecurityGroup update missing tenant id in request fail",
+			fields: fields{
+				NICoCoreAtomicClient: nicoCoreAtomicClient,
+			},
+			args: args{
+				ctx: context.Background(),
+				request: &cwssaws.UpdateNetworkSecurityGroupRequest{
+					Id:                   "anything",
+					TenantOrganizationId: "",
+					Metadata: &cwssaws.Metadata{
+						Name:        "updated_name",
+						Description: "updated_description",
+						Labels: []*cwssaws.Label{
+							{
+								Key:   labelKey,
+								Value: &labelValue,
+							},
+						},
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "test NetworkSecurityGroup update nil request fail",
+			fields: fields{
+				NICoCoreAtomicClient: nicoCoreAtomicClient,
+			},
+			args: args{
+				ctx:     context.Background(),
+				request: nil,
+			},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mm := NewManageNetworkSecurityGroup(tt.fields.NICoCoreAtomicClient)
+			err := mm.UpdateNetworkSecurityGroupOnSite(tt.args.ctx, tt.args.request)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestManageNetworkSecurityGroup_CreateNetworkSecurityGroupOnSiteOnSite(t *testing.T) {
+	mockNICo := cClient.NewMockNICoClient()
+
+	nicoCoreAtomicClient := cClient.NewNICoCoreAtomicClient(&cClient.NICoCoreClientConfig{})
+	nicoCoreAtomicClient.SwapClient(mockNICo)
+
+	labelKey := "key1"
+	labelValue := "value1"
+
+	type fields struct {
+		NICoCoreAtomicClient *cClient.NICoCoreAtomicClient
+	}
+	type args struct {
+		ctx     context.Context
+		request *cwssaws.CreateNetworkSecurityGroupRequest
+	}
+	tests := []struct {
+		name    string
+		fields  fields
+		args    args
+		wantErr bool
+	}{
+		{
+			name: "test create NetworkSecurityGroup success",
+			fields: fields{
+				NICoCoreAtomicClient: nicoCoreAtomicClient,
+			},
+			args: args{
+				ctx: context.Background(),
+				request: &cwssaws.CreateNetworkSecurityGroupRequest{
+					Id:                   util.GetStrPtr(uuid.NewString()),
+					TenantOrganizationId: "anything",
+					Metadata: &cwssaws.Metadata{
+						Name:        "new_name",
+						Description: "new_description",
+						Labels: []*cwssaws.Label{
+							{
+								Key:   labelKey,
+								Value: &labelValue,
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+
+		{
+			name: "test create NetworkSecurityGroup nil request fail",
+			fields: fields{
+				NICoCoreAtomicClient: nicoCoreAtomicClient,
+			},
+			args: args{
+				ctx:     context.Background(),
+				request: nil,
+			},
+			wantErr: true,
+		},
+
+		{
+			name: "test create NetworkSecurityGroup missing id in request fail",
+			fields: fields{
+				NICoCoreAtomicClient: nicoCoreAtomicClient,
+			},
+			args: args{
+				ctx: context.Background(),
+				request: &cwssaws.CreateNetworkSecurityGroupRequest{
+					Id:                   util.GetStrPtr(""),
+					TenantOrganizationId: "anything",
+					Metadata: &cwssaws.Metadata{
+						Name:        "new_name",
+						Description: "new_description",
+						Labels: []*cwssaws.Label{
+							{
+								Key:   labelKey,
+								Value: &labelValue,
+							},
+						},
+					},
+				},
+			},
+			wantErr: true,
+		},
+
+		{
+			name: "test create NetworkSecurityGroup missing tenant id in request fail",
+			fields: fields{
+				NICoCoreAtomicClient: nicoCoreAtomicClient,
+			},
+			args: args{
+				ctx: context.Background(),
+				request: &cwssaws.CreateNetworkSecurityGroupRequest{
+					Id: util.GetStrPtr("anything"),
+					Metadata: &cwssaws.Metadata{
+						Name:        "new_name",
+						Description: "new_description",
+						Labels: []*cwssaws.Label{
+							{
+								Key:   labelKey,
+								Value: &labelValue,
+							},
+						},
+					},
+				},
+			},
+			wantErr: true,
+		},
+
+		{
+			name: "test create NetworkSecurityGroup nil id in request fail",
+			fields: fields{
+				NICoCoreAtomicClient: nicoCoreAtomicClient,
+			},
+			args: args{
+				ctx: context.Background(),
+				request: &cwssaws.CreateNetworkSecurityGroupRequest{
+					Id:                   nil,
+					TenantOrganizationId: "anything",
+					Metadata: &cwssaws.Metadata{
+						Name:        "new_name",
+						Description: "new_description",
+						Labels: []*cwssaws.Label{
+							{
+								Key:   labelKey,
+								Value: &labelValue,
+							},
+						},
+					},
+				},
+			},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mm := NewManageNetworkSecurityGroup(tt.fields.NICoCoreAtomicClient)
+			err := mm.CreateNetworkSecurityGroupOnSite(tt.args.ctx, tt.args.request)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestManageNetworkSecurityGroupInventory_DiscoverNetworkSecurityGroupInventory(t *testing.T) {
+	mockNICo := cClient.NewMockNICoClient()
+
+	nicoCoreAtomicClient := cClient.NewNICoCoreAtomicClient(&cClient.NICoCoreClientConfig{})
+	nicoCoreAtomicClient.SwapClient(mockNICo)
+
+	wid := "test-workflow-id"
+	wrun := &tmocks.WorkflowRun{}
+	wrun.On("GetID").Return(wid)
+
+	type fields struct {
+		siteID               uuid.UUID
+		nicoCoreAtomicClient *cClient.NICoCoreAtomicClient
+		temporalPublishQueue string
+		sitePageSize         int
+		cloudPageSize        int
+	}
+	type args struct {
+		wantTotalItems int
+	}
+	tests := []struct {
+		name   string
+		fields fields
+		args   args
+	}{
+		{
+			name: "test collecting and publishing networkSecurityGroup inventory, empty inventory",
+			fields: fields{
+				siteID:               uuid.New(),
+				nicoCoreAtomicClient: nicoCoreAtomicClient,
+				temporalPublishQueue: "test-queue",
+				sitePageSize:         100,
+				cloudPageSize:        25,
+			},
+			args: args{
+				wantTotalItems: 0,
+			},
+		},
+		{
+			name: "test collecting and publishing networkSecurityGroup inventory, normal inventory",
+			fields: fields{
+				siteID:               uuid.New(),
+				nicoCoreAtomicClient: nicoCoreAtomicClient,
+				temporalPublishQueue: "test-queue",
+				sitePageSize:         100,
+				cloudPageSize:        25,
+			},
+			args: args{
+				wantTotalItems: 195,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tc := &tmocks.Client{}
+			tc.Mock.On("ExecuteWorkflow", mock.Anything, mock.AnythingOfType("internal.StartWorkflowOptions"),
+				mock.AnythingOfType("string"), mock.AnythingOfType("uuid.UUID"), mock.Anything).Return(wrun, nil)
+			tc.AssertNumberOfCalls(t, "ExecuteWorkflow", 0)
+
+			manageNetworkSecurityGroup := NewManageNetworkSecurityGroupInventory(ManageInventoryConfig{
+				SiteID:                tt.fields.siteID,
+				NICoCoreAtomicClient:  tt.fields.nicoCoreAtomicClient,
+				TemporalPublishClient: tc,
+				TemporalPublishQueue:  tt.fields.temporalPublishQueue,
+				SitePageSize:          tt.fields.sitePageSize,
+				CloudPageSize:         tt.fields.cloudPageSize,
+			})
+
+			ctx := context.Background()
+			ctx = context.WithValue(ctx, "wantCount", tt.args.wantTotalItems)
+
+			totalPages := tt.args.wantTotalItems / tt.fields.cloudPageSize
+			if tt.args.wantTotalItems%tt.fields.cloudPageSize > 0 {
+				totalPages++
+			}
+
+			err := manageNetworkSecurityGroup.DiscoverNetworkSecurityGroupInventory(ctx)
+			assert.NoError(t, err)
+
+			if tt.args.wantTotalItems == 0 {
+				tc.AssertNumberOfCalls(t, "ExecuteWorkflow", 1)
+			} else {
+				tc.AssertNumberOfCalls(t, "ExecuteWorkflow", totalPages)
+			}
+
+			inventory, ok := tc.Calls[0].Arguments[4].(*cwssaws.NetworkSecurityGroupInventory)
+			assert.True(t, ok)
+
+			if tt.args.wantTotalItems == 0 {
+				assert.Equal(t, 0, len(inventory.NetworkSecurityGroups))
+			} else {
+				assert.Equal(t, tt.fields.cloudPageSize, len(inventory.NetworkSecurityGroups))
+			}
+
+			assert.Equal(t, cwssaws.InventoryStatus_INVENTORY_STATUS_SUCCESS, inventory.InventoryStatus)
+			assert.Equal(t, totalPages, int(inventory.InventoryPage.TotalPages))
+			assert.Equal(t, 1, int(inventory.InventoryPage.CurrentPage))
+			assert.Equal(t, tt.fields.cloudPageSize, int(inventory.InventoryPage.PageSize))
+			assert.Equal(t, tt.args.wantTotalItems, int(inventory.InventoryPage.TotalItems))
+			assert.Equal(t, tt.args.wantTotalItems, len(inventory.InventoryPage.ItemIds))
+		})
+	}
+}
+
+func TestManageNetworkSecurityGroup_DeleteNetworkSecurityGroupOnSite(t *testing.T) {
+	mockNICo := cClient.NewMockNICoClient()
+
+	nicoCoreAtomicClient := cClient.NewNICoCoreAtomicClient(&cClient.NICoCoreClientConfig{})
+	nicoCoreAtomicClient.SwapClient(mockNICo)
+
+	type fields struct {
+		NICoCoreAtomicClient *cClient.NICoCoreAtomicClient
+	}
+	type args struct {
+		ctx     context.Context
+		request *cwssaws.DeleteNetworkSecurityGroupRequest
+	}
+	tests := []struct {
+		name    string
+		fields  fields
+		args    args
+		wantErr bool
+	}{
+		{
+			name: "test delete NetworkSecurityGroup success",
+			fields: fields{
+				NICoCoreAtomicClient: nicoCoreAtomicClient,
+			},
+			args: args{
+				ctx: context.Background(),
+				request: &cwssaws.DeleteNetworkSecurityGroupRequest{
+					Id:                   uuid.NewString(),
+					TenantOrganizationId: "anything",
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "test delete NetworkSecurityGroup with nil ID failure",
+			fields: fields{
+				NICoCoreAtomicClient: nicoCoreAtomicClient,
+			},
+			args: args{
+				ctx: context.Background(),
+				request: &cwssaws.DeleteNetworkSecurityGroupRequest{
+					Id:                   "",
+					TenantOrganizationId: "anything",
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "test delete NetworkSecurityGroup with missing tenant ID failure",
+			fields: fields{
+				NICoCoreAtomicClient: nicoCoreAtomicClient,
+			},
+			args: args{
+				ctx: context.Background(),
+				request: &cwssaws.DeleteNetworkSecurityGroupRequest{
+					Id:                   "anything",
+					TenantOrganizationId: "",
+				},
+			},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mm := NewManageNetworkSecurityGroup(tt.fields.NICoCoreAtomicClient)
+			err := mm.DeleteNetworkSecurityGroupOnSite(tt.args.ctx, tt.args.request)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}

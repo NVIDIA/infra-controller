@@ -62,6 +62,7 @@ reqwest = { workspace = true, features = ["json"] }
 serde = { features = ["derive"], workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true }
 toml = { workspace = true }
 tonic = { workspace = true }

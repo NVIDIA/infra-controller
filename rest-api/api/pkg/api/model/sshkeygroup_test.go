@@ -1,0 +1,172 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package model
+
+import (
+	"fmt"
+	"testing"
+
+	cdb "github.com/NVIDIA/infra-controller-rest/db/pkg/db"
+	cdbm "github.com/NVIDIA/infra-controller-rest/db/pkg/db/model"
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
+)
+
+func TestAPISSHKeyGroupCreateRequest_Validate(t *testing.T) {
+	tests := []struct {
+		desc      string
+		obj       APISSHKeyGroupCreateRequest
+		expectErr bool
+	}{
+		{
+			desc:      "ok when only required fields are provided",
+			obj:       APISSHKeyGroupCreateRequest{Name: "test"},
+			expectErr: false,
+		},
+		{
+			desc:      "ok when all fields are provided",
+			obj:       APISSHKeyGroupCreateRequest{Name: "test", Description: cdb.GetStrPtr("test")},
+			expectErr: false,
+		},
+		{
+			desc:      "error when required fields are not provided",
+			obj:       APISSHKeyGroupCreateRequest{Description: cdb.GetStrPtr("test")},
+			expectErr: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.desc, func(t *testing.T) {
+			err := tc.obj.Validate()
+			assert.Equal(t, tc.expectErr, err != nil)
+			if err != nil {
+				fmt.Println(err.Error())
+			}
+		})
+	}
+}
+
+func TestAPISSHKeyGroupUpdateRequest_Validate(t *testing.T) {
+	tests := []struct {
+		desc      string
+		obj       APISSHKeyGroupUpdateRequest
+		expectErr bool
+	}{
+		{
+			desc:      "ok when only some fields are provided",
+			obj:       APISSHKeyGroupUpdateRequest{Name: cdb.GetStrPtr("updatedname")},
+			expectErr: true,
+		},
+		{
+			desc:      "ok when all fields are provided",
+			obj:       APISSHKeyGroupUpdateRequest{Name: cdb.GetStrPtr("updatedname"), Description: cdb.GetStrPtr("updated"), Version: cdb.GetStrPtr("1234")},
+			expectErr: false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.desc, func(t *testing.T) {
+			err := tc.obj.Validate()
+			assert.Equal(t, tc.expectErr, err != nil)
+			if err != nil {
+				fmt.Println(err.Error())
+			}
+		})
+	}
+}
+
+func TestAPISSHKeyGroupNew(t *testing.T) {
+	dbskg := &cdbm.SSHKeyGroup{
+		ID:          uuid.New(),
+		Name:        "test",
+		Description: cdb.GetStrPtr("test"),
+		Org:         "test",
+		Version:     cdb.GetStrPtr("12334"),
+		TenantID:    uuid.New(),
+		Created:     cdb.GetCurTime(),
+		Updated:     cdb.GetCurTime(),
+	}
+	dbsgas := []cdbm.SSHKeyGroupSiteAssociation{
+		{ID: uuid.New(), SSHKeyGroupID: dbskg.ID, SiteID: uuid.New(), Version: cdb.GetStrPtr("1233"), Status: cdbm.SSHKeyGroupSiteAssociationStatusSyncing},
+	}
+	sttsmap := map[uuid.UUID]*cdbm.TenantSite{
+		dbsgas[0].SiteID: {
+			ID:                  uuid.New(),
+			TenantID:            dbskg.TenantID,
+			TenantOrg:           dbskg.Org,
+			SiteID:              dbsgas[0].SiteID,
+			EnableSerialConsole: true,
+			Config:              map[string]interface{}{},
+			Created:             cdb.GetCurTime(),
+			Updated:             cdb.GetCurTime(),
+		},
+	}
+
+	dbsds := []cdbm.StatusDetail{
+		{
+			ID:       uuid.New(),
+			EntityID: dbskg.ID.String(),
+			Status:   cdbm.SSHKeyGroupStatusSyncing,
+			Created:  cdb.GetCurTime(),
+			Updated:  cdb.GetCurTime(),
+		},
+	}
+
+	dbsk := cdbm.SSHKey{
+		ID:          uuid.New(),
+		Name:        "test",
+		Org:         "test",
+		PublicKey:   "test",
+		Fingerprint: cdb.GetStrPtr("test"),
+		TenantID:    uuid.New(),
+		Created:     cdb.GetCurTime(),
+		Updated:     cdb.GetCurTime(),
+	}
+
+	dbksas := []cdbm.SSHKeyAssociation{
+		{
+			ID:            uuid.New(),
+			SSHKeyID:      dbsk.ID,
+			SSHKeyGroupID: dbskg.ID,
+			Created:       cdb.GetCurTime(),
+			Updated:       cdb.GetCurTime(),
+		},
+	}
+
+	tests := []struct {
+		desc    string
+		skg     *cdbm.SSHKeyGroup
+		skgsas  []cdbm.SSHKeyGroupSiteAssociation
+		sttsmap map[uuid.UUID]*cdbm.TenantSite
+		dbksas  []cdbm.SSHKeyAssociation
+		dbsds   []cdbm.StatusDetail
+	}{
+		{
+			desc:    "test creating API SSHKeyGroup",
+			skg:     dbskg,
+			skgsas:  dbsgas,
+			sttsmap: sttsmap,
+			dbksas:  dbksas,
+			dbsds:   dbsds,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.desc, func(t *testing.T) {
+			got := NewAPISSHKeyGroup(tc.skg, tc.skgsas, tc.sttsmap, tc.dbksas, tc.dbsds)
+			assert.Equal(t, tc.skg.ID.String(), got.ID)
+		})
+	}
+}

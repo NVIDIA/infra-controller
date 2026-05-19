@@ -435,7 +435,7 @@ pub struct CarbideConfig {
 
     /// NvLink partitioning configuration, used by the
     /// NvLink monitor to manage GPU mesh partitions
-    /// via NMX-M.
+    /// via NMX-C.
     #[serde(default)]
     pub nvlink_config: Option<NvLinkConfig>,
 

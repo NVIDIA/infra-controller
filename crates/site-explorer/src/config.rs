@@ -50,10 +50,14 @@ pub struct SiteExplorerConfig {
     /// Default is 5.
     #[serde(default = "SiteExplorerConfig::default_concurrent_explorations")]
     pub concurrent_explorations: u64,
-    /// How many nodes should be explored in a single run.
-    /// Default is 10.
-    /// This number divided by `concurrent_explorations` will determine how many
-    /// exploration batches are needed inside a run.
+    /// How many routine (non-requested) endpoints should be explored in a single run.
+    /// Default is 90.
+    /// This bounds only the background refresh work: previously unseen endpoints
+    /// and stale endpoints whose reports we want to update. Endpoints with the
+    /// `exploration_requested` flag set are always attempted, regardless of this
+    /// value, because operators rely on that flag for guaranteed next-tick attempts.
+    /// Parallelism for both routine and requested explorations is still bounded by
+    /// `concurrent_explorations`.
     /// If the value is set too high the site exploration will take a lot of time
     /// and the exploration report will be updated less frequent. Therefore it
     /// is recommended to reduce `run_interval` instead of increasing
@@ -61,7 +65,7 @@ pub struct SiteExplorerConfig {
     #[serde(default = "SiteExplorerConfig::default_explorations_per_run")]
     pub explorations_per_run: u64,
 
-    /// Whether SiteExplorer should create Managed Host state machine
+    /// When false, SiteExplorer skips creating ManagedHost state machines; the DPU agent (scout) must self-register via DiscoverMachine gRPC endpoint with create_machine=true
     #[serde(
         default = "SiteExplorerConfig::default_create_machines",
         deserialize_with = "deserialize_arc_atomic_bool",

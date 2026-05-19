@@ -281,7 +281,7 @@ pub(crate) async fn get_machine_attestations_status(
 
     Ok(Response::new(rpc::SpdmMachineAttestationStatusResponse {
         machine_id: Some(*machine_id),
-        attestation_status: attestation_status.into(),
+        attestation_status: rpc::SpdmAttestationStatus::from(attestation_status).into(),
     }))
 }
 
@@ -454,7 +454,7 @@ fn from_component_integrity(
     let ca_certificate_link = integrity
         .spdm
         .map(|x| x.identity_authentication)
-        .map(|x| x.component_certificate)
+        .map(|x| x.responder_authentication.component_certificate)
         .map(|x| x.odata_id);
 
     let evidence_target =
@@ -482,7 +482,6 @@ fn from_component_integrity(
         completed_at: None,
     }
 }
-
 #[cfg(not(feature = "linux-build"))]
 pub(crate) async fn attest_quote(
     _api: &Api,
