@@ -26,9 +26,12 @@ use crate::instance::config::extension_services::InstanceExtensionServicesConfig
 use crate::instance::config::infiniband::InstanceInfinibandConfig;
 use crate::instance::config::network::InstanceNetworkConfig;
 use crate::instance::config::nvlink::InstanceNvLinkConfig;
+use crate::instance::config::spx::InstanceSpxConfig;
+use crate::instance::status::spx::InstanceSpxStatus;
 use crate::instance::status::{InstanceStatus, InstanceStatusObservations, SyncState};
 use crate::machine::infiniband::MachineInfinibandStatusObservation;
 use crate::machine::nvlink::MachineNvLinkStatusObservation;
+use crate::machine::spx::MachineSpxStatusObservation;
 use crate::machine::{ManagedHostState, ReprovisionRequest};
 use crate::rpc_conv::instance::status::tenant::instance_status_tenant_state;
 
@@ -48,6 +51,7 @@ impl TryFrom<InstanceStatus> for rpc::InstanceStatus {
             infiniband: Some(status.infiniband.try_into()?),
             dpu_extension_services: Some(status.extension_services.try_into()?),
             nvlink: Some(status.nvlink.try_into()?),
+            spx_status: Some(status.spx_status.try_into()?),
             configs_synced: rpc::SyncState::try_from(status.configs_synced)? as i32,
             update: status.reprovision_request.map(|request| request.into()),
         })
@@ -70,12 +74,14 @@ pub fn instance_status_from_config_and_observation(
     ib_config: Versioned<&InstanceInfinibandConfig>,
     extension_services_config: Versioned<&InstanceExtensionServicesConfig>,
     nvlink_config: Versioned<&InstanceNvLinkConfig>,
+    spx_config: Versioned<&InstanceSpxConfig>,
     observations: &InstanceStatusObservations,
     machine_state: ManagedHostState,
     delete_requested: bool,
     reprovision_request: Option<ReprovisionRequest>,
     ib_status: Option<&MachineInfinibandStatusObservation>,
     nvlink_status: Option<&MachineNvLinkStatusObservation>,
+    spx_status: Option<&MachineSpxStatusObservation>,
     is_network_config_request_pending: bool,
 ) -> Result<InstanceStatus, RpcDataConversionError> {
     let mut instance_config_synced = SyncState::Synced;
@@ -121,6 +127,8 @@ pub fn instance_status_from_config_and_observation(
         nvlink_status,
     );
 
+    let spx_status = InstanceSpxStatus::from_config_and_observation(spx_config, spx_status);
+
     let phone_home_last_contact = observations.phone_home_last_contact;
 
     // If additional configs are added, they need to be incorporated here
@@ -129,9 +137,11 @@ pub fn instance_status_from_config_and_observation(
         infiniband.configs_synced,
         extension_services.configs_synced,
         nvlink.configs_synced,
+        spx_status.configs_synced,
         instance_config_synced,
     ) {
         (
+            SyncState::Synced,
             SyncState::Synced,
             SyncState::Synced,
             SyncState::Synced,
@@ -168,6 +178,7 @@ pub fn instance_status_from_config_and_observation(
         infiniband,
         extension_services,
         nvlink,
+        spx_status,
         configs_synced,
         reprovision_request,
     })

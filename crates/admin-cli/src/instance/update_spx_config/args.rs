@@ -15,9 +15,19 @@
  * limitations under the License.
  */
 
-//! State Controller implementation for Dpa Interface
+use carbide_uuid::instance::InstanceId;
+use clap::Parser;
+use rpc::forge::InstanceSpxConfig;
 
-pub mod context;
-pub mod handler;
-pub mod io;
-pub mod metrics;
+#[derive(Parser, Debug)]
+pub struct Args {
+    #[clap(short, long, required(true))]
+    pub instance: InstanceId,
+    #[clap(
+        long,
+        required(true),
+        help = "SPX configuration in JSON format",
+        value_name = "SPX_JSON"
+    )]
+    pub config: InstanceSpxConfig,
+}

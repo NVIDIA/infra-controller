@@ -52,6 +52,7 @@ async fn test_update_instance_operating_system(_: PgPoolOptions, options: PgConn
         network_security_group_id: None,
         dpu_extension_services: None,
         nvlink: None,
+        spxconfig: None,
     };
 
     let tinstance = mh.instance_builer(&env).config(config).build().await;
@@ -256,6 +257,7 @@ async fn test_create_instance_with_ipxe_template_os(_: PgPoolOptions, options: P
         network_security_group_id: None,
         dpu_extension_services: None,
         nvlink: None,
+        spxconfig: None,
     };
 
     let tinstance = mh.instance_builer(&env).config(config).build().await;
@@ -352,6 +354,7 @@ async fn test_allocate_instance_rejects_inactive_os(_: PgPoolOptions, options: P
                 network_security_group_id: None,
                 dpu_extension_services: None,
                 nvlink: None,
+                spxconfig: None,
             }),
             instance_id: None,
             instance_type_id: None,
@@ -438,6 +441,7 @@ async fn test_allocate_instance_rejects_not_ready_os(_: PgPoolOptions, options: 
                 network_security_group_id: None,
                 dpu_extension_services: None,
                 nvlink: None,
+                spxconfig: None,
             }),
             instance_id: None,
             instance_type_id: None,
@@ -486,6 +490,7 @@ async fn test_update_instance_os_rejects_inactive_os(_: PgPoolOptions, options: 
         network_security_group_id: None,
         dpu_extension_services: None,
         nvlink: None,
+        spxconfig: None,
     };
     let tinstance = mh.instance_builer(&env).config(config).build().await;
 
@@ -581,6 +586,7 @@ async fn test_create_instance_with_os_image_and_verify_pxe_rendering(
         network_security_group_id: None,
         dpu_extension_services: None,
         nvlink: None,
+        spxconfig: None,
     };
 
     let tinstance = mh.instance_builer(&env).config(config).build().await;
@@ -688,6 +694,7 @@ async fn test_create_instance_with_raw_ipxe_os_and_verify_pxe_rendering(
         network_security_group_id: None,
         dpu_extension_services: None,
         nvlink: None,
+        spxconfig: None,
     };
 
     let tinstance = mh.instance_builer(&env).config(config).build().await;
@@ -815,6 +822,7 @@ async fn test_create_instance_with_templated_ipxe_os_with_artifacts_and_verify_p
         network_security_group_id: None,
         dpu_extension_services: None,
         nvlink: None,
+        spxconfig: None,
     };
 
     let tinstance = mh.instance_builer(&env).config(config).build().await;

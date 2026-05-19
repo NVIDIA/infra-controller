@@ -59,6 +59,7 @@ impl<'a, 'b> TestInstanceBuilder<'a, 'b> {
                 network_security_group_id: None,
                 dpu_extension_services: None,
                 nvlink: None,
+                spxconfig: None,
             },
             tenant: default_tenant_config(),
             metadata: None,
@@ -317,6 +318,7 @@ pub fn config_for_ib_config(
         network: Some(single_interface_network_config(network_segment_id)),
         infiniband: Some(ib_config),
         nvlink: None,
+        spxconfig: None,
         network_security_group_id: None,
         dpu_extension_services: None,
     }
@@ -332,6 +334,7 @@ pub fn config_for_nvlink_config(
         network: Some(single_interface_network_config(network_segment_id)),
         infiniband: None,
         nvlink: Some(nvl_config),
+        spxconfig: None,
         network_security_group_id: None,
         dpu_extension_services: None,
     }

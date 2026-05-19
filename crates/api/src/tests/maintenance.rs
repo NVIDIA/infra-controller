@@ -79,6 +79,7 @@ async fn test_maintenance(db_pool: sqlx::PgPool) -> Result<(), eyre::Report> {
         network: Some(single_interface_network_config(segment_id)),
         infiniband: None,
         nvlink: None,
+        spxconfig: None,
         network_security_group_id: None,
         dpu_extension_services: None,
     };
@@ -197,6 +198,7 @@ async fn test_maintenance_multi_dpu(db_pool: sqlx::PgPool) -> Result<(), eyre::R
         os: Some(default_os_config()),
         infiniband: None,
         nvlink: None,
+        spxconfig: None,
         network_security_group_id: None,
         dpu_extension_services: None,
     };

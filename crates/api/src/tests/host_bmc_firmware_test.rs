@@ -1253,6 +1253,7 @@ async fn test_instance_upgrading_actual_part_2(
             host.state.clone().value,
             None,
             None,
+            None,
             None
         )
         .unwrap()
@@ -1290,6 +1291,7 @@ async fn test_instance_upgrading_actual_part_2(
             &instance,
             device_id_maps.1,
             host.state.clone().value,
+            None,
             None,
             None,
             None
@@ -1341,6 +1343,7 @@ async fn test_instance_upgrading_actual_part_2(
             host.state.clone().value,
             None,
             None,
+            None,
             None
         )
         .unwrap()
@@ -1387,6 +1390,7 @@ async fn test_instance_upgrading_actual_part_2(
             host.state.clone().value,
             None,
             None,
+            None,
             None
         )
         .unwrap()
@@ -1421,6 +1425,7 @@ async fn test_instance_upgrading_actual_part_2(
             &instance,
             device_id_maps.1,
             host.state.clone().value,
+            None,
             None,
             None,
             None
@@ -1481,6 +1486,7 @@ async fn test_instance_upgrading_actual_part_2(
             host.state.clone().value,
             None,
             None,
+            None,
             None
         )
         .unwrap()
@@ -1515,6 +1521,7 @@ async fn test_instance_upgrading_actual_part_2(
             &instance,
             device_id_maps.1,
             host.state.clone().value,
+            None,
             None,
             None,
             None
@@ -1563,6 +1570,7 @@ async fn test_instance_upgrading_actual_part_2(
             &instance,
             device_id_maps.1,
             host.state.clone().value,
+            None,
             None,
             None,
             None
@@ -1633,6 +1641,7 @@ async fn test_instance_upgrading_actual_part_2(
             host.state.clone().value,
             None,
             None,
+            None,
             None
         )
         .unwrap()
@@ -1697,6 +1706,7 @@ async fn test_instance_upgrading_actual_part_2(
             host.state.clone().value,
             None,
             None,
+            None,
             None
         )
         .unwrap()
@@ -1733,6 +1743,7 @@ async fn test_instance_upgrading_actual_part_2(
             host.state.clone().value,
             None,
             None,
+            None,
             None
         )
         .unwrap()
@@ -1767,6 +1778,7 @@ async fn test_instance_upgrading_actual_part_2(
             host.state.clone().value,
             None,
             None,
+            None,
             None
         )
         .unwrap()
@@ -1794,6 +1806,7 @@ async fn test_instance_upgrading_actual_part_2(
             &instance,
             device_id_maps.1,
             host.state.clone().value,
+            None,
             None,
             None,
             None

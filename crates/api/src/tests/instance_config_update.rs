@@ -95,6 +95,7 @@ async fn test_update_instance_config(_: PgPoolOptions, options: PgConnectOptions
         network_security_group_id: None,
         dpu_extension_services: None,
         nvlink: None,
+        spxconfig: None,
     };
 
     let initial_metadata = rpc::Metadata {
@@ -350,6 +351,7 @@ async fn test_reject_invalid_instance_config_updates(_: PgPoolOptions, options: 
         network_security_group_id: None,
         dpu_extension_services: None,
         nvlink: None,
+        spxconfig: None,
     };
 
     let initial_metadata = rpc::Metadata {
@@ -646,6 +648,7 @@ async fn test_update_instance_config_vpc_prefix_no_network_update(
         network_security_group_id: None,
         dpu_extension_services: None,
         nvlink: None,
+        spxconfig: None,
     };
 
     let initial_metadata = rpc::Metadata {
@@ -788,6 +791,7 @@ async fn test_update_instance_config_vpc_prefix_network_update(
         network_security_group_id: None,
         dpu_extension_services: None,
         nvlink: None,
+        spxconfig: None,
     };
 
     let initial_metadata = rpc::Metadata {
@@ -992,6 +996,7 @@ async fn test_update_instance_config_vpc_prefix_network_update_post_instance_del
         network_security_group_id: None,
         dpu_extension_services: None,
         nvlink: None,
+        spxconfig: None,
     };
 
     let initial_metadata = rpc::Metadata {
@@ -1146,6 +1151,7 @@ async fn test_update_instance_config_vpc_prefix_network_update_multidpu(
         network_security_group_id: None,
         dpu_extension_services: None,
         nvlink: None,
+        spxconfig: None,
     };
 
     let initial_metadata = rpc::Metadata {
@@ -1338,6 +1344,7 @@ async fn test_update_instance_config_vpc_prefix_network_update_multidpu_differen
         network_security_group_id: None,
         dpu_extension_services: None,
         nvlink: None,
+        spxconfig: None,
     };
 
     let initial_metadata = rpc::Metadata {
@@ -1511,6 +1518,7 @@ async fn test_update_instance_config_vpc_prefix_network_update_different_prefix_
                     network_security_group_id: None,
                     dpu_extension_services: None,
                     nvlink: None,
+                    spxconfig: None,
                 })
                 .metadata(rpc::Metadata {
                     name: "test_instance".to_string(),
@@ -1549,6 +1557,7 @@ async fn test_update_instance_config_vpc_prefix_network_update_different_prefix_
                     network_security_group_id: None,
                     dpu_extension_services: None,
                     nvlink: None,
+                    spxconfig: None,
                 })
                 .metadata(rpc::Metadata {
                     name: "test_instance".to_string(),
@@ -1589,6 +1598,7 @@ async fn test_update_instance_config_vpc_prefix_network_update_different_prefix_
                     network_security_group_id: None,
                     dpu_extension_services: None,
                     nvlink: None,
+                    spxconfig: None,
                 })
                 .metadata(rpc::Metadata {
                     name: "test_instance".to_string(),
@@ -1722,6 +1732,7 @@ async fn test_update_instance_config_vpc_prefix_network_update_different_prefix_
                     network_security_group_id: None,
                     dpu_extension_services: None,
                     nvlink: None,
+                    spxconfig: None,
                 })
                 .metadata(rpc::Metadata {
                     name: "test_instance".to_string(),
@@ -1777,6 +1788,7 @@ async fn test_update_instance_config_vpc_prefix_network_update_different_prefix_
                     network_security_group_id: None,
                     dpu_extension_services: None,
                     nvlink: None,
+                    spxconfig: None,
                 })
                 .metadata(rpc::Metadata {
                     name: "test_instance".to_string(),
@@ -1832,6 +1844,7 @@ async fn test_update_instance_config_vpc_prefix_network_update_different_prefix_
                     network_security_group_id: None,
                     dpu_extension_services: None,
                     nvlink: None,
+                    spxconfig: None,
                 })
                 .metadata(rpc::Metadata {
                     name: "test_instance".to_string(),

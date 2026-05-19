@@ -406,7 +406,6 @@ impl TestEnv {
             ib_pools: self.common_pools.infiniband.clone(),
             ipmi_tool: self.ipmi_tool.clone(),
             site_config: self.config.clone(),
-            dpa_info: None,
             rms_client: self.rms_sim.as_rms_client(),
             switch_system_image_rms_client: self.rms_sim.as_switch_system_image_rms_client(),
             credential_manager: self.test_credential_manager.clone(),
@@ -1263,6 +1262,7 @@ pub fn get_config() -> CarbideConfig {
             subnet_ip: Ipv4Addr::UNSPECIFIED,
             subnet_mask: 0_i32,
             auth: MqttAuthConfig::default(),
+            monitor_run_interval: std::time::Duration::from_secs(10),
         }),
         power_manager_options: PowerManagerOptions {
             enabled: false,
@@ -1669,7 +1669,6 @@ pub async fn create_test_env_with_overrides(
         ib_pools: common_pools.infiniband.clone(),
         ipmi_tool: ipmi_tool.clone(),
         site_config: config.clone(),
-        dpa_info: None,
         rms_client: rms_sim.as_rms_client(),
         switch_system_image_rms_client: rms_sim.as_switch_system_image_rms_client(),
         credential_manager: credential_manager.clone(),
@@ -2125,6 +2124,19 @@ fn pool_defs(fabric_len: u8) -> HashMap<String, resource_pool::ResourcePoolDef> 
             ranges: vec![resource_pool::Range {
                 start: 10_001.to_string(),
                 end: (10_001 + fabric_len as u16 - 1).to_string(),
+                auto_assign: true,
+            }],
+            prefix: None,
+            delegate_prefix_len: None,
+        },
+    );
+    defs.insert(
+        model::resource_pool::common::DPA_VNI.to_string(),
+        resource_pool::ResourcePoolDef {
+            pool_type: resource_pool::ResourcePoolType::Integer,
+            ranges: vec![resource_pool::Range {
+                start: 40001.to_string(),
+                end: (40001 + fabric_len as u16 - 1).to_string(),
                 auto_assign: true,
             }],
             prefix: None,

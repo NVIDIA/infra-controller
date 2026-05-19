@@ -40,6 +40,7 @@ impl TryFrom<rpc::forge::DpaInterfaceCreationRequest> for NewDpaInterface {
             mac_address,
             device_type: value.device_type,
             pci_name: value.pci_name,
+            device_description: value.device_description,
         })
     }
 }
@@ -51,11 +52,6 @@ impl From<DpaInterface> for rpc::forge::DpaInterface {
 
         let outcome = match src.controller_state_outcome {
             Some(psho) => psho.to_string(),
-            None => "None".to_string(),
-        };
-
-        let network_status_observation = match src.network_status_observation {
-            Some(nso) => nso.to_string(),
             None => "None".to_string(),
         };
 
@@ -96,13 +92,13 @@ impl From<DpaInterface> for rpc::forge::DpaInterface {
             network_config: network_config.to_string(),
             network_config_version: network_config_version.to_string(),
             controller_state_outcome: outcome,
-            network_status_observation,
             history,
             card_state: cstate,
             pci_name: src.pci_name,
             underlay_ip: underlay,
             overlay_ip: overlay,
             mlxconfig_profile: src.mlxconfig_profile,
+            device_description: src.device_description,
         }
     }
 }
@@ -138,7 +134,6 @@ impl TryFrom<DpaInterfaceSnapshotPgJson> for DpaInterface {
                     }
                 })?,
             },
-            network_status_observation: value.network_status_observation,
             card_state: value.card_state,
             device_info: value.device_info,
             device_info_ts: value.device_info_ts,
@@ -147,6 +142,7 @@ impl TryFrom<DpaInterfaceSnapshotPgJson> for DpaInterface {
             pci_name: value.pci_name,
             underlay_ip: value.underlay_ip,
             overlay_ip: value.overlay_ip,
+            device_description: value.device_description,
         })
     }
 }

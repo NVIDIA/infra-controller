@@ -104,6 +104,7 @@ impl LockdownManager {
     }
 
     // lock_device locks hardware access on the specified device with the provided key.
+    #[cfg(not(feature = "mockdpa"))]
     pub fn lock_device(&self, device_id: &str, key: &str) -> MlxResult<LockStatus> {
         FlintRunner::validate_device_id(device_id)?;
 
@@ -112,12 +113,25 @@ impl LockdownManager {
         Ok(LockStatus::Locked)
     }
 
+    // lock_device locks hardware access on the specified device with the provided key.
+    #[cfg(feature = "mockdpa")]
+    pub fn lock_device(&self, _device_id: &str, _key: &str) -> MlxResult<LockStatus> {
+        Ok(LockStatus::Locked)
+    }
+
     // unlock_device unlocks hardware access on the specified device with the provided key.
+    #[cfg(not(feature = "mockdpa"))]
     pub fn unlock_device(&self, device_id: &str, key: &str) -> MlxResult<LockStatus> {
         FlintRunner::validate_device_id(device_id)?;
 
         // This will now return an error if already unlocked instead of silently succeeding
         self.runner.enable_hw_access(device_id, key)?;
+        Ok(LockStatus::Unlocked)
+    }
+
+    // unlock_device unlocks hardware access on the specified device with the provided key.
+    #[cfg(feature = "mockdpa")]
+    pub fn unlock_device(&self, _device_id: &str, _key: &str) -> MlxResult<LockStatus> {
         Ok(LockStatus::Unlocked)
     }
 

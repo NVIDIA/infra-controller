@@ -436,6 +436,7 @@ async fn test_instance_reprov_with_firmware_upgrade(pool: sqlx::PgPool) {
             host.state.clone().value,
             None,
             None,
+            None,
             None
         )
         .unwrap()
@@ -482,6 +483,7 @@ async fn test_instance_reprov_with_firmware_upgrade(pool: sqlx::PgPool) {
             host.state.clone().value,
             None,
             None,
+            None,
             None
         )
         .unwrap()
@@ -520,6 +522,7 @@ async fn test_instance_reprov_with_firmware_upgrade(pool: sqlx::PgPool) {
             &db_instance,
             device_id_maps.1,
             host.state.clone().value,
+            None,
             None,
             None,
             None
@@ -562,6 +565,7 @@ async fn test_instance_reprov_with_firmware_upgrade(pool: sqlx::PgPool) {
             host.state.clone().value,
             None,
             None,
+            None,
             None
         )
         .unwrap()
@@ -590,6 +594,7 @@ async fn test_instance_reprov_with_firmware_upgrade(pool: sqlx::PgPool) {
             host.state.clone().value,
             None,
             None,
+            None,
             None
         )
         .unwrap()
@@ -616,6 +621,7 @@ async fn test_instance_reprov_with_firmware_upgrade(pool: sqlx::PgPool) {
             &db_instance,
             device_id_maps.1,
             host.state.clone().value,
+            None,
             None,
             None,
             None
@@ -658,6 +664,7 @@ async fn test_instance_reprov_with_firmware_upgrade(pool: sqlx::PgPool) {
             host.state.clone().value,
             None,
             None,
+            None,
             None
         )
         .unwrap()
@@ -684,6 +691,7 @@ async fn test_instance_reprov_with_firmware_upgrade(pool: sqlx::PgPool) {
             &db_instance,
             device_id_maps.1,
             host.state.clone().value,
+            None,
             None,
             None,
             None
@@ -714,6 +722,7 @@ async fn test_instance_reprov_with_firmware_upgrade(pool: sqlx::PgPool) {
             &db_instance,
             device_id_maps.1,
             host.state.clone().value,
+            None,
             None,
             None,
             None

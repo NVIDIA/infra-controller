@@ -31,6 +31,7 @@ use crate::instance::config::extension_services::{
 use crate::instance::config::infiniband::InstanceInfinibandConfig;
 use crate::instance::config::network::InstanceNetworkConfig;
 use crate::instance::config::nvlink::InstanceNvLinkConfig;
+use crate::instance::config::spx::InstanceSpxConfig;
 use crate::instance::config::tenant_config::TenantConfig;
 use crate::os::OperatingSystem;
 
@@ -74,6 +75,13 @@ impl TryFrom<rpc::InstanceConfig> for InstanceConfig {
             .transpose()?
             .unwrap_or(InstanceNvLinkConfig::default());
 
+        // Spx config is optional
+        let spxconfig = config
+            .spxconfig
+            .map(InstanceSpxConfig::try_from)
+            .transpose()?
+            .unwrap_or(InstanceSpxConfig::default());
+
         Ok(InstanceConfig {
             tenant,
             os,
@@ -88,6 +96,7 @@ impl TryFrom<rpc::InstanceConfig> for InstanceConfig {
                 })?,
             extension_services,
             nvlink,
+            spxconfig,
         })
     }
 }
@@ -108,6 +117,11 @@ impl TryFrom<InstanceConfig> for rpc::InstanceConfig {
         let nvlink = match nvlink.gpu_configs.is_empty() {
             true => None,
             false => Some(nvlink),
+        };
+        let spxconfig = rpc::forge::InstanceSpxConfig::try_from(config.spxconfig)?;
+        let spxconfig = match spxconfig.spx_attachments.is_empty() {
+            true => None,
+            false => Some(spxconfig),
         };
 
         // We only show user active extension services, and track terminating services internally.
@@ -134,6 +148,7 @@ impl TryFrom<InstanceConfig> for rpc::InstanceConfig {
             network_security_group_id: config.network_security_group_id.map(|i| i.to_string()),
             dpu_extension_services: extension_services,
             nvlink,
+            spxconfig,
         })
     }
 }

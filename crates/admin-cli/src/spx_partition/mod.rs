@@ -15,13 +15,17 @@
  * limitations under the License.
  */
 
-use crate::state_controller::common_services::CommonStateHandlerServices;
-use crate::state_controller::dpa_interface::metrics::DpaInterfaceMetrics;
-use crate::state_controller::state_handler::StateHandlerContextObjects;
+mod show;
 
-pub struct DpaInterfaceStateHandlerContextObjects {}
+#[cfg(test)]
+mod tests;
 
-impl StateHandlerContextObjects for DpaInterfaceStateHandlerContextObjects {
-    type Services = CommonStateHandlerServices;
-    type ObjectMetrics = DpaInterfaceMetrics;
+use clap::Parser;
+
+use crate::cfg::dispatch::Dispatch;
+
+#[derive(Parser, Debug, Dispatch)]
+pub enum Cmd {
+    #[clap(about = "Display SpectrumX Partition information")]
+    Show(show::Args),
 }

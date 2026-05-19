@@ -113,7 +113,6 @@ async fn test_switch_deletion_with_state_controller(
         ib_pools: env.common_pools.infiniband.clone(),
         ipmi_tool: env.ipmi_tool.clone(),
         site_config: env.config.clone(),
-        dpa_info: None,
         rms_client: None,
         switch_system_image_rms_client: None,
         credential_manager: Arc::new(TestCredentialManager::default()),

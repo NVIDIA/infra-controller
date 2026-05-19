@@ -29,7 +29,6 @@ use model::resource_pool::common::IbPools;
 use sqlx::PgPool;
 
 use crate::cfg::file::CarbideConfig;
-use crate::dpa::handler::DpaInfo;
 use crate::rack::rms_client::SwitchSystemImageRmsClient;
 use crate::state_controller::external_service_error::redfish_client_creation_error;
 use crate::state_controller::state_handler::StateHandlerError;
@@ -58,8 +57,6 @@ pub struct CommonStateHandlerServices {
 
     /// Access to the site config
     pub site_config: Arc<CarbideConfig>,
-
-    pub dpa_info: Option<Arc<DpaInfo>>,
 
     /// Rack Manager Service client
     pub rms_client: Option<Arc<dyn RmsApi>>,

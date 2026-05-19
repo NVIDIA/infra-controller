@@ -25,6 +25,7 @@ use crate::instance::snapshot::InstanceSnapshot;
 use crate::instance::status::InstanceStatus;
 use crate::machine::infiniband::MachineInfinibandStatusObservation;
 use crate::machine::nvlink::MachineNvLinkStatusObservation;
+use crate::machine::spx::MachineSpxStatusObservation;
 use crate::machine::{ManagedHostState, ReprovisionRequest};
 use crate::rpc_conv::instance::status::instance_status_from_config_and_observation;
 
@@ -37,6 +38,7 @@ pub fn instance_snapshot_derive_status(
     reprovision_request: Option<ReprovisionRequest>,
     ib_status: Option<&MachineInfinibandStatusObservation>,
     nvlink_status: Option<&MachineNvLinkStatusObservation>,
+    spx_status: Option<&MachineSpxStatusObservation>,
 ) -> Result<InstanceStatus, RpcDataConversionError> {
     instance_status_from_config_and_observation(
         dpu_id_to_device_map,
@@ -48,12 +50,14 @@ pub fn instance_snapshot_derive_status(
             snapshot.extension_services_config_version,
         ),
         Versioned::new(&snapshot.config.nvlink, snapshot.nvlink_config_version),
+        Versioned::new(&snapshot.config.spxconfig, snapshot.spx_config_version),
         &snapshot.observations,
         managed_host_state,
         snapshot.deleted.is_some(),
         reprovision_request,
         ib_status,
         nvlink_status,
+        spx_status,
         snapshot.update_network_config_request.is_some(),
     )
 }

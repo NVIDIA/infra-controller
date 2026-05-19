@@ -73,6 +73,7 @@ pub mod route_server;
 pub mod scout_stream;
 pub mod site_explorer;
 pub mod sku;
+pub mod spx_partition;
 pub mod switch;
 mod switch_artifacts;
 pub mod tenant;
