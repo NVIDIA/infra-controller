@@ -143,6 +143,7 @@ impl DataSink for HealthReportSink {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+
     use super::*;
 
     fn machine_id(value: &str) -> MachineId {
