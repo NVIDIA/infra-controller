@@ -32,8 +32,8 @@ use crate::api::{Api, log_request_data};
 use crate::compat::BuildAndFillLegacyFields;
 use crate::handlers::utils::convert_and_log_machine_id;
 
-// Transitions the machine to Ready state.
-// Called by 'forge-scout discovery' once cleanup succeeds.
+// Records Scout cleanup success/failure and wakes the host state controller.
+// The state controller decides whether cleanup returns to discovery or deprovision flow.
 pub(crate) async fn cleanup_machine_completed(
     api: &Api,
     request: Request<rpc::MachineCleanupInfo>,

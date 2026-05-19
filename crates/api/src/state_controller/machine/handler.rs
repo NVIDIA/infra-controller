@@ -1334,17 +1334,11 @@ impl MachineStateHandler {
                                 .unwrap_or_default()
                         {
                             // Cleaned up successfully after a failure.
-                            let cleanup_context = match &details.source {
+                            let next_state = match &details.source {
                                 FailureSource::StateMachineArea(StateMachineArea::HostInit) => {
-                                    CleanupContext::InitialDiscovery
-                                }
-                                _ => CleanupContext::Deprovision,
-                            };
-                            let next_state = match cleanup_context {
-                                CleanupContext::InitialDiscovery => {
                                     initial_discovery_waiting_state()
                                 }
-                                CleanupContext::Deprovision => waiting_for_cleanup_state(
+                                _ => waiting_for_cleanup_state(
                                     CleanupState::Init,
                                     CleanupContext::Deprovision,
                                 ),

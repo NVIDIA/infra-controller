@@ -2756,9 +2756,7 @@ async fn test_forge_agent_control_waiting_for_scout_upgrade_returns_task_without
         retry_count: 0,
     };
     db::machine::advance(&host, &mut txn, &waiting_state, None).await?;
-    sqlx::query("UPDATE machines SET last_cleanup_time = NULL WHERE id = $1")
-        .bind(mh.host().id)
-        .execute(txn.as_mut())
+    db::machine::clear_cleanup_time(&mh.host().id, &mut txn)
         .await
         .unwrap();
     txn.commit().await.unwrap();

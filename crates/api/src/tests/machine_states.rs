@@ -777,7 +777,10 @@ async fn test_repeated_initial_discovery_cleanup_failure_preserves_host_init_sou
         host.failure_details.source,
         FailureSource::StateMachineArea(StateMachineArea::HostInit)
     ));
+    let first_failed_at = host.failure_details.failed_at;
     txn.commit().await.unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
 
     env.api
         .cleanup_machine_completed(cleanup_failed_request(mh.id))
@@ -790,6 +793,10 @@ async fn test_repeated_initial_discovery_cleanup_failure_preserves_host_init_sou
         host.failure_details.source,
         FailureSource::StateMachineArea(StateMachineArea::HostInit)
     ));
+    assert!(
+        host.failure_details.failed_at > first_failed_at,
+        "repeated cleanup failure should refresh failure details"
+    );
     txn.commit().await.unwrap();
 
     env.api
@@ -802,13 +809,9 @@ async fn test_repeated_initial_discovery_cleanup_failure_preserves_host_init_sou
 
     // Make the recovery timestamp unambiguously newer than the failed state version and failed_at.
     let mut txn = env.db_txn().await;
-    sqlx::query(
-        "UPDATE machines SET last_cleanup_time = NOW() + INTERVAL '1 second' WHERE id = $1",
-    )
-    .bind(mh.id)
-    .execute(txn.as_mut())
-    .await
-    .unwrap();
+    db::machine::set_cleanup_time(&mh.id, chrono::Utc::now() + Duration::seconds(1), &mut txn)
+        .await
+        .unwrap();
     txn.commit().await.unwrap();
 
     env.run_machine_state_controller_iteration().await;
@@ -1970,9 +1973,7 @@ async fn test_forge_agent_control_host_reprovision_scout_upgrade_does_not_reset_
     db::machine::advance(&host, &mut txn, &state, None)
         .await
         .unwrap();
-    sqlx::query("UPDATE machines SET last_cleanup_time = NULL WHERE id = $1")
-        .bind(mh.host().id)
-        .execute(txn.as_mut())
+    db::machine::clear_cleanup_time(&mh.host().id, &mut txn)
         .await
         .unwrap();
     txn.commit().await.unwrap();
@@ -1999,9 +2000,7 @@ async fn test_forge_agent_control_assigned_discovery_boot_does_not_reset_without
     db::machine::advance(&host, &mut txn, &state, None)
         .await
         .unwrap();
-    sqlx::query("UPDATE machines SET last_cleanup_time = NULL WHERE id = $1")
-        .bind(mh.host().id)
-        .execute(txn.as_mut())
+    db::machine::clear_cleanup_time(&mh.host().id, &mut txn)
         .await
         .unwrap();
     txn.commit().await.unwrap();
