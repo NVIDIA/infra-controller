@@ -15,9 +15,10 @@
  * limitations under the License.
  */
 
-use ::rpc::admin_cli::{CarbideCliError, OutputFormat};
+use ::rpc::admin_cli::OutputFormat;
 
 use super::args::Args;
+use crate::errors::CarbideCliError;
 use crate::rpc::ApiClient;
 
 pub async fn get_job_status(

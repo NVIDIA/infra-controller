@@ -24,21 +24,11 @@
 */
 
 use std::env;
-use std::fs::File;
-use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use carbide_uuid::dpu_remediations::RemediationId;
-use carbide_uuid::instance::InstanceId;
-use carbide_uuid::machine::{MachineId, MachineIdParseError};
 pub use output::{Destination, OutputFormat};
-use serde::Serialize;
 #[cfg(feature = "sqlx")]
 use sqlx::{Pool, Postgres};
-
-use crate::errors;
-use crate::forge::MachineType;
-use crate::forge_tls_client::ForgeTlsClientError;
 
 /// SUMMARY is a global variable that is being used by a few structs which
 /// implement serde::Serialize with skip_serialization_if.
@@ -83,103 +73,6 @@ pub async fn connect(db_url: &str) -> eyre::Result<Pool<Postgres>> {
     Ok(pool)
 }
 
-#[derive(thiserror::Error, Debug)]
-pub enum CarbideCliError {
-    #[error("Unable to connect to carbide API: {0}")]
-    ApiConnectFailed(#[from] ForgeTlsClientError),
-
-    #[error("The API call to the Forge API server returned {0}")]
-    ApiInvocationError(#[from] tonic::Status),
-
-    #[error("Error while writing into string: {0}")]
-    StringWriteError(#[from] std::fmt::Error),
-
-    #[error("Generic Error: {0}")]
-    GenericError(String),
-
-    #[error("Cannot specify both {0} and {1}. Please provide only one.")]
-    ChooseOneError(&'static str, &'static str),
-
-    #[error("Must specify either {0} or {1}.")]
-    RequireOneError(&'static str, &'static str),
-
-    #[error("Invalid datetime format: {0}. Use 'YYYY-MM-DD HH:MM:SS' or 'HH:MM:SS'")]
-    InvalidDateTimeFromUserInput(String),
-
-    #[error("Segment not found.")]
-    SegmentNotFound,
-
-    #[error("Domain not found.")]
-    DomainNotFound,
-
-    #[error("Uuid not found.")]
-    UuidNotFound,
-
-    #[error("MAC not found.")]
-    MacAddressNotFound,
-
-    #[error("Serial number not found.")]
-    SerialNumberNotFound,
-
-    #[error("Error while handling json: {0}")]
-    JsonError(#[from] serde_json::Error),
-
-    #[error("Error while handling yaml: {0}")]
-    YamlError(#[from] serde_yaml::Error),
-
-    #[error("Error while handling csv: {0}")]
-    CsvError(#[from] csv::Error),
-
-    #[error("Unexpected machine type.  expected {0:?} but found {1:?}")]
-    UnexpectedMachineType(MachineType, MachineType),
-
-    #[error("Host machine with id {0} not found")]
-    MachineNotFound(MachineId),
-
-    #[error("Remediation with id {0} not found")]
-    RemediationNotFound(RemediationId),
-
-    #[error("Instance with id {0} not found")]
-    InstanceNotFound(InstanceId),
-
-    #[error("Tenant with id {0} not found")]
-    TenantNotFound(String),
-
-    #[error("I/O error. Does the file exist? {0}")]
-    IOError(#[from] std::io::Error),
-
-    /// For when you expected some values but the response was empty.
-    /// If empty is acceptable don't use this.
-    #[error("No results returned")]
-    Empty,
-
-    #[error("Not Implemented {0}")]
-    NotImplemented(String),
-
-    #[error("Invalid Machine ID: {0}")]
-    InvalidMachineId(#[from] MachineIdParseError),
-
-    #[error("RPC data conversion error: {0}")]
-    RpcDataConversionError(#[from] errors::RpcDataConversionError),
-
-    #[error("Invalid Routing Profile Type: {0}")]
-    InvalidRoutingProfileType(String),
-
-    #[error(transparent)]
-    EyreReport(eyre::Report),
-}
-
-impl From<eyre::Report> for CarbideCliError {
-    // For commands that are [still] returning an eyre::Report,
-    // and not a CarbideCliError, preserve the full report and
-    // error chain for complete context.
-    fn from(err: eyre::Report) -> Self {
-        CarbideCliError::EyreReport(err)
-    }
-}
-
-pub type CarbideCliResult<T> = Result<T, CarbideCliError>;
-
 /// ToTable is a trait which is used alongside the cli_output command
 /// and being able to prettytable print results.
 pub trait ToTable {
@@ -189,38 +82,6 @@ pub trait ToTable {
     {
         Ok("not implemented".to_string())
     }
-}
-
-/// cli_output is the generic function implementation used by the OutputResult
-/// trait, allowing callers to pass a Serialize-derived struct and have it
-/// print in either JSON or YAML.
-pub fn cli_output<T: Serialize + ToTable>(
-    input: T,
-    format: &OutputFormat,
-    destination: Destination,
-) -> CarbideCliResult<()> {
-    let output = match format {
-        OutputFormat::Json => serde_json::to_string_pretty(&input)?,
-        OutputFormat::Yaml => serde_yaml::to_string(&input)?,
-        OutputFormat::AsciiTable => input
-            .into_table()
-            .map_err(|e| CarbideCliError::GenericError(e.to_string()))?,
-        OutputFormat::Csv => {
-            return Err(CarbideCliError::GenericError(String::from(
-                "CSV not supported for measurement commands (yet)",
-            )));
-        }
-    };
-
-    match destination {
-        Destination::Path(path) => {
-            let mut file = File::create(path)?;
-            file.write_all(output.as_bytes())?
-        }
-        Destination::Stdout() => println!("{output}"),
-    }
-
-    Ok(())
 }
 
 pub mod output {

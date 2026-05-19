@@ -14,13 +14,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use ::rpc::admin_cli::{CarbideCliError, CarbideCliResult};
 use carbide_network::ip::prefix::Ipv4Network;
 use carbide_uuid::network::NetworkSegmentId;
 use rpc::forge::{PrefixMatchType, Vpc, VpcPrefixCreationRequest, VpcPrefixSearchQuery};
 use serde::{Deserialize, Serialize};
 
 use super::args::{Args, NetworkChoice};
+use crate::errors::{CarbideCliError, CarbideCliResult};
 use crate::rpc::ApiClient;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

@@ -17,9 +17,8 @@
 
 use std::collections::VecDeque;
 
-use ::rpc::admin_cli::{CarbideCliError, CarbideCliResult};
-
 use super::args::Args;
+use crate::errors::{CarbideCliError, CarbideCliResult};
 use crate::instance::common::GlobalOptions;
 use crate::machine;
 use crate::rpc::ApiClient;
