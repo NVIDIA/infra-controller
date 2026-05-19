@@ -2632,8 +2632,7 @@ message InlineIpxe {
   string ipxe_script = 1;
   // Optional user-data that is associated with the iPXE script
   // This can be a cloud-init script
-  // Deprecated, use InstanceOperatingSystemConfig user_data field
-  optional string user_data = 2;
+  reserved 2; // was: optional string user_data, now use InstanceOperatingSystemConfig user_data
 }
 
 // Desired configuration for an instance

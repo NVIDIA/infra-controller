@@ -350,10 +350,7 @@ impl From<forgerpc::Instance> for InstanceDetail {
                 Some(os_variant) => match os_variant {
                     forgerpc::instance_operating_system_config::Variant::Ipxe(ipxe) => InstanceOs {
                         ipxe_script: ipxe.ipxe_script.clone(),
-                        userdata: os
-                            .user_data
-                            .clone()
-                            .unwrap_or(ipxe.user_data.clone().unwrap_or_default()),
+                        userdata: os.user_data.clone().unwrap_or_default(),
                         run_provisioning_instructions_on_every_boot: os
                             .run_provisioning_instructions_on_every_boot,
                         phone_home_enabled: os.phone_home_enabled,
