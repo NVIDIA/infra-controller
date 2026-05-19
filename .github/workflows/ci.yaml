@@ -1177,13 +1177,6 @@ jobs:
           lint: 'true'
           template: 'true'
 
-      - name: Validate nico-dpu-otel-agent chart
-        uses: NVIDIA/dsx-github-actions/.github/actions/helm-validate@94bde998f5d7965576b0c663db7d5d709c918167
-        with:
-          chart-path: bluefield/charts/nico-dpu-otel-agent
-          lint: 'true'
-          template: 'true'
-
       - name: Validate nico-fmds chart
         uses: NVIDIA/dsx-github-actions/.github/actions/helm-validate@94bde998f5d7965576b0c663db7d5d709c918167
         with:
@@ -1227,17 +1220,6 @@ jobs:
         uses: NVIDIA/dsx-github-actions/.github/actions/helm-package-push@7de619729962a6bd5e8355b6fb3582a22517d7e5
         with:
           chart-path: bluefield/charts/nico-dhcp-server
-          chart-version: ${{ needs.prepare.outputs.helm_version }}
-          app-version: ${{ needs.prepare.outputs.version }}
-          lint: 'false'
-          ngc-key: ${{ secrets.NVCR_TOKEN }}
-          ngc-path: 0837451325059433/carbide-dev
-          ngc-duplicate: fail
-
-      - name: Package and push nico-dpu-otel-agent chart
-        uses: NVIDIA/dsx-github-actions/.github/actions/helm-package-push@7de619729962a6bd5e8355b6fb3582a22517d7e5
-        with:
-          chart-path: bluefield/charts/nico-dpu-otel-agent
           chart-version: ${{ needs.prepare.outputs.helm_version }}
           app-version: ${{ needs.prepare.outputs.version }}
           lint: 'false'
