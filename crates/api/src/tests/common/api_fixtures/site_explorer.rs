@@ -74,13 +74,33 @@ use crate::tests::common::api_fixtures::{
 use crate::tests::common::mac_address_pool::EXPECTED_SWITCH_NVOS_MAC_ADDRESS_POOL;
 use crate::tests::common::rpc_builder::DhcpDiscovery;
 
+async fn current_host_state_and_cleanup_needed(
+    env: &TestEnv,
+    host_machine_id: MachineId,
+) -> (ManagedHostState, bool) {
+    let mut txn = env.db_txn().await;
+    let machine = db::machine::find_one(
+        txn.as_mut(),
+        &host_machine_id,
+        model::machine::machine_search_config::MachineSearchConfig::default(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+
+    (
+        machine.current_state().clone(),
+        machine.last_cleanup_time.is_none(),
+    )
+}
+
 async fn complete_initial_discovery_cleanup_if_needed(env: &TestEnv, host_machine_id: MachineId) {
     // Keep the shared fixture usable with both lifecycle shapes: older flows stay in discovery,
     // while newer flows require state-machine-owned cleanup before discovery can complete.
-    let state = env
+    let mut state = env
         .run_machine_state_controller_iteration_until_state_condition(
             &host_machine_id,
-            1,
+            20,
             |machine| {
                 matches!(
                     machine.current_state(),
@@ -101,7 +121,23 @@ async fn complete_initial_discovery_cleanup_if_needed(env: &TestEnv, host_machin
             machine_state: MachineState::WaitingForDiscovery
         }
     ) {
-        return;
+        let (_, needs_initial_cleanup) =
+            current_host_state_and_cleanup_needed(env, host_machine_id).await;
+        if !needs_initial_cleanup {
+            return;
+        }
+
+        env.run_machine_state_controller_iteration().await;
+        (state, _) = current_host_state_and_cleanup_needed(env, host_machine_id).await;
+
+        if matches!(
+            state,
+            ManagedHostState::HostInit {
+                machine_state: MachineState::WaitingForDiscovery
+            }
+        ) {
+            return;
+        }
     }
 
     if !matches!(
@@ -750,15 +786,7 @@ impl<'a> MockExploredHost<'a> {
             }
         }
 
-        self.test_env
-            .run_machine_state_controller_iteration_until_state_matches(
-                &host_machine_id,
-                20,
-                ManagedHostState::HostInit {
-                    machine_state: MachineState::WaitingForDiscovery,
-                },
-            )
-            .await;
+        complete_initial_discovery_cleanup_if_needed(self.test_env, host_machine_id).await;
 
         self.test_env
             .api
@@ -775,7 +803,6 @@ impl<'a> MockExploredHost<'a> {
             .await
             .expect("Failed to add hardware health report to newly created machine");
 
-        complete_initial_discovery_cleanup_if_needed(self.test_env, host_machine_id).await;
         discovery_completed(self.test_env, host_machine_id).await;
         self.test_env.run_ib_fabric_monitor_iteration().await;
         host_uefi_setup(self.test_env, &host_machine_id).await;
@@ -975,15 +1002,7 @@ impl<'a> MockExploredHost<'a> {
             .machine_id
             .unwrap();
         let mut machine_validation_result = machine_validation_result_data.unwrap_or_default();
-        self.test_env
-            .run_machine_state_controller_iteration_until_state_matches(
-                &host_machine_id,
-                10,
-                ManagedHostState::HostInit {
-                    machine_state: MachineState::WaitingForDiscovery,
-                },
-            )
-            .await;
+        complete_initial_discovery_cleanup_if_needed(self.test_env, host_machine_id).await;
 
         self.test_env
             .api
@@ -1000,7 +1019,6 @@ impl<'a> MockExploredHost<'a> {
             .await
             .expect("Failed to add hardware health report to newly created machine");
 
-        complete_initial_discovery_cleanup_if_needed(self.test_env, host_machine_id).await;
         discovery_completed(self.test_env, host_machine_id).await;
         self.test_env.run_ib_fabric_monitor_iteration().await;
         host_uefi_setup(self.test_env, &host_machine_id).await;
