@@ -1,8 +1,8 @@
 # Monitoring and Health
 
-This page describes the Day 2 monitoring and health workflow for NICo sites. It
-covers hardware health, DPU health, aggregate host health, health overrides,
-Prometheus scraping, Grafana dashboards, and Loki log lookup.
+This page describes post-deployment monitoring and health workflows for NICo
+sites. It covers hardware health, DPU health, aggregate host health, health
+overrides, Prometheus scraping, Grafana dashboards, and Loki log lookup.
 
 Use aggregate host health as the starting point for operational decisions. NICo
 combines hardware health, DPU health, validation and discovery checks, rack
