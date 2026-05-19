@@ -18,7 +18,7 @@
 //!
 //! `measurement mock-machine` subcommand dispatcher + backing functions.
 
-use ::rpc::admin_cli::{CarbideCliError, CarbideCliResult, ToTable, cli_output};
+use ::rpc::admin_cli::ToTable;
 use ::rpc::protos::measured_boot::ShowCandidateMachineRequest;
 use measured_boot::machine::CandidateMachine;
 use measured_boot::records::CandidateMachineSummary;
@@ -27,6 +27,8 @@ use serde::Serialize;
 
 use crate::attestation::measured_boot::global;
 use crate::attestation::measured_boot::machine::args::{Attest, CmdMachine, Show};
+use crate::cli_output;
+use crate::errors::{CarbideCliError, CarbideCliResult};
 use crate::rpc::ApiClient;
 
 /// dispatch matches + dispatches the correct command

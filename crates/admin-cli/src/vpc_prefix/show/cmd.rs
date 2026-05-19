@@ -18,11 +18,11 @@
 use std::borrow::Cow;
 
 use ::rpc::admin_cli::output::{FormattedOutput, IntoTable, OutputFormat};
-use ::rpc::admin_cli::{CarbideCliError, CarbideCliResult};
 use rpc::forge::{PrefixMatchType, VpcPrefix};
 use serde::Serialize;
 
 use super::args::Args;
+use crate::errors::{CarbideCliError, CarbideCliResult};
 use crate::rpc::ApiClient;
 use crate::vpc_prefix::common::{VpcPrefixSelector, get_by_ids, match_all, search};
 

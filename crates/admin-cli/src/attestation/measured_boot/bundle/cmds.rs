@@ -20,7 +20,7 @@
 
 use std::str::FromStr;
 
-use ::rpc::admin_cli::{CarbideCliError, CarbideCliResult, ToTable, cli_output};
+use ::rpc::admin_cli::ToTable;
 use ::rpc::protos::measured_boot::{
     ListMeasurementBundleMachinesRequest, RenameMeasurementBundleRequest,
     ShowMeasurementBundleRequest, UpdateMeasurementBundleRequest,
@@ -34,6 +34,8 @@ use crate::attestation::measured_boot::bundle::args::{
     CmdBundle, Create, Delete, FindClosestMatch, List, ListMachines, Rename, SetState, Show,
 };
 use crate::attestation::measured_boot::{MachineIdList, global};
+use crate::cli_output;
+use crate::errors::{CarbideCliError, CarbideCliResult};
 use crate::rpc::ApiClient;
 
 /// dispatch matches + dispatches the correct command for

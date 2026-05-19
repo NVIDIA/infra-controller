@@ -17,7 +17,7 @@
 use std::fmt::Write;
 use std::str::FromStr as _;
 
-use ::rpc::admin_cli::{CarbideCliError, CarbideCliResult, OutputFormat};
+use ::rpc::admin_cli::OutputFormat;
 use ::rpc::forge as forgerpc;
 use carbide_uuid::domain::DomainId;
 use carbide_uuid::network::NetworkSegmentId;
@@ -25,6 +25,7 @@ use prettytable::{Table, row};
 use serde::Deserialize;
 
 use super::args::Args;
+use crate::errors::{CarbideCliError, CarbideCliResult};
 use crate::rpc::ApiClient;
 
 #[derive(Deserialize)]
