@@ -108,6 +108,8 @@ navigation:
 
     - section: Operations
       contents:
+        - page: Tenant Lifecycle Cleanup
+          path: operations/tenant-lifecycle-cleanup.md
         - page: NVLink Partitioning
           path: manuals/nvlink_partitioning.md
         - page: Release Instance API Enhancements
