@@ -17,8 +17,29 @@ For reference, see:
 
 ## Release an Instance
 
-Use `ReleaseInstance` to release an allocated tenant instance. The admin CLI can
-release by instance ID or by machine ID:
+Use `nicocli` for the tenant-facing release path:
+
+```bash
+nicocli instance delete <instance-id>
+```
+
+In TUI mode:
+
+```text
+nicocli tui
+> instance delete
+```
+
+Instance deletion triggers the same cleanup and sanitization workflow described
+on this page. Track the REST-side instance lifecycle with:
+
+```bash
+nicocli instance status-history <instance-id>
+nicocli instance get <instance-id>
+```
+
+`carbide-admin-cli` can also release by instance ID or by machine ID when a
+Core gRPC operation is required:
 
 ```bash
 carbide-admin-cli -c <core-api-url> instance release --instance <instance-id>
@@ -29,17 +50,12 @@ carbide-admin-cli -c <core-api-url> instance release --machine <machine-id>
 `carbide-admin-cli`. REST and `nicocli` commands use the REST API base URL from
 the `nicocli` config.
 
-The REST API also exposes instance release. When calling it directly, use the
-REST API base URL for the deployment:
+To report a hardware, network, performance, or other issue during release, see
+[Release Instance API Enhancements](../manuals/breakfix_integration.md).
 
-```bash
-curl -X POST <rest-api-url>/api/v1/instances/release \
-  -H 'Content-Type: application/json' \
-  -d '{"id": "<instance-id>"}'
-```
-
-When the release request is accepted, cleanup is asynchronous. Track the managed
-host state until the host reaches `Ready` or enters a failure state.
+When the release request is accepted, cleanup is asynchronous. Track the
+instance lifecycle first, then inspect the managed-host state when site-level
+cleanup detail is needed.
 
 ## Cleanup Flow
 
@@ -77,7 +93,22 @@ During the flow, NICo:
 
 ## Track Progress
 
-Start with the managed-host state:
+Use two layers of inspection:
+
+| Layer | Tool | Use |
+|---|---|---|
+| REST tenant and provider lifecycle | `nicocli` | Instance deletion, instance status, status history, and tenant-visible errors. |
+| Core site cleanup lifecycle | `carbide-admin-cli` | Managed-host state, machine state history, health reports, measured boot, and cleanup-specific debugging. |
+
+Start with the REST-side instance status:
+
+```bash
+nicocli instance status-history <instance-id>
+nicocli instance get <instance-id>
+```
+
+If cleanup progress is unclear from the instance lifecycle, check the
+managed-host state:
 
 ```bash
 carbide-admin-cli -c <core-api-url> managed-host show <machine-id>
@@ -94,6 +125,24 @@ Check health reports when cleanup appears blocked:
 ```bash
 carbide-admin-cli -c <core-api-url> machine health-report show <machine-id>
 ```
+
+### Happy Path Verification
+
+A normal release can be verified with this sequence:
+
+```bash
+nicocli instance delete <instance-id>
+nicocli instance status-history <instance-id>
+carbide-admin-cli -c <core-api-url> managed-host show <machine-id>
+carbide-admin-cli -c <core-api-url> machine health-report show <machine-id>
+```
+
+Success indicators:
+
+- The instance moves through deletion or termination from the REST perspective.
+- The managed host progresses through the cleanup states and reaches `Ready`.
+- Cleanup-related health reports are clear.
+- No blocking health report prevents allocation.
 
 Useful metrics for fleet-level monitoring include:
 
@@ -227,6 +276,21 @@ A released host is ready for reuse when all required gates pass:
 ## Troubleshooting Stuck Cleanup
 
 Use the current managed-host state to choose the next check.
+
+Start with the REST lifecycle:
+
+```bash
+nicocli instance status-history <instance-id>
+nicocli instance list --status error --output table
+```
+
+If the REST lifecycle does not explain the stall, inspect the Core cleanup
+state:
+
+```bash
+carbide-admin-cli -c <core-api-url> managed-host show <machine-id>
+carbide-admin-cli -c <core-api-url> machine health-report show <machine-id>
+```
 
 | State | What it means | Checks |
 |---|---|---|
