@@ -20,10 +20,12 @@
 use carbide_uuid::rack::{RackId, RackProfileId};
 use db::{
     host_machine_update as db_host_machine_update, machine as db_machine,
-    machine_topology as db_machine_topology, rack as db_rack, rack_firmware as db_rack_firmware,
-    switch as db_switch,
+    machine_topology as db_machine_topology, power_shelf as db_power_shelf, rack as db_rack,
+    rack_firmware as db_rack_firmware, switch as db_switch,
 };
 use librms::protos::rack_manager as rms;
+use model::machine::machine_search_config::MachineSearchConfig;
+use model::power_shelf::PowerShelfSearchFilter;
 use model::rack::{
     ConfigureNmxClusterState, FirmwareUpgradeDeviceInfo, FirmwareUpgradeDeviceStatus,
     FirmwareUpgradeState, MaintenanceActivity, MaintenanceScope, NvosUpdateJob, NvosUpdateState,
@@ -33,6 +35,7 @@ use model::rack::{
 };
 use model::rack_firmware::{RackFirmware, RackFirmwareSearchFilter};
 use model::rack_type::RackHardwareType;
+use model::switch::{ReProvisioningState, SwitchControllerState, SwitchSearchFilter};
 
 use crate::rack::firmware_update::{
     RackFirmwareInventory, RackSwitchFirmwareInventory, build_firmware_update_batches,
@@ -186,6 +189,7 @@ fn resolve_nvos_artifact_from_firmware(
 async fn resolve_default_nvos_artifact(
     id: &RackId,
     rack_profile_id: Option<&RackProfileId>,
+    conn: &mut sqlx::PgConnection,
     ctx: &mut StateHandlerContext<'_, RackStateHandlerContextObjects>,
 ) -> Result<Option<ResolvedNvosArtifact>, StateHandlerError> {
     let desired_hw_type = desired_rack_hardware_type(id, rack_profile_id, ctx);
@@ -195,16 +199,9 @@ async fn resolve_default_nvos_artifact(
         hardware_types.push(RackHardwareType::any());
     }
 
-    let mut conn = ctx.services.db_pool.acquire().await.map_err(|e| {
-        StateHandlerError::GenericError(eyre::eyre!(
-            "failed to acquire db connection for NVOS lookup: {}",
-            e
-        ))
-    })?;
-
     for rack_hardware_type in hardware_types {
         let firmware_rows = db_rack_firmware::list_all(
-            &mut conn,
+            conn,
             RackFirmwareSearchFilter {
                 only_available: true,
                 rack_hardware_type: Some(rack_hardware_type),
@@ -230,7 +227,13 @@ async fn resolve_requested_or_default_nvos_artifact(
     ctx: &mut StateHandlerContext<'_, RackStateHandlerContextObjects>,
 ) -> Result<Option<ResolvedNvosArtifact>, StateHandlerError> {
     let Some(rack_firmware_id) = rack_firmware_id else {
-        return resolve_default_nvos_artifact(id, rack_profile_id, ctx).await;
+        let mut conn = ctx.services.db_pool.acquire().await.map_err(|e| {
+            StateHandlerError::GenericError(eyre::eyre!(
+                "failed to acquire db connection for NVOS lookup: {}",
+                e
+            ))
+        })?;
+        return resolve_default_nvos_artifact(id, rack_profile_id, conn.as_mut(), ctx).await;
     };
 
     let firmware = match db_rack_firmware::find_by_id(&ctx.services.db_pool, rack_firmware_id).await
@@ -431,6 +434,175 @@ fn next_state_after_configure(scope: &MaintenanceScope) -> RackMaintenanceState 
     } else {
         RackMaintenanceState::Completed
     }
+}
+
+/// Returns the `SwitchControllerState` a scoped switch is expected to be in
+/// once the current `FirmwareUpgrade` phase finishes successfully. If the
+/// scope still has subsequent rack-level phases (NVOS or NMX-C), the switch
+/// parks in the matching `ReProvisioning` sub-state; otherwise it returns
+/// directly to `Ready`.
+fn switch_completion_state_after_firmware(scope: &MaintenanceScope) -> SwitchControllerState {
+    match next_state_after_firmware(scope) {
+        RackMaintenanceState::NVOSUpdate { .. } => SwitchControllerState::ReProvisioning {
+            reprovisioning_state: ReProvisioningState::WaitingForNVOSUpgrade,
+        },
+        RackMaintenanceState::ConfigureNmxCluster { .. } => SwitchControllerState::ReProvisioning {
+            reprovisioning_state: ReProvisioningState::WaitingForNMXCConfigure,
+        },
+        _ => SwitchControllerState::Ready,
+    }
+}
+
+/// Same idea as [`switch_completion_state_after_firmware`], but for the
+/// `NVOSUpdate` phase: switches either park waiting for NMX-C or return to
+/// `Ready` when no further switch-touching phase is in scope.
+fn switch_completion_state_after_nvos(scope: &MaintenanceScope) -> SwitchControllerState {
+    match next_state_after_nvos(scope) {
+        RackMaintenanceState::ConfigureNmxCluster { .. } => SwitchControllerState::ReProvisioning {
+            reprovisioning_state: ReProvisioningState::WaitingForNMXCConfigure,
+        },
+        _ => SwitchControllerState::Ready,
+    }
+}
+
+/// Switches always land in `Ready` after `ConfigureNmxCluster` -- nothing
+/// downstream of NMX-C touches switch state. The scope is accepted for
+/// symmetry with the other phases.
+fn switch_completion_state_after_configure(_scope: &MaintenanceScope) -> SwitchControllerState {
+    SwitchControllerState::Ready
+}
+
+/// Counts the rack's switches that participate in the current maintenance
+/// scope and classifies each by controller state:
+///
+/// * `total` -- switches included in the scope (full-rack or
+///   `scope.switch_ids`).
+/// * `completed` -- switches whose `controller_state` matches `expected`
+///   (typically the state derived from
+///   [`switch_completion_state_after_firmware`] /
+///   [`switch_completion_state_after_nvos`] /
+///   [`switch_completion_state_after_configure`]).
+/// * `failed` -- switches sitting in `SwitchControllerState::Error`.
+///
+/// Switches in any other state are still in flight; they're counted in
+/// `total` but not in `completed` or `failed`.
+async fn count_switches_for_phase(
+    conn: &mut sqlx::PgConnection,
+    rack_id: &RackId,
+    scope: &MaintenanceScope,
+    expected: &SwitchControllerState,
+) -> Result<(usize, usize, usize), StateHandlerError> {
+    let scoped: std::collections::HashSet<_> = scope.switch_ids.iter().collect();
+    let rack_switch_ids = db_switch::find_ids(
+        &mut *conn,
+        SwitchSearchFilter {
+            rack_id: Some(rack_id.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    let mut total = 0usize;
+    let mut completed = 0usize;
+    let mut failed = 0usize;
+    for switch_id in &rack_switch_ids {
+        if !scope.is_full_rack() && !scoped.contains(switch_id) {
+            continue;
+        }
+        total += 1;
+        let Some(switch) = db_switch::find_by_id(&mut *conn, switch_id).await? else {
+            continue;
+        };
+        if matches!(
+            switch.controller_state.value,
+            SwitchControllerState::Error { .. }
+        ) {
+            failed += 1;
+        } else if &switch.controller_state.value == expected {
+            completed += 1;
+        }
+    }
+    Ok((total, completed, failed))
+}
+
+/// Counts the rack's machines participating in the current firmware-upgrade
+/// scope, classified by top-level controller-state tag.
+///
+/// Machines only take part in the `FirmwareUpgrade` phase, after which they
+/// return to `"ready"` regardless of which subsequent rack phase the scope
+/// selects -- so the expected completion tag is always `"ready"`.
+async fn count_machines_for_firmware_phase(
+    conn: &mut sqlx::PgConnection,
+    rack_id: &RackId,
+    scope: &MaintenanceScope,
+) -> Result<(usize, usize, usize), StateHandlerError> {
+    let scoped: std::collections::HashSet<_> = scope.machine_ids.iter().collect();
+    let in_scope =
+        |m: &&carbide_uuid::machine::MachineId| scope.is_full_rack() || scoped.contains(*m);
+    let search = |state: Option<&str>| MachineSearchConfig {
+        rack_id: Some(rack_id.clone()),
+        include_dpus: true,
+        include_predicted_host: true,
+        controller_state: state.map(Into::into),
+        ..Default::default()
+    };
+    let total = db_machine::find_machine_ids(&mut *conn, search(None))
+        .await?
+        .iter()
+        .filter(in_scope)
+        .count();
+    let completed = db_machine::find_machine_ids(&mut *conn, search(Some("ready")))
+        .await?
+        .iter()
+        .filter(in_scope)
+        .count();
+    // ManagedHostState::Failed serializes as state="failed" (see
+    // ManagedHostState's `#[serde(tag = "state", rename_all = "lowercase")]`).
+    // Machines never reach a state="error" tag; using it here would silently
+    // count zero failed machines. This matches `ready.rs::MACHINE_FAILED_STATE`.
+    let failed = db_machine::find_machine_ids(&mut *conn, search(Some("failed")))
+        .await?
+        .iter()
+        .filter(in_scope)
+        .count();
+    Ok((total, completed, failed))
+}
+
+/// Counts the rack's power shelves participating in the current firmware-
+/// upgrade scope, classified by top-level controller-state tag.
+///
+/// Power shelves only participate in `FirmwareUpgrade`; there is no
+/// downstream phase that touches power-shelf state, so the expected
+/// completion tag is always `"ready"`.
+async fn count_power_shelves_for_firmware_phase(
+    conn: &mut sqlx::PgConnection,
+    rack_id: &RackId,
+    scope: &MaintenanceScope,
+) -> Result<(usize, usize, usize), StateHandlerError> {
+    let scoped: std::collections::HashSet<_> = scope.power_shelf_ids.iter().collect();
+    let in_scope =
+        |p: &&carbide_uuid::power_shelf::PowerShelfId| scope.is_full_rack() || scoped.contains(*p);
+    let search = |state: Option<&str>| PowerShelfSearchFilter {
+        rack_id: Some(rack_id.clone()),
+        controller_state: state.map(Into::into),
+        ..Default::default()
+    };
+    let total = db_power_shelf::find_ids(&mut *conn, search(None))
+        .await?
+        .iter()
+        .filter(in_scope)
+        .count();
+    let completed = db_power_shelf::find_ids(&mut *conn, search(Some("ready")))
+        .await?
+        .iter()
+        .filter(in_scope)
+        .count();
+    let failed = db_power_shelf::find_ids(&mut *conn, search(Some("error")))
+        .await?
+        .iter()
+        .filter(in_scope)
+        .count();
+    Ok((total, completed, failed))
 }
 
 /// Returns the first maintenance sub-state to enter based on the requested
@@ -1290,18 +1462,6 @@ pub async fn handle_maintenance(
                 let mut job =
                     rms_get_firmware_upgrade_status(rms_client.as_ref(), current_job).await?;
 
-                let all: Vec<_> = job.all_devices().collect();
-                let total = all.len();
-                let completed = all.iter().filter(|d| d.status == "completed").count();
-                let failed = all.iter().filter(|d| d.status == "failed").count();
-                let terminal = completed + failed;
-                let default_nvos_artifact =
-                    if terminal == total && failed == 0 && implicit_nvos_update_requested(scope) {
-                        resolve_default_nvos_artifact(id, rack_profile_id, ctx).await?
-                    } else {
-                        None
-                    };
-
                 let mut txn = ctx.services.db_pool.begin().await?;
 
                 let build_status =
@@ -1388,6 +1548,30 @@ pub async fn handle_maintenance(
                         .await?;
                     }
                 }
+
+                let (machine_total, machine_completed, machine_failed) =
+                    count_machines_for_firmware_phase(txn.as_mut(), id, scope).await?;
+                let (switch_total, switch_completed, switch_failed) = count_switches_for_phase(
+                    txn.as_mut(),
+                    id,
+                    scope,
+                    &switch_completion_state_after_firmware(scope),
+                )
+                .await?;
+                let (power_shelf_total, power_shelf_completed, power_shelf_failed) =
+                    count_power_shelves_for_firmware_phase(txn.as_mut(), id, scope).await?;
+
+                let total = machine_total + switch_total + power_shelf_total;
+                let failed = machine_failed + switch_failed + power_shelf_failed;
+                let completed = machine_completed + switch_completed + power_shelf_completed;
+                let terminal = completed + failed;
+                let default_nvos_artifact =
+                    if terminal == total && failed == 0 && implicit_nvos_update_requested(scope) {
+                        resolve_default_nvos_artifact(id, rack_profile_id, txn.as_mut(), ctx)
+                            .await?
+                    } else {
+                        None
+                    };
 
                 if terminal < total {
                     db_rack::update_firmware_upgrade_job(txn.as_mut(), id, Some(&job)).await?;
@@ -1665,15 +1849,13 @@ pub async fn handle_maintenance(
                     }
                 }
 
-                let total = job.all_switches().count();
-                let completed = job
-                    .all_switches()
-                    .filter(|switch| switch.status == "completed")
-                    .count();
-                let failed = job
-                    .all_switches()
-                    .filter(|switch| switch.status == "failed")
-                    .count();
+                let (total, completed, failed) = count_switches_for_phase(
+                    txn.as_mut(),
+                    id,
+                    scope,
+                    &switch_completion_state_after_nvos(scope),
+                )
+                .await?;
 
                 if failed > 0 {
                     db_rack::update_nvos_update_job(txn.as_mut(), id, Some(&job)).await?;
@@ -1934,10 +2116,42 @@ pub async fn handle_maintenance(
                     drop(txn);
                     return transition_to_rack_error(id, state, cause, ctx).await;
                 }
+
+                let (total, completed, failed) = count_switches_for_phase(
+                    txn.as_mut(),
+                    id,
+                    scope,
+                    &switch_completion_state_after_configure(scope),
+                )
+                .await?;
+
+                if failed > 0 {
+                    if state.config.maintenance_requested.is_some() {
+                        state.config.maintenance_requested = None;
+                        db_rack::update(txn.as_mut(), id, &state.config).await?;
+                    }
+                    return Ok(StateHandlerOutcome::transition(RackState::Error {
+                        cause: format!(
+                            "ConfigureNmxCluster failed: {}/{} switches failed",
+                            failed, total
+                        ),
+                    })
+                    .with_txn(txn));
+                }
+
+                if completed < total {
+                    return Ok(StateHandlerOutcome::wait(format!(
+                        "configure_nmx_cluster: {}/{} switches completed",
+                        completed, total
+                    ))
+                    .with_txn(txn));
+                }
+
                 let next = next_state_after_configure(scope);
                 tracing::info!(
                     rack_id = %id,
-                    switch_count = switch_inventory.switches.len(),
+                    switch_count = total,
+                    completed,
                     next_state = %next,
                     "WaitForFabricStatus complete, FabricManager status persisted, advancing"
                 );
@@ -1998,10 +2212,13 @@ mod tests {
         MaintenanceActivity, MaintenanceScope, NvosUpdateState, RackMaintenanceState,
         RackPowerState,
     };
+    use model::switch::{ReProvisioningState, SwitchControllerState};
 
     use super::{
         filter_inventory_by_scope, first_maintenance_state, implicit_nvos_update_requested,
         next_state_after_configure, next_state_after_firmware, next_state_after_nvos,
+        switch_completion_state_after_configure, switch_completion_state_after_firmware,
+        switch_completion_state_after_nvos,
     };
     use crate::rack::firmware_update::RackFirmwareInventory;
 
@@ -2373,5 +2590,221 @@ mod tests {
         let filtered = filter_inventory_by_scope(inventory, &scope);
         assert!(filtered.machine_ids.is_empty());
         assert!(filtered.machines.is_empty());
+    }
+
+    // ── switch_completion_state_after_firmware ──────────────────────────
+
+    #[test]
+    fn switch_completion_after_firmware_all_activities_waits_for_nvos() {
+        let scope = MaintenanceScope::default();
+        assert_eq!(
+            switch_completion_state_after_firmware(&scope),
+            SwitchControllerState::ReProvisioning {
+                reprovisioning_state: ReProvisioningState::WaitingForNVOSUpgrade,
+            },
+        );
+    }
+
+    #[test]
+    fn switch_completion_after_firmware_skipping_nvos_waits_for_nmxc() {
+        let scope = MaintenanceScope {
+            activities: vec![
+                MaintenanceActivity::FirmwareUpgrade {
+                    firmware_version: None,
+                    components: vec![],
+                },
+                MaintenanceActivity::ConfigureNmxCluster,
+            ],
+            ..Default::default()
+        };
+        assert_eq!(
+            switch_completion_state_after_firmware(&scope),
+            SwitchControllerState::ReProvisioning {
+                reprovisioning_state: ReProvisioningState::WaitingForNMXCConfigure,
+            },
+        );
+    }
+
+    #[test]
+    fn switch_completion_after_firmware_only_firmware_goes_ready() {
+        let scope = MaintenanceScope {
+            activities: vec![MaintenanceActivity::FirmwareUpgrade {
+                firmware_version: None,
+                components: vec![],
+            }],
+            ..Default::default()
+        };
+        assert_eq!(
+            switch_completion_state_after_firmware(&scope),
+            SwitchControllerState::Ready,
+        );
+    }
+
+    #[test]
+    fn switch_completion_after_firmware_skipping_switch_phases_goes_ready() {
+        // PowerSequence doesn't touch switch state; with no NVOS / NMX-C in
+        // scope the switch should land back in Ready.
+        let scope = MaintenanceScope {
+            activities: vec![
+                MaintenanceActivity::FirmwareUpgrade {
+                    firmware_version: None,
+                    components: vec![],
+                },
+                MaintenanceActivity::PowerSequence,
+            ],
+            ..Default::default()
+        };
+        assert_eq!(
+            switch_completion_state_after_firmware(&scope),
+            SwitchControllerState::Ready,
+        );
+    }
+
+    // ── switch_completion_state_after_nvos ──────────────────────────────
+
+    #[test]
+    fn switch_completion_after_nvos_all_activities_waits_for_nmxc() {
+        let scope = MaintenanceScope::default();
+        assert_eq!(
+            switch_completion_state_after_nvos(&scope),
+            SwitchControllerState::ReProvisioning {
+                reprovisioning_state: ReProvisioningState::WaitingForNMXCConfigure,
+            },
+        );
+    }
+
+    #[test]
+    fn switch_completion_after_nvos_with_explicit_nmxc_waits_for_nmxc() {
+        let scope = MaintenanceScope {
+            activities: vec![
+                MaintenanceActivity::NvosUpdate {
+                    rack_firmware_id: None,
+                },
+                MaintenanceActivity::ConfigureNmxCluster,
+            ],
+            ..Default::default()
+        };
+        assert_eq!(
+            switch_completion_state_after_nvos(&scope),
+            SwitchControllerState::ReProvisioning {
+                reprovisioning_state: ReProvisioningState::WaitingForNMXCConfigure,
+            },
+        );
+    }
+
+    #[test]
+    fn switch_completion_after_nvos_only_nvos_goes_ready() {
+        let scope = MaintenanceScope {
+            activities: vec![MaintenanceActivity::NvosUpdate {
+                rack_firmware_id: None,
+            }],
+            ..Default::default()
+        };
+        assert_eq!(
+            switch_completion_state_after_nvos(&scope),
+            SwitchControllerState::Ready,
+        );
+    }
+
+    #[test]
+    fn switch_completion_after_nvos_without_nmxc_goes_ready() {
+        let scope = MaintenanceScope {
+            activities: vec![
+                MaintenanceActivity::NvosUpdate {
+                    rack_firmware_id: None,
+                },
+                MaintenanceActivity::PowerSequence,
+            ],
+            ..Default::default()
+        };
+        assert_eq!(
+            switch_completion_state_after_nvos(&scope),
+            SwitchControllerState::Ready,
+        );
+    }
+
+    // ── switch_completion_state_after_configure ─────────────────────────
+
+    #[test]
+    fn switch_completion_after_configure_full_rack_goes_ready() {
+        let scope = MaintenanceScope::default();
+        assert_eq!(
+            switch_completion_state_after_configure(&scope),
+            SwitchControllerState::Ready,
+        );
+    }
+
+    #[test]
+    fn switch_completion_after_configure_with_power_sequence_goes_ready() {
+        let scope = MaintenanceScope {
+            activities: vec![
+                MaintenanceActivity::ConfigureNmxCluster,
+                MaintenanceActivity::PowerSequence,
+            ],
+            ..Default::default()
+        };
+        assert_eq!(
+            switch_completion_state_after_configure(&scope),
+            SwitchControllerState::Ready,
+        );
+    }
+
+    #[test]
+    fn switch_completion_after_configure_only_configure_goes_ready() {
+        let scope = MaintenanceScope {
+            activities: vec![MaintenanceActivity::ConfigureNmxCluster],
+            ..Default::default()
+        };
+        assert_eq!(
+            switch_completion_state_after_configure(&scope),
+            SwitchControllerState::Ready,
+        );
+    }
+
+    #[test]
+    fn switch_completion_states_align_with_next_state_helpers() {
+        // Sanity check: the completion-state helpers should agree with the
+        // next_state_after_* helpers about whether a downstream switch-touching
+        // phase exists. This guards against the two helper families drifting.
+        let scope = MaintenanceScope::default();
+
+        let firmware_completion = switch_completion_state_after_firmware(&scope);
+        let after_firmware = next_state_after_firmware(&scope);
+        match after_firmware {
+            RackMaintenanceState::NVOSUpdate { .. } => assert_eq!(
+                firmware_completion,
+                SwitchControllerState::ReProvisioning {
+                    reprovisioning_state: ReProvisioningState::WaitingForNVOSUpgrade,
+                },
+            ),
+            RackMaintenanceState::ConfigureNmxCluster { .. } => assert_eq!(
+                firmware_completion,
+                SwitchControllerState::ReProvisioning {
+                    reprovisioning_state: ReProvisioningState::WaitingForNMXCConfigure,
+                },
+            ),
+            _ => assert_eq!(firmware_completion, SwitchControllerState::Ready),
+        }
+
+        let nvos_completion = switch_completion_state_after_nvos(&scope);
+        let after_nvos = next_state_after_nvos(&scope);
+        match after_nvos {
+            RackMaintenanceState::ConfigureNmxCluster { .. } => assert_eq!(
+                nvos_completion,
+                SwitchControllerState::ReProvisioning {
+                    reprovisioning_state: ReProvisioningState::WaitingForNMXCConfigure,
+                },
+            ),
+            _ => assert_eq!(nvos_completion, SwitchControllerState::Ready),
+        }
+
+        // ConfigureNmxCluster is always terminal for switch state.
+        assert_eq!(
+            switch_completion_state_after_configure(&scope),
+            SwitchControllerState::Ready,
+        );
+        // next_state_after_configure may still advance the rack (e.g. into
+        // PowerSequence) but switches don't care.
+        let _ = next_state_after_configure(&scope);
     }
 }
