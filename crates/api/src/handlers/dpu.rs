@@ -198,14 +198,24 @@ pub(crate) async fn get_managed_host_network_config_inner(
         api.runtime_config.arm_pxe_boot_url_override.clone()
     };
 
+    let admin_vpc_routing_profile = api
+        .runtime_config
+        .fnn
+        .as_ref()
+        .and_then(|f| f.admin_vpc.as_ref())
+        .map(|v| &v.routing_profile);
+
     let (admin_interface_rpc, host_interface_id) = ethernet_virtualization::admin_network(
         &mut txn,
         &snapshot,
         &dpu_snapshot.id,
-        use_fnn_over_admin_nw,
-        &api.common_pools,
-        &booturl_override,
-        use_vpc_vrf_loopback,
+        ethernet_virtualization::AdminNetworkOptions {
+            fnn_enabled: use_fnn_over_admin_nw,
+            common_pools: &api.common_pools,
+            booturl: &booturl_override,
+            use_vpc_vrf_loopback,
+            routing_profile: admin_vpc_routing_profile,
+        },
     )
     .await?;
 
@@ -216,21 +226,12 @@ pub(crate) async fn get_managed_host_network_config_inner(
         None
     };
 
-    let admin_vpc_routing_profile = api
-        .runtime_config
-        .fnn
-        .as_ref()
-        .and_then(|f| f.admin_vpc.as_ref())
-        .map(|v| &v.routing_profile);
-
-    let (routing_profile, tenant_interfaces) = match &snapshot.instance {
-        None => (admin_vpc_routing_profile, vec![]),
+    let tenant_interfaces = match &snapshot.instance {
+        None => vec![],
         // We don't support secondary DPU yet.
         // If admin network is to be used for this managedhost, why to send old tenant data, which
         // is just to be deleted.
-        Some(_instance) if use_admin_network => {
-            (admin_vpc_routing_profile, vec![])
-        }
+        Some(_instance) if use_admin_network => vec![],
         Some(_instance)
             // If instance is waiting for network segment to come up in READY state, stay on admin
             // network.
@@ -243,7 +244,7 @@ pub(crate) async fn get_managed_host_network_config_inner(
         {
             // Should/Can we still query and return the NSG of the VPC so that
             // policies can be configured on the DPU while interfaces are still coming up?
-            (admin_vpc_routing_profile, vec![])
+            vec![]
         }
         Some(instance) => {
             let interfaces = &instance.config.network.interfaces;
@@ -254,35 +255,6 @@ pub(crate) async fn get_managed_host_network_config_inner(
             };
             let vpc = db::vpc::find_by_segment(&mut txn, network_segment_id)
                 .await?;
-
-            // We probably shouldn't allow multiple interfaces that are in different VPCs with
-            // different routing-profiles.  Even in the case of something like a GW instance,
-            // We should probably require that all tenants/vpcs being serviced have a routing profile
-            // that matches the GW instance.
-            // However, if we decide to allow total mixing-and-matching, then this would need to move into
-            // tenant_network() and the profile details would have to move into the flattened interface details.
-            let routing_profile =  if vpc.network_virtualization_type == VpcVirtualizationType::Fnn {
-                api
-                    .runtime_config
-                    .fnn
-                    .as_ref()
-                    .map(|f| {
-                        let Some(profile_type) = vpc.routing_profile_type else {
-                            return Err(CarbideError::Internal{ message: "tenant routing profile type not found in tenant record".to_string()});
-                        };
-
-                        let Some(profile) = f.routing_profiles.get(&profile_type) else {
-                            return Err(CarbideError::NotFoundError {
-                                kind: "routing profile type found in tenant record is not defined",
-                                id: profile_type,
-                            });
-                        };
-                    Ok(profile)
-                })
-                .transpose()?
-            } else {
-                None
-            };
 
             network_virtualization_type = vpc.network_virtualization_type;
 
@@ -426,32 +398,42 @@ pub(crate) async fn get_managed_host_network_config_inner(
                     format!("{dashed_ip}.{domain}")
                 };
 
-                let tenant_interface =
-                    ethernet_virtualization::tenant_network(
-                        &mut txn,
-                        instance.id,
-                        iface,
-                        fqdn,
-                        // DPU agent reads loopback ip only from 0th interface.
-                        // function build in nvue.rs
-                        tenant_loopback_ip.clone(),
-                        network_virtualization_type,
-                        suppress_tenant_security_groups,
-                        network_security_group_details.clone(),
-                        segment,
-                        match api.runtime_config.vpc_peering_policy_on_existing {
-                            None => api.runtime_config.vpc_peering_policy,
-                            Some(vpc_peering_policy) => Some(vpc_peering_policy)
-                        },
-                        &booturl_override,
+                let tenant_interface = ethernet_virtualization::tenant_network(
+                    &mut txn,
+                    instance.id,
+                    iface,
+                    fqdn,
+                    // DPU agent reads loopback ip only from 0th interface.
+                    // function build in nvue.rs
+                    tenant_loopback_ip.clone(),
+                    network_virtualization_type,
+                    suppress_tenant_security_groups,
+                    network_security_group_details.clone(),
+                    segment,
+                    match api.runtime_config.vpc_peering_policy_on_existing {
+                        None => api.runtime_config.vpc_peering_policy,
+                        Some(vpc_peering_policy) => Some(vpc_peering_policy),
+                    },
+                    &booturl_override,
+                    api.runtime_config.fnn.as_ref(),
                 )
                 .await?;
 
                 tenant_interfaces.push(tenant_interface);
             }
 
-            (routing_profile, tenant_interfaces)
+            tenant_interfaces
         }
+    };
+
+    // Deprecated compatibility field for DPU agents that do not yet read
+    // FlatInterfaceConfig.routing_profile.
+    let deprecated_routing_profile = if tenant_interfaces.is_empty() {
+        admin_vpc_routing_profile.map(rpc::RoutingProfile::from)
+    } else {
+        tenant_interfaces
+            .first()
+            .and_then(|interface| interface.routing_profile.clone())
     };
 
     let network_config = build_consolidated_network_config(
@@ -671,41 +653,7 @@ pub(crate) async fn get_managed_host_network_config_inner(
                     vni: rt.vni,
                 })
         }),
-        routing_profile: routing_profile.map(|p| rpc::RoutingProfile {
-            tenant_leak_communities_accepted: p.tenant_leak_communities_accepted,
-            leak_default_route_from_underlay: p.leak_default_route_from_underlay,
-            leak_tenant_host_routes_to_underlay: p.leak_tenant_host_routes_to_underlay,
-            accepted_leaks_from_underlay: p
-                .accepted_leaks_from_underlay
-                .iter()
-                .map(|l| rpc::PrefixFilterPolicyEntry {
-                    prefix: l.prefix.to_string(),
-                })
-                .collect(),
-            allowed_anycast_prefixes: p
-                .allowed_anycast_prefixes
-                .iter()
-                .map(|l| rpc::PrefixFilterPolicyEntry {
-                    prefix: l.prefix.to_string(),
-                })
-                .collect(),
-            route_target_imports: p
-                .route_target_imports
-                .iter()
-                .map(|rt| rpc_common::RouteTarget {
-                    asn: rt.asn,
-                    vni: rt.vni,
-                })
-                .collect(),
-            route_targets_on_exports: p
-                .route_targets_on_exports
-                .iter()
-                .map(|rt| rpc_common::RouteTarget {
-                    asn: rt.asn,
-                    vni: rt.vni,
-                })
-                .collect(),
-        }),
+        routing_profile: deprecated_routing_profile,
         traffic_intercept_config: api.runtime_config.vmaas_config.as_ref().map(|c| {
             rpc::TrafficInterceptConfig {
                 bridging: c.bridging.as_ref().map(|b| rpc::TrafficInterceptBridging {
