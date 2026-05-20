@@ -44,7 +44,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          HELM_VERSION="${VERSION#v}"
+          HELM_VERSION_BASE="${VERSION#v}"
+          HELM_VERSION="$(echo "${HELM_VERSION_BASE}" | sed 's/\(.*\)-/\1./')"
 
           echo "helm_version=${HELM_VERSION}" >> "$GITHUB_OUTPUT"
           echo "Promoting chart version ${HELM_VERSION} from release ${VERSION}"

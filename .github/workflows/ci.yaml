@@ -150,27 +150,16 @@ jobs:
 
           set -euo pipefail
 
-          # Get short SHA
+          git fetch --tags --force
           SHORT_SHA=$(git rev-parse --short=7 HEAD)
           echo "short_sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
-
-          VERSION_FILE="VERSION"
-          if [ ! -f "$VERSION_FILE" ]; then
-            VERSION_FILE="rest-api/VERSION"
-          fi
-
-          if [ ! -f "$VERSION_FILE" ]; then
-            echo "::error::VERSION file not found"
-            exit 1
-          fi
-
-          SEMANTIC_VERSION=$(grep -v '^#' "$VERSION_FILE" | tr -d '[:space:]')
-          VERSION="${SEMANTIC_VERSION}-${SHORT_SHA}"
-          HELM_VERSION="${VERSION}"
+          echo "Using Git describe to extract version as VERSION and HELM_VERSION"
+          VERSION=$(git describe --tags --first-parent --always --long)
+          HELM_VERSION_BASE="${VERSION#v}"
+          HELM_VERSION=$(echo "$HELM_VERSION_BASE" | sed 's/\(.*\)-/\1./')
 
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "helm_version=${HELM_VERSION}" >> $GITHUB_OUTPUT
-          echo "Using ${VERSION_FILE} to calculate VERSION and HELM_VERSION"
           echo "Calculated VERSION: ${VERSION}"
           echo "Calculated HELM_VERSION: ${HELM_VERSION}"
 
