@@ -27,6 +27,7 @@ const TMPL_BRIDGING: &str = include_str!("../templates/update_intercept_bridging
 // What we need for the commands to configure the bridge.
 pub struct TrafficInterceptBridgingConfig {
     pub secondary_overlay_vtep_ip: String,
+    pub secondary_vtep_aggregate_prefixes: Vec<String>,
     pub vf_intercept_bridge_ip: String,
     pub vf_intercept_bridge_name: String,
     pub intercept_bridge_prefix_len: u8,
@@ -40,6 +41,7 @@ pub struct TrafficInterceptBridgingConfig {
 #[derive(Clone, Gtmpl, Debug)]
 struct TmplTrafficInterceptBridging {
     SecondaryOverlayVtepIP: String,
+    SecondaryVtepAggregatePrefixes: Vec<String>,
     VfInterceptBridgeIP: String,
     VfInterceptBridgeName: String,
     InterceptBridgePrefixLen: u8,
@@ -48,6 +50,7 @@ struct TmplTrafficInterceptBridging {
 pub fn build(conf: TrafficInterceptBridgingConfig) -> eyre::Result<String> {
     let params = TmplTrafficInterceptBridging {
         SecondaryOverlayVtepIP: conf.secondary_overlay_vtep_ip,
+        SecondaryVtepAggregatePrefixes: conf.secondary_vtep_aggregate_prefixes,
         VfInterceptBridgeIP: conf.vf_intercept_bridge_ip,
         VfInterceptBridgeName: conf.vf_intercept_bridge_name,
         InterceptBridgePrefixLen: conf.intercept_bridge_prefix_len,

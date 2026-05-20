@@ -717,6 +717,11 @@ pub(crate) async fn get_managed_host_network_config_inner(
                     vf_intercept_bridge_sf: b.vf_intercept_bridge_sf.clone(),
                 }),
                 public_prefixes: c.public_prefixes.iter().map(|p| p.to_string()).collect(),
+                secondary_vtep_aggregate_prefixes: c
+                    .secondary_vtep_aggregate_prefixes
+                    .iter()
+                    .map(|p| p.to_string())
+                    .collect(),
                 additional_overlay_vtep_ip: dpu_snapshot
                     .network_config
                     .secondary_overlay_vtep_ip

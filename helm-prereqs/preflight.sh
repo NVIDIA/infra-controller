@@ -71,6 +71,45 @@ _SOURCED=false
 ERRORS=()
 WARNINGS=()
 
+_CORE_VALUES_CFG="${CORE_VALUES:-${SCRIPT_DIR}/values/nico-core.yaml}"
+_CORE_VALUES_LABEL="${CORE_VALUES:-values/nico-core.yaml}"
+_CORE_IMAGE_PULL_SECRETS=""
+
+_collect_image_pull_secret_names() {
+    awk '
+        /^[[:space:]]*#/ { next }
+        /^[[:space:]]*imagePullSecrets:[[:space:]]*($|#)/ {
+            in_block = 1
+            block_indent = match($0, /[^ ]/) - 1
+            next
+        }
+        in_block {
+            if ($0 ~ /^[[:space:]]*($|#)/) next
+            current_indent = match($0, /[^ ]/) - 1
+            if (current_indent <= block_indent && $0 !~ /^[[:space:]]*-[[:space:]]*/) {
+                in_block = 0
+                next
+            }
+            if ($0 ~ /^[[:space:]]*-[[:space:]]*name:[[:space:]]*/) {
+                name = $0
+                sub(/^[[:space:]]*-[[:space:]]*name:[[:space:]]*/, "", name)
+                sub(/[[:space:]]*#.*$/, "", name)
+                gsub(/["\047]/, "", name)
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
+                if (length(name) > 0) print name
+            }
+        }
+    ' "$1" | sort -u
+}
+
+if [[ "${SKIP_CORE:-false}" != "true" ]]; then
+    if [[ -f "${_CORE_VALUES_CFG}" ]]; then
+        _CORE_IMAGE_PULL_SECRETS="$(_collect_image_pull_secret_names "${_CORE_VALUES_CFG}")"
+    else
+        ERRORS+=("${_CORE_VALUES_LABEL} not found — pass --core-values <file> or restore helm-prereqs/values/nico-core.yaml")
+    fi
+fi
+
 # ---------------------------------------------------------------------------
 # Cleanup: remove any temp pods created by per-node checks
 # ---------------------------------------------------------------------------
@@ -86,16 +125,23 @@ _cleanup_preflight_pods() {
 # ---------------------------------------------------------------------------
 # 1. Environment variables — presence
 # ---------------------------------------------------------------------------
-[[ -z "${REGISTRY_PULL_SECRET:-}" ]] && \
-    ERRORS+=("REGISTRY_PULL_SECRET is not set  (your registry pull secret / API key)")
+if [[ -z "${REGISTRY_PULL_SECRET:-}" ]]; then
+    if [[ "${SKIP_CORE:-false}" == "true" && "${SKIP_REST:-false}" == "true" ]]; then
+        WARNINGS+=("REGISTRY_PULL_SECRET is not set  (imagepullsecret creation will be skipped)")
+    else
+        WARNINGS+=("REGISTRY_PULL_SECRET is not set  (setup.sh will not create imagepullsecret; images must be public, preloaded, or use existing imagePullSecrets)")
+    fi
+fi
 
-[[ -z "${NICO_IMAGE_REGISTRY:-}" ]] && \
-    ERRORS+=("NICO_IMAGE_REGISTRY is not set    (container registry, e.g. my-registry.example.com/ncx)")
+if [[ "${SKIP_CORE:-false}" != "true" || "${SKIP_REST:-false}" != "true" ]]; then
+    [[ -z "${NICO_IMAGE_REGISTRY:-}" ]] && \
+        ERRORS+=("NICO_IMAGE_REGISTRY is not set    (container registry, e.g. my-registry.example.com/nico)")
+fi
 
-[[ -z "${NICO_CORE_IMAGE_TAG:-}" ]] && \
+[[ "${SKIP_CORE:-false}" != "true" && -z "${NICO_CORE_IMAGE_TAG:-}" ]] && \
     ERRORS+=("NICO_CORE_IMAGE_TAG is not set    (NICo Core image tag, e.g. v2025.12.30)")
 
-[[ -z "${NICO_REST_IMAGE_TAG:-}" ]] && \
+[[ "${SKIP_REST:-false}" != "true" && -z "${NICO_REST_IMAGE_TAG:-}" ]] && \
     ERRORS+=("NICO_REST_IMAGE_TAG is not set    (NICo REST image tag, e.g. v1.0.4)")
 
 # Environment variables — format validation
@@ -105,14 +151,6 @@ _UUID_RE='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-
 if [[ -n "${NICO_IMAGE_REGISTRY:-}" ]] && [[ "${NICO_IMAGE_REGISTRY}" =~ ^https?:// ]]; then
     ERRORS+=("NICO_IMAGE_REGISTRY must not include a protocol prefix — remove 'https://' or 'http://'")
 fi
-
-# Image tags should look like version tags (v<semver>)
-for _tag_var in NICO_CORE_IMAGE_TAG NICO_REST_IMAGE_TAG; do
-    _tag_val="${!_tag_var:-}"
-    if [[ -n "${_tag_val}" && ! "${_tag_val}" =~ ^v[0-9] ]]; then
-        WARNINGS+=("${_tag_var}='${_tag_val}' — expected a version tag starting with 'v' (e.g. v2025.12.30)")
-    fi
-done
 
 # NICO_SITE_UUID must be a valid UUID if set (used as Temporal namespace + CLUSTER_ID)
 if [[ -n "${NICO_SITE_UUID:-}" ]]; then
@@ -144,53 +182,68 @@ done
 # ---------------------------------------------------------------------------
 # 3. values/metallb-config.yaml — static checks (no cluster access needed)
 # ---------------------------------------------------------------------------
-_METALLB_CFG="${SCRIPT_DIR}/values/metallb-config.yaml"
+_METALLB_CFG="${METALLB_CONFIG:-${SCRIPT_DIR}/values/metallb-config.yaml}"
+_METALLB_CFG_LABEL="${METALLB_CONFIG:-values/metallb-config.yaml}"
+_METALLB_RENDERED=""
 
-if [[ ! -f "${_METALLB_CFG}" ]]; then
-    ERRORS+=("values/metallb-config.yaml not found — restore from git and fill in your site config")
+if [[ ! -e "${_METALLB_CFG}" ]]; then
+    ERRORS+=("${_METALLB_CFG_LABEL} not found — restore from git or pass --metallb-config")
 else
-    # YAML syntax — kubectl dry-run with validate=false. Only report a real
-    # error when kubectl exits non-zero AND the failure isn't one of the
-    # benign "CRDs not installed yet" messages.
+    # Render once, then validate the same effective manifest that setup.sh applies.
     if command -v kubectl &>/dev/null; then
-        # Capture exit code without tripping `set -e` from setup.sh.
-        _yaml_rc=0
-        _yaml_out="$(kubectl apply --dry-run=client --validate=false \
-            -f "${_METALLB_CFG}" 2>&1)" || _yaml_rc=$?
-        if [[ "${_yaml_rc}" -ne 0 ]]; then
+        if [[ -d "${_METALLB_CFG}" ]]; then
+            _METALLB_RENDERED="$(kubectl kustomize "${_METALLB_CFG}" 2>/dev/null)" || \
+                ERRORS+=("${_METALLB_CFG_LABEL}: kustomize render failed")
+        else
+            _METALLB_RENDERED="$(cat "${_METALLB_CFG}")"
+        fi
+        # YAML syntax — kubectl dry-run with validate=false, but filter out
+        # API discovery errors. MetalLB CRDs may not be installed yet, and
+        # cluster reachability is checked separately below.
+        if [[ -n "${_METALLB_RENDERED}" ]]; then
+            _yaml_out="$(printf '%s\n' "${_METALLB_RENDERED}" | \
+                kubectl apply --dry-run=client --validate=false -f - 2>&1)" || true
             _yaml_real_errors="$(echo "${_yaml_out}" | \
-                grep -vE 'no matches for kind|resource mapping not found|ensure CRDs are installed|created \(dry run\)|configured \(dry run\)|unchanged \(dry run\)' || true)"
+                grep -Ei 'error:|unable to|invalid|yaml|json|cannot|could not|failed|no matches for kind|resource mapping not found|ensure CRDs are installed|couldn.t get current server API group list|The connection to the server|dial tcp|i/o timeout|context deadline exceeded|no route to host|network is unreachable|connect: connection refused' | \
+                grep -vE 'no matches for kind|resource mapping not found|ensure CRDs are installed|couldn.t get current server API group list|unable to recognize .*: Get |The connection to the server|Unable to connect to the server|dial tcp|i/o timeout|context deadline exceeded|no route to host|network is unreachable|connect: connection refused' || true)"
             if [[ -n "${_yaml_real_errors}" ]]; then
-                ERRORS+=("values/metallb-config.yaml: YAML parse error — ${_yaml_real_errors}")
+                ERRORS+=("${_METALLB_CFG_LABEL}: YAML parse error — ${_yaml_real_errors}")
             fi
         fi
+    elif [[ -f "${_METALLB_CFG}" ]]; then
+        _METALLB_RENDERED="$(cat "${_METALLB_CFG}")"
+    else
+        WARNINGS+=("${_METALLB_CFG_LABEL}: cannot render kustomize directory because kubectl is not available")
     fi
 
     # At least one active IPAddressPool
-    if ! grep -qE '^kind: IPAddressPool' "${_METALLB_CFG}"; then
-        ERRORS+=("values/metallb-config.yaml: no IPAddressPool defined")
+    if [[ -n "${_METALLB_RENDERED}" ]] && \
+       ! printf '%s\n' "${_METALLB_RENDERED}" | grep -qE '^kind: IPAddressPool'; then
+        ERRORS+=("${_METALLB_CFG_LABEL}: no IPAddressPool defined")
     fi
 
     # Advertisement mode consistency
-    _n_bgp_peer=$(grep -cE '^kind: BGPPeer'          "${_METALLB_CFG}" || true)
-    _n_bgp_adv=$( grep -cE '^kind: BGPAdvertisement' "${_METALLB_CFG}" || true)
-    _n_l2_adv=$(  grep -cE '^kind: L2Advertisement'  "${_METALLB_CFG}" || true)
+    _n_bgp_peer=$(printf '%s\n' "${_METALLB_RENDERED}" | grep -cE '^kind: BGPPeer' || true)
+    _n_bgp_adv=$( printf '%s\n' "${_METALLB_RENDERED}" | grep -cE '^kind: BGPAdvertisement' || true)
+    _n_l2_adv=$(  printf '%s\n' "${_METALLB_RENDERED}" | grep -cE '^kind: L2Advertisement' || true)
 
-    if [[ "${_n_bgp_peer}" -gt 0 && "${_n_l2_adv}" -gt 0 ]]; then
-        ERRORS+=("values/metallb-config.yaml: BGPPeer and L2Advertisement are both active — choose one mode only")
-    elif [[ "${_n_bgp_peer}" -eq 0 && "${_n_l2_adv}" -eq 0 ]]; then
-        ERRORS+=("values/metallb-config.yaml: no advertisement mode configured — add BGPPeer+BGPAdvertisement (BGP) or L2Advertisement (L2)")
-    elif [[ "${_n_bgp_peer}" -gt 0 && "${_n_bgp_adv}" -eq 0 ]]; then
-        ERRORS+=("values/metallb-config.yaml: BGPPeer defined but no BGPAdvertisement — VIPs will not be announced")
+    if [[ -n "${_METALLB_RENDERED}" ]]; then
+        if [[ "${_n_bgp_peer}" -gt 0 && "${_n_l2_adv}" -gt 0 ]]; then
+            ERRORS+=("${_METALLB_CFG_LABEL}: BGPPeer and L2Advertisement are both active — choose one mode only")
+        elif [[ "${_n_bgp_peer}" -eq 0 && "${_n_l2_adv}" -eq 0 ]]; then
+            ERRORS+=("${_METALLB_CFG_LABEL}: no advertisement mode configured — add BGPPeer+BGPAdvertisement (BGP) or L2Advertisement (L2)")
+        elif [[ "${_n_bgp_peer}" -gt 0 && "${_n_bgp_adv}" -eq 0 ]]; then
+            ERRORS+=("${_METALLB_CFG_LABEL}: BGPPeer defined but no BGPAdvertisement — VIPs will not be announced")
+        fi
     fi
 
     # BGP ASNs must be non-zero integers
     while IFS= read -r _line; do
         if [[ "${_line}" =~ ^[[:space:]]*(my|peer)ASN:[[:space:]]*([0-9]+) ]]; then
             [[ "${BASH_REMATCH[2]}" -eq 0 ]] && \
-                ERRORS+=("values/metallb-config.yaml: ASN value is 0 — set a valid BGP ASN")
+                ERRORS+=("${_METALLB_CFG_LABEL}: ASN value is 0 — set a valid BGP ASN")
         fi
-    done < "${_METALLB_CFG}"
+    done < <(printf '%s\n' "${_METALLB_RENDERED}")
 fi
 
 # ---------------------------------------------------------------------------
@@ -207,6 +260,44 @@ if command -v kubectl &>/dev/null; then
 fi
 
 if [[ "${_CLUSTER_REACHABLE}" == "true" ]]; then
+
+    # -----------------------------------------------------------------------
+    # 4b. Core image pull secrets — if setup.sh will not create them from
+    #     REGISTRY_PULL_SECRET, verify referenced secrets already exist.
+    # -----------------------------------------------------------------------
+    if [[ "${SKIP_CORE:-false}" != "true" ]]; then
+        if [[ -z "${_CORE_IMAGE_PULL_SECRETS}" ]]; then
+            if [[ -z "${REGISTRY_PULL_SECRET:-}" ]]; then
+                WARNINGS+=("${_CORE_VALUES_LABEL}: no imagePullSecrets found; image pulls must be public or preloaded on every node")
+            fi
+        else
+            _existing_core_pull_secrets=0
+            _planned_core_pull_secrets=0
+            _missing_core_pull_secrets=""
+            for _pull_secret in ${_CORE_IMAGE_PULL_SECRETS}; do
+                if kubectl get secret "${_pull_secret}" -n nico-system >/dev/null 2>&1; then
+                    _existing_core_pull_secrets=$(( _existing_core_pull_secrets + 1 ))
+                elif [[ -n "${REGISTRY_PULL_SECRET:-}" && \
+                        ( "${_pull_secret}" == "imagepullsecret" || \
+                          "${_pull_secret}" == "nvcr-nico-dev" ) ]]; then
+                    _planned_core_pull_secrets=$(( _planned_core_pull_secrets + 1 ))
+                else
+                    _missing_core_pull_secrets="${_missing_core_pull_secrets}${_missing_core_pull_secrets:+, }${_pull_secret}"
+                fi
+            done
+
+            if [[ $(( _existing_core_pull_secrets + _planned_core_pull_secrets )) -eq 0 ]]; then
+                _core_pull_secret_list="$(printf '%s\n' "${_CORE_IMAGE_PULL_SECRETS}" | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+                if [[ -z "${REGISTRY_PULL_SECRET:-}" ]]; then
+                    ERRORS+=("REGISTRY_PULL_SECRET is not set and ${_CORE_VALUES_LABEL} references imagePullSecrets (${_core_pull_secret_list}), but none exist in nico-system — set REGISTRY_PULL_SECRET, pre-create the pull secret(s), or remove imagePullSecrets for an unauthenticated registry")
+                else
+                    ERRORS+=("${_CORE_VALUES_LABEL} references imagePullSecrets (${_core_pull_secret_list}), but none exist in nico-system and setup.sh will not create those names")
+                fi
+            elif [[ -n "${_missing_core_pull_secrets}" ]]; then
+                WARNINGS+=("${_CORE_VALUES_LABEL}: imagePullSecrets not found in nico-system: ${_missing_core_pull_secrets}")
+            fi
+        fi
+    fi
 
     # -----------------------------------------------------------------------
     # 5. Node resources — at least 3 schedulable nodes required
@@ -232,24 +323,54 @@ if [[ "${_CLUSTER_REACHABLE}" == "true" ]]; then
     # Extracts node names listed under kubernetes.io/hostname in BGPPeer
     # nodeSelectors and checks each one against the actual cluster node list.
     # -----------------------------------------------------------------------
-    if [[ -f "${_METALLB_CFG}" ]]; then
+    if [[ -n "${_METALLB_RENDERED}" ]]; then
         _cluster_nodes=$(kubectl get nodes \
             -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)
-        # Extract values listed after 'kubernetes.io/hostname' nodeSelector lines
-        _peer_nodes=$(awk '
-            /kubernetes\.io\/hostname/ { in_vals=1; next }
-            in_vals && /operator:/ { in_vals=0 }
-            in_vals && /^[[:space:]]*-[[:space:]]+[^-]/ {
-                gsub(/^[[:space:]]*-[[:space:]]+/, "")
-                gsub(/#.*$/, "")
-                gsub(/[[:space:]]/, "")
-                if (length > 0) print
+        # Extract nodeSelector hostnames from BGPPeer resources. Supports both:
+        #   matchLabels: kubernetes.io/hostname: node-a
+        #   matchExpressions: key: kubernetes.io/hostname, values: [node-a]
+        _peer_nodes=$(printf '%s\n' "${_METALLB_RENDERED}" | awk '
+            /^---[[:space:]]*$/ {
+                in_bgp=0; saw_hostname_key=0; collect_values=0; next
             }
-        ' "${_METALLB_CFG}")
+            /^[[:space:]]*kind:[[:space:]]*BGPPeer[[:space:]]*$/ {
+                in_bgp=1; next
+            }
+            !in_bgp { next }
+            /^[[:space:]]*kubernetes\.io\/hostname:[[:space:]]*/ {
+                val=$0
+                sub(/^[[:space:]]*kubernetes\.io\/hostname:[[:space:]]*/, "", val)
+                gsub(/#.*$/, "", val)
+                gsub(/"/, "", val)
+                gsub(/\047/, "", val)
+                gsub(/[[:space:]]/, "", val)
+                if (length > 0) print val
+                next
+            }
+            /^[[:space:]]*-[[:space:]]*key:[[:space:]]*kubernetes\.io\/hostname[[:space:]]*$/ {
+                saw_hostname_key=1; collect_values=0; next
+            }
+            saw_hostname_key && /^[[:space:]]*values:[[:space:]]*$/ {
+                collect_values=1; next
+            }
+            collect_values && /^[[:space:]]*-[[:space:]]+[^-]/ {
+                val=$0
+                sub(/^[[:space:]]*-[[:space:]]+/, "", val)
+                gsub(/#.*$/, "", val)
+                gsub(/"/, "", val)
+                gsub(/\047/, "", val)
+                gsub(/[[:space:]]/, "", val)
+                if (length > 0) print val
+                next
+            }
+            collect_values && $0 !~ /^[[:space:]]*($|#|-)/ {
+                saw_hostname_key=0; collect_values=0
+            }
+        ')
 
         for _peer_node in ${_peer_nodes}; do
             if ! echo " ${_cluster_nodes} " | grep -qF " ${_peer_node} "; then
-                WARNINGS+=("values/metallb-config.yaml: BGPPeer references node '${_peer_node}' which was not found in the cluster — run: kubectl get nodes")
+                WARNINGS+=("${_METALLB_CFG_LABEL}: BGPPeer references node '${_peer_node}' which was not found in the cluster — run: kubectl get nodes")
             fi
         done
     fi
@@ -266,7 +387,7 @@ if [[ "${_CLUSTER_REACHABLE}" == "true" ]]; then
     # The DNS lookup runs in the container's own network namespace so it
     # uses cluster DNS (CoreDNS), not the host's /etc/resolv.conf.
     #
-    # All pods are deleted on EXIT via trap regardless of outcome.
+    # Pods are deleted after logs are collected.
     # Override the check image for air-gapped clusters:
     #   export PREFLIGHT_CHECK_IMAGE=my-registry.example.com/busybox:1.36
     # -----------------------------------------------------------------------
@@ -280,7 +401,7 @@ if [[ "${_CLUSTER_REACHABLE}" == "true" ]]; then
         _safe="$(printf '%s' "${_node}" | tr '[:upper:]' '[:lower:]')"
         _safe="${_safe//[^a-z0-9-]/-}"
         _safe="${_safe:0:40}"
-        _pod="ncx-pf-${_TS}-${_safe}"
+        _pod="nico-pf-${_TS}-${_safe}"
         _PREFLIGHT_PODS+=("${_pod}")
 
         kubectl apply -f - >/dev/null 2>&1 <<EOF
@@ -290,7 +411,7 @@ metadata:
   name: ${_pod}
   namespace: ${_PREFLIGHT_NS}
   labels:
-    ncx-preflight: "true"
+    nico-preflight: "true"
 spec:
   nodeName: ${_node}
   hostPID: true
@@ -356,6 +477,8 @@ EOF
             WARNINGS+=("Node ${_label}: DNS resolution failed for kubernetes.default.svc.cluster.local — check CoreDNS: kubectl get pods -n kube-system -l k8s-app=kube-dns")
     done
 
+    _cleanup_preflight_pods
+
 fi  # _CLUSTER_REACHABLE
 
 # ---------------------------------------------------------------------------
@@ -375,31 +498,40 @@ fi
 # ---------------------------------------------------------------------------
 # 9. NICo REST repo
 # ---------------------------------------------------------------------------
-NICO_REPO_RESOLVED=""
+NICO_REST_REPO_RESOLVED=""
+_NICO_REST_ENABLED=true
+[[ "${SKIP_REST:-false}" == "true" ]] && _NICO_REST_ENABLED=false
 
-if [[ -n "${NICO_REPO:-}" ]]; then
-    if [[ -d "${NICO_REPO}/helm/charts/nico-rest" ]]; then
-        NICO_REPO_RESOLVED="${NICO_REPO}"
-    else
-        ERRORS+=("NICO_REPO='${NICO_REPO}' but helm/charts/nico-rest was not found there")
-    fi
-else
-    for _candidate in \
-        "${SCRIPT_DIR}/../../nico-rest" \
-        "${SCRIPT_DIR}/../../ncx-infra-controller-rest" \
-        "${SCRIPT_DIR}/../../ncx"; do
-        if [[ -d "${_candidate}/helm/charts/nico-rest" ]]; then
-            NICO_REPO_RESOLVED="$(cd "${_candidate}" && pwd)"
-            break
+NICO_CLONE_URL="https://github.com/NVIDIA/infra-controller-rest.git"
+NICO_CLONE_PARENT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+
+if ${_NICO_REST_ENABLED}; then
+    _NICO_REST_REPO_INPUT="${NICO_REST_REPO:-${NICO_REPO:-}}"
+    _NICO_REST_REPO_VAR="NICO_REST_REPO"
+    [[ -z "${NICO_REST_REPO:-}" && -n "${NICO_REPO:-}" ]] && _NICO_REST_REPO_VAR="NICO_REPO"
+
+    if [[ -n "${_NICO_REST_REPO_INPUT:-}" ]]; then
+        if [[ -d "${_NICO_REST_REPO_INPUT}/helm/charts/nico-rest" ]]; then
+            NICO_REST_REPO_RESOLVED="$(cd "${_NICO_REST_REPO_INPUT}" && pwd)"
+        else
+            ERRORS+=("${_NICO_REST_REPO_VAR}='${_NICO_REST_REPO_INPUT}' but helm/charts/nico-rest was not found there")
         fi
-    done
-fi
+    else
+        for _candidate in \
+            "${SCRIPT_DIR}/../../infra-controller-rest" \
+            "${SCRIPT_DIR}/../../nico-rest" \
+            "${SCRIPT_DIR}/../../ncx-infra-controller-rest" \
+            "${SCRIPT_DIR}/../../ncx"; do
+            if [[ -d "${_candidate}/helm/charts/nico-rest" ]]; then
+                NICO_REST_REPO_RESOLVED="$(cd "${_candidate}" && pwd)"
+                break
+            fi
+        done
+    fi
 
-NCX_CLONE_URL="https://github.com/NVIDIA/ncx-infra-controller-rest.git"
-NCX_CLONE_PARENT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
-
-if [[ -z "${NICO_REPO_RESOLVED}" ]]; then
-    WARNINGS+=("NICo REST repo not found — expected a sibling directory with helm/charts/nico-rest")
+    if [[ -z "${NICO_REST_REPO_RESOLVED}" ]]; then
+        WARNINGS+=("NICo REST repo not found — expected a sibling directory with helm/charts/nico-rest")
+    fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -408,8 +540,15 @@ fi
 _print_separator() { echo "---------------------------------------------------------------------"; }
 
 if [[ ${#ERRORS[@]} -eq 0 && ${#WARNINGS[@]} -eq 0 ]]; then
-    echo "Pre-flight OK  (NICo repo: ${NICO_REPO_RESOLVED:-not resolved})"
-    [[ -n "${NICO_REPO_RESOLVED}" ]] && export NICO_REPO="${NICO_REPO_RESOLVED}"
+    if ${_NICO_REST_ENABLED}; then
+        echo "Pre-flight OK  (NICo REST repo: ${NICO_REST_REPO_RESOLVED:-not resolved})"
+    else
+        echo "Pre-flight OK  (NICo REST skipped)"
+    fi
+    if [[ -n "${NICO_REST_REPO_RESOLVED}" ]]; then
+        export NICO_REST_REPO="${NICO_REST_REPO_RESOLVED}"
+        export NICO_REPO="${NICO_REST_REPO_RESOLVED}"
+    fi
     if ${_SOURCED}; then return 0; else exit 0; fi
 fi
 
@@ -435,21 +574,21 @@ if [[ ${#WARNINGS[@]} -gt 0 ]]; then
 fi
 
 # Offer to clone NICo REST repo if missing
-if [[ -z "${NICO_REPO_RESOLVED}" ]]; then
+if ${_NICO_REST_ENABLED} && [[ -z "${NICO_REST_REPO_RESOLVED}" ]]; then
     echo ""
     echo "  NICo REST repo not found."
     echo ""
     echo "  setup.sh Phase 7 deploys the NICo REST stack (API, workflow engine, site-agent)"
     echo "  using Helm charts and kustomize bases from a separate repository:"
-    echo "    ${NCX_CLONE_URL}"
+    echo "    ${NICO_CLONE_URL}"
     echo ""
     echo "  Options:"
-    echo "    c) Clone it now into ${NCX_CLONE_PARENT}/ncx-infra-controller-rest"
+    echo "    c) Clone it now into ${NICO_CLONE_PARENT}/infra-controller-rest"
     echo "    s) Skip — Phase 7 will be skipped or will fail"
     echo "    q) Quit setup entirely"
     echo ""
     echo "  (You can also clone it manually and re-run with:"
-    echo "   export NICO_REPO=/path/to/ncx-infra-controller-rest)"
+    echo "   export NICO_REST_REPO=/path/to/infra-controller-rest)"
     if [[ "${AUTO_YES:-false}" == "true" ]]; then
         _clone_reply="s"
     else
@@ -459,11 +598,12 @@ if [[ -z "${NICO_REPO_RESOLVED}" ]]; then
     fi
     case "${_clone_reply:-s}" in
         c|C)
-            echo "  Cloning ${NCX_CLONE_URL} ..."
-            git clone "${NCX_CLONE_URL}" "${NCX_CLONE_PARENT}/ncx-infra-controller-rest"
-            NICO_REPO_RESOLVED="${NCX_CLONE_PARENT}/ncx-infra-controller-rest"
-            export NICO_REPO="${NICO_REPO_RESOLVED}"
-            echo "  Cloned OK — NICO_REPO=${NICO_REPO}"
+            echo "  Cloning ${NICO_CLONE_URL} ..."
+            git clone "${NICO_CLONE_URL}" "${NICO_CLONE_PARENT}/infra-controller-rest"
+            NICO_REST_REPO_RESOLVED="${NICO_CLONE_PARENT}/infra-controller-rest"
+            export NICO_REST_REPO="${NICO_REST_REPO_RESOLVED}"
+            export NICO_REPO="${NICO_REST_REPO_RESOLVED}"
+            echo "  Cloned OK — NICO_REST_REPO=${NICO_REST_REPO}"
             WARNINGS=("${WARNINGS[@]/NICo REST repo not found*/}")
             ;;
         q|Q)
@@ -482,7 +622,7 @@ _print_separator
 # Warnings only — default continue
 if [[ ${#ERRORS[@]} -eq 0 ]]; then
     if [[ "${AUTO_YES:-false}" == "true" ]]; then
-        echo "  Warnings noted — continuing (-y flag set)."
+        echo "  Warnings noted — continuing."
     else
         echo ""
         read -r -p "  ➤  Warnings above noted. Continue anyway? [Y/n]: " _reply
@@ -492,14 +632,20 @@ if [[ ${#ERRORS[@]} -eq 0 ]]; then
             if ${_SOURCED}; then return 1; else exit 1; fi
         fi
     fi
-    [[ -n "${NICO_REPO_RESOLVED}" ]] && export NICO_REPO="${NICO_REPO_RESOLVED}"
+    if [[ -n "${NICO_REST_REPO_RESOLVED}" ]]; then
+        export NICO_REST_REPO="${NICO_REST_REPO_RESOLVED}"
+        export NICO_REPO="${NICO_REST_REPO_RESOLVED}"
+    fi
     if ${_SOURCED}; then return 0; else exit 0; fi
 fi
 
 # Hard errors — default abort
 if [[ "${AUTO_YES:-false}" == "true" ]]; then
     echo "  Errors above noted — continuing (-y flag set). Things may fail."
-    [[ -n "${NICO_REPO_RESOLVED}" ]] && export NICO_REPO="${NICO_REPO_RESOLVED}"
+    if [[ -n "${NICO_REST_REPO_RESOLVED}" ]]; then
+        export NICO_REST_REPO="${NICO_REST_REPO_RESOLVED}"
+        export NICO_REPO="${NICO_REST_REPO_RESOLVED}"
+    fi
     if ${_SOURCED}; then return 0; else exit 0; fi
 fi
 
@@ -510,7 +656,10 @@ read -r -p "  ➤  Continue anyway at your own risk? [y/N]: " _reply
 echo ""
 if [[ "${_reply:-N}" =~ ^[Yy]$ ]]; then
     echo "  Continuing — good luck."
-    [[ -n "${NICO_REPO_RESOLVED}" ]] && export NICO_REPO="${NICO_REPO_RESOLVED}"
+    if [[ -n "${NICO_REST_REPO_RESOLVED}" ]]; then
+        export NICO_REST_REPO="${NICO_REST_REPO_RESOLVED}"
+        export NICO_REPO="${NICO_REST_REPO_RESOLVED}"
+    fi
     if ${_SOURCED}; then return 0; else exit 0; fi
 fi
 
