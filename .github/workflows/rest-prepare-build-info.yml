@@ -70,10 +70,15 @@ jobs:
       - name: Generate version and build information
         id: generate-version
         run: |
-          if [ -f "rest-api/VERSION" ]; then
-            SEMANTIC_VERSION=$(grep -v '^#' rest-api/VERSION | tr -d '[:space:]')
+          VERSION_FILE="VERSION"
+          if [ ! -f "$VERSION_FILE" ]; then
+            VERSION_FILE="rest-api/VERSION"
+          fi
+
+          if [ -f "$VERSION_FILE" ]; then
+            SEMANTIC_VERSION=$(grep -v '^#' "$VERSION_FILE" | tr -d '[:space:]')
           else
-            echo "ERROR: rest-api/VERSION file not found"
+            echo "ERROR: VERSION file not found"
             exit 1
           fi
 
