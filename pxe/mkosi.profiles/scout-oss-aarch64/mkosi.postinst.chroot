@@ -111,3 +111,6 @@ do
   fi
 done
 
+# Clean up the image to save space
+apt clean
+rm -rf /build-output
