@@ -1017,6 +1017,11 @@ pub struct FnnRoutingProfileConfig {
     #[serde(default)]
     pub accepted_leaks_from_underlay: Vec<PrefixFilterPolicyEntry>,
 
+    /// Prefixes that tenant hosts are allowed to announce
+    /// to the DPU as anycast routes.
+    #[serde(default)]
+    pub allowed_anycast_prefixes: Vec<PrefixFilterPolicyEntry>,
+
     /// Currently controls which profiles a tenant can use
     /// when creating VPCs.  Lower value means broader access.
     /// A tenant can create a VPC with a routing profile of the same or broader access.

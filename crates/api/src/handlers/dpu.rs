@@ -682,6 +682,13 @@ pub(crate) async fn get_managed_host_network_config_inner(
                     prefix: l.prefix.to_string(),
                 })
                 .collect(),
+            allowed_anycast_prefixes: p
+                .allowed_anycast_prefixes
+                .iter()
+                .map(|l| rpc::PrefixFilterPolicyEntry {
+                    prefix: l.prefix.to_string(),
+                })
+                .collect(),
             route_target_imports: p
                 .route_target_imports
                 .iter()

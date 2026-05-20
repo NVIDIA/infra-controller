@@ -470,6 +470,11 @@ pub async fn update_nvue(
                     .iter()
                     .map(|l| l.prefix.to_owned())
                     .collect(),
+                allowed_anycast_prefixes: rp
+                    .allowed_anycast_prefixes
+                    .iter()
+                    .map(|p| p.prefix.to_owned())
+                    .collect(),
             })
         },
         bgp_leaf_session_password: nc.bgp_leaf_session_password.clone(),
@@ -2590,6 +2595,9 @@ mod tests {
                 } else {
                     vec![]
                 },
+                allowed_anycast_prefixes: vec![rpc::PrefixFilterPolicyEntry {
+                    prefix: "5.255.254.0/24".to_string(),
+                }],
                 route_target_imports: vec![rpc_common::RouteTarget {
                     asn: 44444,
                     vni: 55555,
@@ -2844,6 +2852,7 @@ mod tests {
                 leak_default_route_from_underlay: false,
                 leak_tenant_host_routes_to_underlay: false,
                 accepted_leaks_from_underlay: vec![],
+                allowed_anycast_prefixes: vec!["5.255.254.0/24".to_string()],
                 route_target_imports: vec![nvue::RouteTargetConfig {
                     asn: 44444,
                     vni: 55555,
@@ -3079,6 +3088,9 @@ mod tests {
                 leak_default_route_from_underlay: false,
                 leak_tenant_host_routes_to_underlay: false,
                 accepted_leaks_from_underlay: vec![],
+                allowed_anycast_prefixes: vec![rpc::PrefixFilterPolicyEntry {
+                    prefix: "5.255.254.0/24".to_string(),
+                }],
                 route_target_imports: vec![rpc_common::RouteTarget {
                     asn: 44444,
                     vni: 55555,
