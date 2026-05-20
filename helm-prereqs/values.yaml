@@ -58,6 +58,21 @@ vault:
     serviceAccountName: "nico-api"
     tokenTTL: "1h"
   kvMount: "secrets"
+  ## Seed KV-v2 entries written after the KV mount is enabled. Mirrors the
+  ## publicly-documented DPU factory defaults that the Terraform path
+  ## (forged/terraform/v2/modules/vault) writes via vault_kv_secret_v2.
+  ## Set kvSeeds: [] to disable seeding.
+  kvSeeds:
+    - path: "machines/all_dpus/factory_default/bmc-metadata-items/root"
+      data:
+        UsernamePassword:
+          username: "root"
+          password: "0penBmc"
+    - path: "machines/all_dpus/factory_default/uefi-metadata-items/auth"
+      data:
+        UsernamePassword:
+          username: ""
+          password: "bluefield"
 
 certManager:
   siteRoot:
