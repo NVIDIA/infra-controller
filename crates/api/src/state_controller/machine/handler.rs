@@ -9709,7 +9709,24 @@ async fn handle_instance_host_platform_config(
 
             log_host_config(redfish_client.as_ref(), mh_snapshot).await;
 
-            let configure_host_boot_order = if redfish_client
+            let is_viking = mh_snapshot
+                .host_snapshot
+                .hardware_info
+                .as_ref()
+                .and_then(|hw| hw.dmi_data.as_ref())
+                .is_some_and(|dmi| dmi.sys_vendor == "NVIDIA" && dmi.product_name == "DGXH100");
+
+            let configure_host_boot_order = if is_viking {
+                // Viking BMC FW has known issues with the boot-order remediation path.
+                // Skip the unreliable Redfish read/PATCH sequence and apply the host's
+                // lockdown policy before continuing.
+                tracing::info!(
+                    machine_id = %mh_snapshot.host_snapshot.id,
+                    bmc_vendor = %vendor,
+                    "Skipping boot order remediation on Viking (known FW/BMC issue)"
+                );
+                false
+            } else if redfish_client
                 .is_boot_order_setup(&boot_interface_mac.to_string())
                 .await
                 .map_err(|e| redfish_error("is_boot_order_setup", e))?
@@ -9737,7 +9754,9 @@ async fn handle_instance_host_platform_config(
                     },
                 }
             } else {
-                InstanceState::WaitingForDpusToUp
+                InstanceState::HostPlatformConfiguration {
+                    platform_config_state: HostPlatformConfigurationState::LockHost,
+                }
             }
         }
         HostPlatformConfigurationState::ConfigureBios {
