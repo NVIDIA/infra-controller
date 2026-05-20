@@ -15,10 +15,11 @@
  * limitations under the License.
  */
 
-use ::rpc::admin_cli::{CarbideCliError, CarbideCliResult, OutputFormat};
+use ::rpc::admin_cli::OutputFormat;
 use carbide_uuid::machine::MachineId;
 
 use super::args::Args;
+use crate::errors::{CarbideCliError, CarbideCliResult};
 use crate::health_utils;
 use crate::rpc::ApiClient;
 

@@ -17,7 +17,6 @@
 
 use std::collections::HashMap;
 
-use ::rpc::admin_cli::{CarbideCliError, CarbideCliResult};
 use ::rpc::forge::instance_interface_config::NetworkDetails;
 use ::rpc::forge::{
     self as rpc, BmcEndpointRequest, FindInstanceTypesByIdsRequest,
@@ -46,6 +45,7 @@ use carbide_uuid::vpc::VpcId;
 use mac_address::MacAddress;
 
 use crate::IntoOnlyOne;
+use crate::errors::{CarbideCliError, CarbideCliResult};
 use crate::expected_machines::common::ExpectedMachineJson;
 use crate::instance::AllocateInstance;
 use crate::machine::MachineAutoupdate;

@@ -16,9 +16,9 @@
  */
 
 use ::rpc::forge::SpdmMachineAttestationTriggerRequest;
-use rpc::admin_cli::CarbideCliResult;
 
 use crate::attestation::spdm::trigger::Args;
+use crate::errors::CarbideCliResult;
 use crate::rpc::ApiClient;
 
 pub async fn trigger(args: Args, api_client: &ApiClient) -> CarbideCliResult<()> {

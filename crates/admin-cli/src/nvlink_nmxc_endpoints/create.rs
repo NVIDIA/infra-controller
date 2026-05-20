@@ -3,12 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-use ::rpc::admin_cli::{CarbideCliError, CarbideCliResult};
 use ::rpc::forge::NvlinkNmxcEndpoint;
 use clap::Parser;
 
 use crate::cfg::run::Run;
 use crate::cfg::runtime::RuntimeContext;
+use crate::errors::{CarbideCliError, CarbideCliResult};
 
 #[derive(Parser, Debug)]
 pub struct Args {

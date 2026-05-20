@@ -19,7 +19,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 
 use ::rpc::Machine;
-use ::rpc::admin_cli::{CarbideCliError, CarbideCliResult, OutputFormat};
+use ::rpc::admin_cli::OutputFormat;
 use carbide_uuid::machine::MachineId;
 use health_report::HealthProbeAlert;
 use prettytable::{Cell, Row, Table};
@@ -28,6 +28,7 @@ use tracing::warn;
 
 use super::args::Args;
 use crate::cfg::cli_options::SortField;
+use crate::errors::{CarbideCliError, CarbideCliResult};
 use crate::rpc::ApiClient;
 use crate::{async_write, async_write_table_as_csv};
 

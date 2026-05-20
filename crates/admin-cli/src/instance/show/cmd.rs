@@ -18,7 +18,7 @@ use std::borrow::Cow;
 use std::fmt::Write;
 use std::str::FromStr;
 
-use ::rpc::admin_cli::{CarbideCliError, CarbideCliResult, OutputFormat};
+use ::rpc::admin_cli::OutputFormat;
 use ::rpc::forge::{self as forgerpc, Vpc, VpcsByIdsRequest};
 use carbide_uuid::instance::InstanceId;
 use carbide_uuid::machine::MachineId;
@@ -28,6 +28,7 @@ use prettytable::{Table, row};
 
 use super::args::Args;
 use crate::cfg::cli_options::SortField;
+use crate::errors::{CarbideCliError, CarbideCliResult};
 use crate::rpc::ApiClient;
 use crate::{async_write, async_writeln, invalid_machine_id};
 

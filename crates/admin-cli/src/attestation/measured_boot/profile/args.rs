@@ -30,7 +30,6 @@
 
 use std::str::FromStr;
 
-use ::rpc::admin_cli::CarbideCliError;
 use ::rpc::protos::measured_boot::{
     CreateMeasurementSystemProfileRequest, DeleteMeasurementSystemProfileRequest, KvPair,
     ListMeasurementSystemProfileBundlesRequest, ListMeasurementSystemProfileMachinesRequest,
@@ -46,6 +45,7 @@ use crate::attestation::measured_boot::global::cmds::{
     IdNameIdentifier, IdentifierType, get_identifier,
 };
 use crate::cfg::measurement::{KvPair as CfgKvPair, parse_colon_pairs};
+use crate::errors::CarbideCliError;
 
 // CmdProfile provides a container for the `profile`
 // subcommand, which itself contains other subcommands

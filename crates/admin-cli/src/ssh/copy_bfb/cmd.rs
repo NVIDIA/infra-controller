@@ -15,10 +15,10 @@
  * limitations under the License.
  */
 
-use ::rpc::admin_cli::{CarbideCliError, CarbideCliResult};
 use forge_ssh::ssh::copy_bfb_to_bmc_rshim;
 
 use super::args::Args;
+use crate::errors::{CarbideCliError, CarbideCliResult};
 use crate::rpc::ApiClient;
 
 pub async fn copy_bfb(api_client: &ApiClient, args: Args) -> CarbideCliResult<()> {
