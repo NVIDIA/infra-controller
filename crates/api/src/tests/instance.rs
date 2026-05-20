@@ -5789,6 +5789,7 @@ async fn test_instance_with_vf_when_vf_disabled(_: PgPoolOptions, options: PgCon
         hbn_sfs: None,
         bridging: None,
         public_prefixes: vec![],
+        secondary_vtep_aggregate_prefixes: vec![],
         secondary_overlay_support: false,
     });
 
@@ -5829,6 +5830,7 @@ async fn test_instance_without_vf_when_vf_disabled(_: PgPoolOptions, options: Pg
         hbn_sfs: None,
         bridging: None,
         public_prefixes: vec![],
+        secondary_vtep_aggregate_prefixes: vec![],
         secondary_overlay_support: false,
     });
 

@@ -2714,6 +2714,12 @@ pub struct VmaasConfig {
     /// by traffic-intercept users.
     pub public_prefixes: Vec<Ipv4Network>,
 
+    /// Aggregate prefixes associated with secondary VTEPs. These are used only
+    /// for routing and filtering; IP allocation is provided by the secondary
+    /// VTEP resource pool.
+    #[serde(default)]
+    pub secondary_vtep_aggregate_prefixes: Vec<IpNetwork>,
+
     /// Whether a secondary overlay is expected,
     /// which will require secondary VTEP IPs to be allocated
     /// to DPUs
