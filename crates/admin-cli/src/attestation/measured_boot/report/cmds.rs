@@ -45,28 +45,28 @@ pub async fn dispatch(
             cli_output(
                 create_for_id(cli.grpc_conn, local_args).await?,
                 &cli.args.format,
-                ::rpc::admin_cli::Destination::Stdout(),
+                crate::Destination::Stdout(),
             )?;
         }
         CmdReport::Delete(local_args) => {
             cli_output(
                 delete(cli.grpc_conn, local_args).await?,
                 &cli.args.format,
-                ::rpc::admin_cli::Destination::Stdout(),
+                crate::Destination::Stdout(),
             )?;
         }
         CmdReport::Promote(local_args) => {
             cli_output(
                 promote(cli.grpc_conn, local_args).await?,
                 &cli.args.format,
-                ::rpc::admin_cli::Destination::Stdout(),
+                crate::Destination::Stdout(),
             )?;
         }
         CmdReport::Revoke(local_args) => {
             cli_output(
                 revoke(cli.grpc_conn, local_args).await?,
                 &cli.args.format,
-                ::rpc::admin_cli::Destination::Stdout(),
+                crate::Destination::Stdout(),
             )?;
         }
         CmdReport::Show(selector) => match selector {
@@ -74,20 +74,20 @@ pub async fn dispatch(
                 cli_output(
                     show_for_id(cli.grpc_conn, local_args).await?,
                     &cli.args.format,
-                    ::rpc::admin_cli::Destination::Stdout(),
+                    crate::Destination::Stdout(),
                 )?;
             }
             ShowFor::Machine(local_args) => {
                 cli_output(
                     show_for_machine(cli.grpc_conn, local_args).await?,
                     &cli.args.format,
-                    ::rpc::admin_cli::Destination::Stdout(),
+                    crate::Destination::Stdout(),
                 )?;
             }
             ShowFor::All => cli_output(
                 show_all(cli.grpc_conn).await?,
                 &cli.args.format,
-                ::rpc::admin_cli::Destination::Stdout(),
+                crate::Destination::Stdout(),
             )?,
         },
         CmdReport::List(selector) => match selector {
@@ -95,14 +95,14 @@ pub async fn dispatch(
                 cli_output(
                     list_machines(cli.grpc_conn, local_args).await?,
                     &cli.args.format,
-                    ::rpc::admin_cli::Destination::Stdout(),
+                    crate::Destination::Stdout(),
                 )?;
             }
             List::All(_) => {
                 cli_output(
                     list_all(cli.grpc_conn).await?,
                     &cli.args.format,
-                    ::rpc::admin_cli::Destination::Stdout(),
+                    crate::Destination::Stdout(),
                 )?;
             }
         },
@@ -110,7 +110,7 @@ pub async fn dispatch(
             cli_output(
                 match_values(cli.grpc_conn, local_args).await?,
                 &cli.args.format,
-                ::rpc::admin_cli::Destination::Stdout(),
+                crate::Destination::Stdout(),
             )?;
         }
     }

@@ -1017,6 +1017,11 @@ pub struct FnnRoutingProfileConfig {
     #[serde(default)]
     pub accepted_leaks_from_underlay: Vec<PrefixFilterPolicyEntry>,
 
+    /// Prefixes that tenant hosts are allowed to announce
+    /// to the DPU as anycast routes.
+    #[serde(default)]
+    pub allowed_anycast_prefixes: Vec<PrefixFilterPolicyEntry>,
+
     /// Currently controls which profiles a tenant can use
     /// when creating VPCs.  Lower value means broader access.
     /// A tenant can create a VPC with a routing profile of the same or broader access.
@@ -2713,6 +2718,12 @@ pub struct VmaasConfig {
     /// Prefixes expected to be publicly routable and used
     /// by traffic-intercept users.
     pub public_prefixes: Vec<Ipv4Network>,
+
+    /// Aggregate prefixes associated with secondary VTEPs. These are used only
+    /// for routing and filtering; IP allocation is provided by the secondary
+    /// VTEP resource pool.
+    #[serde(default)]
+    pub secondary_vtep_aggregate_prefixes: Vec<IpNetwork>,
 
     /// Whether a secondary overlay is expected,
     /// which will require secondary VTEP IPs to be allocated

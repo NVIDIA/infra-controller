@@ -2192,6 +2192,8 @@ message SwitchSearchFilter {
   optional string bmc_mac = 4;
   // Filter by NVOS MAC address via expected_switches.nvos_mac_addresses
   optional string nvos_mac = 5;
+  // For example, to search for leak alerts, set the below to "hardware-health.tray-leak-detection"
+  optional string only_with_health_alert = 6;
 }
 
 message SwitchesByIdsRequest {
@@ -2632,8 +2634,7 @@ message InlineIpxe {
   string ipxe_script = 1;
   // Optional user-data that is associated with the iPXE script
   // This can be a cloud-init script
-  // Deprecated, use InstanceOperatingSystemConfig user_data field
-  optional string user_data = 2;
+  reserved 2; // was: optional string user_data, now use InstanceOperatingSystemConfig user_data
 }
 
 // Desired configuration for an instance
@@ -4013,6 +4014,12 @@ message TrafficInterceptConfig {
   // Prefixes expected to be publicly routable and used
   // by VMaaS for internet gateways.
   repeated string public_prefixes            = 3;
+
+  // IPv4 or IPv6 aggregate prefixes associated with secondary
+  // VTEPs. These are used only for routing and filtering, not for
+  // allocating IPs. IP allocation is provided by the secondary VTEP
+  // resource pool.
+  repeated string secondary_vtep_aggregate_prefixes = 4;
 }
 
 
@@ -7747,6 +7754,10 @@ message RoutingProfile {
   // These are purely for routing purposes and will not have any
   // impact on ACLs.
   repeated PrefixFilterPolicyEntry accepted_leaks_from_underlay = 6;
+
+  // IP prefixes that tenant hosts are allowed to announce to the DPU as
+  // anycast routes. Accepts IPv4 and IPv6 CIDR prefixes.
+  repeated PrefixFilterPolicyEntry allowed_anycast_prefixes = 7;
 }
 
 // ============================================================================

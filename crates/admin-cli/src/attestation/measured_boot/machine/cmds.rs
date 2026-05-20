@@ -42,7 +42,7 @@ pub async fn dispatch(
             cli_output(
                 attest(cli.grpc_conn, local_args).await?,
                 &cli.args.format,
-                ::rpc::admin_cli::Destination::Stdout(),
+                crate::Destination::Stdout(),
             )?;
         }
         CmdMachine::Show(local_args) => {
@@ -50,13 +50,13 @@ pub async fn dispatch(
                 cli_output(
                     show_by_id(cli.grpc_conn, local_args).await?,
                     &cli.args.format,
-                    ::rpc::admin_cli::Destination::Stdout(),
+                    crate::Destination::Stdout(),
                 )?;
             } else {
                 cli_output(
                     show_all(cli.grpc_conn, local_args).await?,
                     &cli.args.format,
-                    ::rpc::admin_cli::Destination::Stdout(),
+                    crate::Destination::Stdout(),
                 )?;
             }
         }
@@ -64,7 +64,7 @@ pub async fn dispatch(
             cli_output(
                 list(cli.grpc_conn).await?,
                 &cli.args.format,
-                ::rpc::admin_cli::Destination::Stdout(),
+                crate::Destination::Stdout(),
             )?;
         }
     }

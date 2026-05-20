@@ -56,33 +56,8 @@ use sqlx::{
     postgres::PgRow,
     {FromRow, Row},
 };
-use tonic::Status;
 
 use super::pcr::PcrRegisterValue;
-
-/// ProtoParseError is an error used for reporting back failures
-/// to parse a protobuf message back into its record or model.
-#[derive(Debug)]
-pub struct ProtoParseError {
-    // from is the input type
-    pub from: String,
-    // to is the output type
-    pub to: String,
-    // msg is the msg
-    pub msg: String,
-}
-
-impl fmt::Display for ProtoParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "failed to convert {} to {}: {}",
-            self.from, self.to, self.msg,
-        )
-    }
-}
-
-impl Error for ProtoParseError {}
 
 /// StringToEnumError is used for taking an input string and converting
 /// it to an enum of a given type. It is leveraged by MeasurementBundleState,
@@ -581,9 +556,9 @@ pub struct MeasurementReportRecord {
 }
 
 impl MeasurementReportRecord {
-    pub fn from_grpc(msg: MeasurementReportRecordPb) -> Result<Self, Status> {
+    pub fn from_grpc(msg: MeasurementReportRecordPb) -> super::Result<Self> {
         Self::try_from(msg)
-            .map_err(|e| Status::invalid_argument(format!("bad input report record: {e}")))
+            .map_err(|e| super::Error::RpcConversion(format!("bad input report record: {e}")))
     }
 }
 
@@ -661,9 +636,9 @@ pub struct MeasurementReportValueRecord {
 }
 
 impl MeasurementReportValueRecord {
-    pub fn from_grpc(msg: MeasurementReportValueRecordPb) -> Result<Self, Status> {
+    pub fn from_grpc(msg: MeasurementReportValueRecordPb) -> super::Result<Self> {
         Self::try_from(msg)
-            .map_err(|e| Status::invalid_argument(format!("bad input report value record: {e}")))
+            .map_err(|e| super::Error::RpcConversion(format!("bad input report value record: {e}")))
     }
 }
 
@@ -763,9 +738,9 @@ pub struct MeasurementJournalRecord {
 }
 
 impl MeasurementJournalRecord {
-    pub fn from_grpc(msg: MeasurementJournalRecordPb) -> Result<Self, Status> {
+    pub fn from_grpc(msg: MeasurementJournalRecordPb) -> super::Result<Self> {
         Self::try_from(msg)
-            .map_err(|e| Status::invalid_argument(format!("bad input journal record: {e}")))
+            .map_err(|e| super::Error::RpcConversion(format!("bad input journal record: {e}")))
     }
 }
 
@@ -886,9 +861,9 @@ pub struct CandidateMachineSummary {
 }
 
 impl CandidateMachineSummary {
-    pub fn from_grpc(msg: CandidateMachineSummaryPb) -> Result<Self, Status> {
+    pub fn from_grpc(msg: CandidateMachineSummaryPb) -> super::Result<Self> {
         Self::try_from(msg).map_err(|e| {
-            Status::invalid_argument(format!("bad input candidate machine record: {e}"))
+            super::Error::RpcConversion(format!("bad input candidate machine record: {e}"))
         })
     }
 }
@@ -1030,12 +1005,16 @@ impl<'r> FromRow<'r, PgRow> for MeasurementApprovedMachineRecord {
 }
 
 impl MeasurementApprovedMachineRecord {
-    pub fn from_grpc(msg: Option<&MeasurementApprovedMachineRecordPb>) -> Result<Self, Status> {
+    pub fn from_grpc(msg: Option<&MeasurementApprovedMachineRecordPb>) -> super::Result<Self> {
         match msg {
             Some(pb) => Self::try_from(pb.clone()).map_err(|e| {
-                Status::invalid_argument(format!("bad input trusted machine approval record: {e}"))
+                super::Error::RpcConversion(format!(
+                    "bad input trusted machine approval record: {e}"
+                ))
             }),
-            None => Err(Status::invalid_argument("record unexpectedly empty")),
+            None => Err(super::Error::RpcConversion(
+                "record unexpectedly empty".into(),
+            )),
         }
     }
 }
@@ -1145,12 +1124,16 @@ pub struct MeasurementApprovedProfileRecord {
 }
 
 impl MeasurementApprovedProfileRecord {
-    pub fn from_grpc(msg: Option<&MeasurementApprovedProfileRecordPb>) -> Result<Self, Status> {
+    pub fn from_grpc(msg: Option<&MeasurementApprovedProfileRecordPb>) -> super::Result<Self> {
         match msg {
             Some(pb) => Self::try_from(pb.clone()).map_err(|e| {
-                Status::invalid_argument(format!("bad input trusted profile approval record: {e}"))
+                super::Error::RpcConversion(format!(
+                    "bad input trusted profile approval record: {e}"
+                ))
             }),
-            None => Err(Status::invalid_argument("record unexpectedly empty")),
+            None => Err(super::Error::RpcConversion(
+                "record unexpectedly empty".into(),
+            )),
         }
     }
 }

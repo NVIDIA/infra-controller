@@ -31,7 +31,8 @@ stateDiagram-v2
     Maintenance --> Ready : operation complete; maintenance request cleared
     Maintenance --> Error : operation failed
 
-    Error --> Deleting : marked for deletion or wait for manual intervention
+    Error --> Deleting : marked for deletion
+    Error --> Maintenance : OnDemand maintenance requested (PowerOn / PowerOff)
 
     Deleting --> [*] : final delete
 ```
@@ -45,7 +46,7 @@ stateDiagram-v2
 | **Configuring** | Power shelf is being configured (credentials, monitoring, etc.). |
 | **Ready** | Power shelf is ready. From here it can be deleted or driven into `Maintenance` by an OnDemand request. |
 | **Maintenance** | Power shelf is executing an operator-requested maintenance operation. Sub-states (carried in the state variant as `operation`): `PowerOn`, `PowerOff`. |
-| **Error** | Power shelf is in error (e.g. maintenance operation failed). Can transition to `Deleting` if marked for deletion; otherwise waits for manual intervention. |
+| **Error** | Power shelf is in error (e.g. maintenance operation failed). Can transition to `Deleting` if marked for deletion, or to `Maintenance` if an OnDemand maintenance request is posted; otherwise waits for manual intervention. |
 | **Deleting** | Power shelf is being removed; ends in final delete (terminal). |
 
 ## Transitions (by trigger)
@@ -62,6 +63,8 @@ stateDiagram-v2
 | Maintenance `{ PowerOn \| PowerOff }` | Ready | BMC operation complete; controller clears `power_shelf_maintenance_requested` |
 | Maintenance `{ PowerOn \| PowerOff }` | Error | BMC operation failed |
 | Error | Deleting | `deleted` set (marked for deletion) |
+| Error | Maintenance `{ PowerOn }` | `power_shelf_maintenance_requested.operation == PowerOn` |
+| Error | Maintenance `{ PowerOff }` | `power_shelf_maintenance_requested.operation == PowerOff` |
 | Deleting | *(end)* | Final delete committed |
 
 ## OnDemand Maintenance Operations

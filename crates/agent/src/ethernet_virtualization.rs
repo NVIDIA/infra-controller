@@ -470,6 +470,11 @@ pub async fn update_nvue(
                     .iter()
                     .map(|l| l.prefix.to_owned())
                     .collect(),
+                allowed_anycast_prefixes: rp
+                    .allowed_anycast_prefixes
+                    .iter()
+                    .map(|p| p.prefix.to_owned())
+                    .collect(),
             })
         },
         bgp_leaf_session_password: nc.bgp_leaf_session_password.clone(),
@@ -566,26 +571,17 @@ pub async fn update_traffic_intercept_bridging(
     nc: &rpc::ManagedHostNetworkConfigResponse,
     skip_post: bool,
 ) -> eyre::Result<bool> {
-    let (bridge_config, secondary_overlay_vtep_ip) = match nc
-        .traffic_intercept_config
-        .as_ref()
-        .map(|vc| (vc.bridging.as_ref(), vc.additional_overlay_vtep_ip.as_ref()))
-    {
-        Some((b, s)) => (
-            match b {
-                Some(b) => b,
-                _ => eyre::bail!("traffic_intercept bridging config not provided"),
-            },
-            match s {
-                Some(s) => s.to_owned(),
-                _ => eyre::bail!(
-                    "secondary_overlay_vtep_ip required by traffic_intercept bridging not found"
-                ),
-            },
-        ),
-        _ => {
-            eyre::bail!("traffic_intercept config not provided")
-        }
+    // Read the traffic-intercept inputs supplied by the controller.
+    let Some(traffic_intercept_config) = nc.traffic_intercept_config.as_ref() else {
+        eyre::bail!("traffic_intercept config not provided");
+    };
+    let Some(bridge_config) = traffic_intercept_config.bridging.as_ref() else {
+        eyre::bail!("traffic_intercept bridging config not provided");
+    };
+    let Some(secondary_overlay_vtep_ip) =
+        traffic_intercept_config.additional_overlay_vtep_ip.as_ref()
+    else {
+        eyre::bail!("secondary_overlay_vtep_ip required by traffic_intercept bridging not found");
     };
 
     // IPv4 only for now. Internal HBN bridge plumbing uses 169.254.x.x
@@ -605,7 +601,10 @@ pub async fn update_traffic_intercept_bridging(
     };
 
     let conf = traffic_intercept_bridging::TrafficInterceptBridgingConfig {
-        secondary_overlay_vtep_ip,
+        secondary_overlay_vtep_ip: secondary_overlay_vtep_ip.to_owned(),
+        secondary_vtep_aggregate_prefixes: traffic_intercept_config
+            .secondary_vtep_aggregate_prefixes
+            .clone(),
         vf_intercept_bridge_ip: vf_intercept_bridge_ip.to_string(),
         intercept_bridge_prefix_len: bridge_prefix.prefix_len(),
         // We use the bridge name here because the OVS will create a link/dev on the
@@ -2590,6 +2589,9 @@ mod tests {
                 } else {
                     vec![]
                 },
+                allowed_anycast_prefixes: vec![rpc::PrefixFilterPolicyEntry {
+                    prefix: "5.255.254.0/24".to_string(),
+                }],
                 route_target_imports: vec![rpc_common::RouteTarget {
                     asn: 44444,
                     vni: 55555,
@@ -2648,6 +2650,7 @@ mod tests {
                 }),
                 additional_overlay_vtep_ip: Some("10.255.254.253".to_string()),
                 public_prefixes: vec!["7.6.5.0/24".to_string()],
+                secondary_vtep_aggregate_prefixes: vec!["10.255.254.0/24".to_string()],
             }),
 
             tenant_interfaces,
@@ -2844,6 +2847,7 @@ mod tests {
                 leak_default_route_from_underlay: false,
                 leak_tenant_host_routes_to_underlay: false,
                 accepted_leaks_from_underlay: vec![],
+                allowed_anycast_prefixes: vec!["5.255.254.0/24".to_string()],
                 route_target_imports: vec![nvue::RouteTargetConfig {
                     asn: 44444,
                     vni: 55555,
@@ -3079,6 +3083,9 @@ mod tests {
                 leak_default_route_from_underlay: false,
                 leak_tenant_host_routes_to_underlay: false,
                 accepted_leaks_from_underlay: vec![],
+                allowed_anycast_prefixes: vec![rpc::PrefixFilterPolicyEntry {
+                    prefix: "5.255.254.0/24".to_string(),
+                }],
                 route_target_imports: vec![rpc_common::RouteTarget {
                     asn: 44444,
                     vni: 55555,

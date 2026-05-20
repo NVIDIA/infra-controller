@@ -107,11 +107,13 @@ async fn test_managed_host_network_config_with_sitewide_bgp_password(pool: sqlx:
 }
 
 #[crate::sqlx_test]
-async fn test_managed_host_network_config_includes_routing_profile_accepted_leaks(
+async fn test_managed_host_network_config_includes_routing_profile_prefix_lists(
     pool: sqlx::PgPool,
 ) {
     let profile_type = "ROUTE_LEAK_TEST";
     let expected_leaks = vec!["10.42.0.0/24".to_string(), "2001:db8:42::/64".to_string()];
+    let expected_allowed_anycast_prefixes =
+        vec!["192.0.2.0/24".to_string(), "2001:db8:99::/64".to_string()];
 
     // Configure an FNN routing profile with explicit accepted underlay leaks.
     let env = api_fixtures::create_test_env_with_overrides(
@@ -126,6 +128,12 @@ async fn test_managed_host_network_config_includes_routing_profile_accepted_leak
                     internal: true,
                     access_tier: 0,
                     accepted_leaks_from_underlay: expected_leaks
+                        .iter()
+                        .map(|prefix| PrefixFilterPolicyEntry {
+                            prefix: prefix.parse().unwrap(),
+                        })
+                        .collect(),
+                    allowed_anycast_prefixes: expected_allowed_anycast_prefixes
                         .iter()
                         .map(|prefix| PrefixFilterPolicyEntry {
                             prefix: prefix.parse().unwrap(),
@@ -196,6 +204,17 @@ async fn test_managed_host_network_config_includes_routing_profile_accepted_leak
         .map(|leak| leak.prefix)
         .collect();
     assert_eq!(actual_leaks, expected_leaks);
+
+    // Verify anycast prefixes are preserved in the gRPC response.
+    let actual_allowed_anycast_prefixes: Vec<_> = routing_profile
+        .allowed_anycast_prefixes
+        .into_iter()
+        .map(|prefix| prefix.prefix)
+        .collect();
+    assert_eq!(
+        actual_allowed_anycast_prefixes,
+        expected_allowed_anycast_prefixes
+    );
 }
 
 #[crate::sqlx_test]
