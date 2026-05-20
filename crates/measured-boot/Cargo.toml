@@ -40,7 +40,6 @@ clap = { workspace = true, optional = true }
 eyre = { optional = true, workspace = true }
 serde = { workspace = true }
 chrono = { workspace = true }
-tonic = { workspace = true }
 
 [lints]
 workspace = true
