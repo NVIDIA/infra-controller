@@ -21,11 +21,16 @@ Use `ReleaseInstance` to release an allocated tenant instance. The admin CLI can
 release by instance ID or by machine ID:
 
 ```bash
-carbide-admin-cli -c <api-url> instance release --instance <instance-id>
-carbide-admin-cli -c <api-url> instance release --machine <machine-id>
+carbide-admin-cli -c <core-api-url> instance release --instance <instance-id>
+carbide-admin-cli -c <core-api-url> instance release --machine <machine-id>
 ```
 
-The REST API also exposes instance release:
+`<core-api-url>` is the NICo Core gRPC API endpoint used by
+`carbide-admin-cli`. REST and `nicocli` commands use the REST API base URL from
+the `nicocli` config.
+
+The REST API also exposes instance release. When calling it directly, use the
+REST API base URL for the deployment:
 
 ```bash
 curl -X POST <rest-api-url>/api/v1/instances/release \
@@ -75,19 +80,19 @@ During the flow, NICo:
 Start with the managed-host state:
 
 ```bash
-carbide-admin-cli -c <api-url> managed-host show <machine-id>
+carbide-admin-cli -c <core-api-url> managed-host show <machine-id>
 ```
 
 Check the machine view for state history and platform details:
 
 ```bash
-carbide-admin-cli -c <api-url> machine show <machine-id>
+carbide-admin-cli -c <core-api-url> machine show <machine-id>
 ```
 
 Check health reports when cleanup appears blocked:
 
 ```bash
-carbide-admin-cli -c <api-url> machine health-report show <machine-id>
+carbide-admin-cli -c <core-api-url> machine health-report show <machine-id>
 ```
 
 Useful metrics for fleet-level monitoring include:
@@ -195,8 +200,8 @@ firmware management, measured boot, and site policy.
 Useful attestation commands include:
 
 ```bash
-carbide-admin-cli -c <api-url> attestation measured-boot machine show <machine-id>
-carbide-admin-cli -c <api-url> att mb machine show <machine-id>
+carbide-admin-cli -c <core-api-url> attestation measured-boot machine show <machine-id>
+carbide-admin-cli -c <core-api-url> att mb machine show <machine-id>
 ```
 
 ## Return-to-Pool Checklist
