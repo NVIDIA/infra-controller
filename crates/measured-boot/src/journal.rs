@@ -38,6 +38,7 @@ use {
 };
 
 use super::records::MeasurementMachineState;
+use crate::{FromGrpc, FromGrpcOpt};
 
 /// MeasurementJournal is a composition of a MeasurementJournalRecord,
 /// whose attributes are essentially copied directly it, as well as
@@ -86,24 +87,17 @@ impl MeasurementJournal {
         ]);
         journal_table
     }
+}
 
-    ////////////////////////////////////////////////////////////
-    /// from_grpc takes an optional protobuf (as populated in a
-    /// proto response from the API) and attempts to convert it
-    /// to the backing model.
-    ////////////////////////////////////////////////////////////
-    pub fn from_grpc(some_pb: Option<&MeasurementJournalPb>) -> super::Result<Self> {
-        some_pb
-            .ok_or(super::Error::RpcConversion(
-                "journal is unexpectedly empty".to_string(),
-            ))
-            .and_then(|pb| {
-                Self::try_from(pb.clone()).map_err(|e| {
-                    super::Error::RpcConversion(format!("journal failed pb->model conversion: {e}"))
-                })
-            })
+impl crate::DisplayName for MeasurementJournal {
+    fn display_name() -> &'static str {
+        "journal"
     }
 }
+
+impl FromGrpc<MeasurementJournalPb> for MeasurementJournal {}
+
+impl FromGrpcOpt<MeasurementJournalPb> for MeasurementJournal {}
 
 impl From<MeasurementJournal> for MeasurementJournalPb {
     fn from(val: MeasurementJournal) -> Self {

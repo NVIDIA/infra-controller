@@ -33,6 +33,7 @@ use serde::Serialize;
 
 use super::journal::MeasurementJournal;
 use super::records::MeasurementMachineState;
+use crate::{FromGrpc, FromGrpcOpt};
 
 /// CandidateMachine describes a machine that is a candidate for attestation,
 /// and is derived from machine information in the machine_toplogies table.
@@ -46,24 +47,15 @@ pub struct CandidateMachine {
     pub updated_ts: chrono::DateTime<Utc>,
 }
 
-impl CandidateMachine {
-    ////////////////////////////////////////////////////////////
-    /// from_grpc takes an optional protobuf (as populated in a
-    /// proto response from the API) and attempts to convert it
-    /// to the backing model.
-    ////////////////////////////////////////////////////////////
-    pub fn from_grpc(some_pb: Option<&CandidateMachinePb>) -> super::Result<Self> {
-        some_pb
-            .ok_or(super::Error::RpcConversion(
-                "machine is unexpectedly empty".to_string(),
-            ))
-            .and_then(|pb| {
-                Self::try_from(pb.clone()).map_err(|e| {
-                    super::Error::RpcConversion(format!("machine failed pb->model conversion: {e}"))
-                })
-            })
+impl crate::DisplayName for CandidateMachine {
+    fn display_name() -> &'static str {
+        "machine"
     }
 }
+
+impl FromGrpc<CandidateMachinePb> for CandidateMachine {}
+
+impl FromGrpcOpt<CandidateMachinePb> for CandidateMachine {}
 
 impl From<CandidateMachine> for CandidateMachinePb {
     fn from(val: CandidateMachine) -> Self {

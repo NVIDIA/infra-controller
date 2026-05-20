@@ -26,6 +26,7 @@ use ::rpc::protos::measured_boot::{
     ShowMeasurementBundleRequest, UpdateMeasurementBundleRequest,
 };
 use carbide_uuid::machine::MachineId;
+use measured_boot::FromGrpcOpt;
 use measured_boot::bundle::MeasurementBundle;
 use measured_boot::records::MeasurementBundleRecord;
 use serde::Serialize;
@@ -126,7 +127,7 @@ pub async fn create_for_id(
 ) -> CarbideCliResult<MeasurementBundle> {
     let response = grpc_conn.0.create_measurement_bundle(create).await?;
 
-    MeasurementBundle::from_grpc(response.bundle.as_ref())
+    MeasurementBundle::from_grpc_opt(response.bundle)
         .map_err(|e| crate::CarbideCliError::GenericError(e.to_string()))
 }
 
@@ -134,7 +135,7 @@ pub async fn create_for_id(
 pub async fn delete(grpc_conn: &ApiClient, delete: Delete) -> CarbideCliResult<MeasurementBundle> {
     let response = grpc_conn.0.delete_measurement_bundle(delete).await?;
 
-    MeasurementBundle::from_grpc(response.bundle.as_ref())
+    MeasurementBundle::from_grpc_opt(response.bundle)
         .map_err(|e| crate::CarbideCliError::GenericError(e.to_string()))
 }
 
@@ -145,7 +146,7 @@ pub async fn rename(grpc_conn: &ApiClient, rename: Rename) -> CarbideCliResult<M
         .rename_measurement_bundle(RenameMeasurementBundleRequest::try_from(rename)?)
         .await?;
 
-    MeasurementBundle::from_grpc(response.bundle.as_ref())
+    MeasurementBundle::from_grpc_opt(response.bundle)
         .map_err(|e| crate::CarbideCliError::GenericError(e.to_string()))
 }
 
@@ -159,7 +160,7 @@ pub async fn set_state(
         .update_measurement_bundle(UpdateMeasurementBundleRequest::try_from(set_state)?)
         .await?;
 
-    MeasurementBundle::from_grpc(response.bundle.as_ref())
+    MeasurementBundle::from_grpc_opt(response.bundle)
         .map_err(|e| crate::CarbideCliError::GenericError(e.to_string()))
 }
 
@@ -173,7 +174,7 @@ pub async fn show_by_id_or_name(
         .show_measurement_bundle(ShowMeasurementBundleRequest::try_from(show)?)
         .await?;
 
-    MeasurementBundle::from_grpc(response.bundle.as_ref())
+    MeasurementBundle::from_grpc_opt(response.bundle)
         .map_err(|e| crate::CarbideCliError::GenericError(e.to_string()))
 }
 
@@ -248,7 +249,7 @@ pub async fn find_closest_match(
     }
 
     Ok(Some(
-        MeasurementBundle::from_grpc(response.bundle.as_ref())
+        MeasurementBundle::from_grpc_opt(response.bundle)
             .map_err(|e| crate::CarbideCliError::GenericError(e.to_string()))?,
     ))
 }
