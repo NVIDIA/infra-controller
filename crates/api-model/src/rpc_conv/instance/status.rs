@@ -246,10 +246,10 @@ mod tests {
 
         let status = instance_status_from_config_and_observation(
             HashMap::new(),
-            Versioned::new(&config, version.clone()),
-            Versioned::new(&config.network, version.clone()),
-            Versioned::new(&config.infiniband, version.clone()),
-            Versioned::new(&config.extension_services, version.clone()),
+            Versioned::new(&config, version),
+            Versioned::new(&config.network, version),
+            Versioned::new(&config.infiniband, version),
+            Versioned::new(&config.extension_services, version),
             Versioned::new(&config.nvlink, version),
             &InstanceStatusObservations {
                 network: HashMap::new(),
