@@ -205,6 +205,7 @@ impl From<rpc::SwitchSearchFilter> for SwitchSearchFilter {
             controller_state: filter.controller_state,
             bmc_mac: filter.bmc_mac.and_then(|m| m.parse::<MacAddress>().ok()),
             nvos_mac: filter.nvos_mac.and_then(|m| m.parse::<MacAddress>().ok()),
+            only_with_health_alert: filter.only_with_health_alert,
         }
     }
 }

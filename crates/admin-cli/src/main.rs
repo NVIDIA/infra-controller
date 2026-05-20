@@ -21,7 +21,7 @@
 use std::fs::File;
 use std::io::Write;
 
-use ::rpc::admin_cli::{Destination, OutputFormat, ToTable};
+use ::rpc::admin_cli::{OutputFormat, ToTable};
 use ::rpc::forge_api_client::ForgeApiClient;
 use ::rpc::forge_tls_client::{ApiConfig, ForgeClientConfig};
 use cfg::cli_options::{CliCommand, CliOptions};
@@ -317,6 +317,13 @@ impl<T> IntoOnlyOne<T> for Vec<T> {
         };
         Ok(first)
     }
+}
+
+/// Destination is an enum used to determine whether CLI output is going
+/// to a file path or stdout.
+pub enum Destination {
+    Path(String),
+    Stdout(),
 }
 
 /// cli_output is the generic function implementation used by the OutputResult
