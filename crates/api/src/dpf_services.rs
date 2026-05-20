@@ -267,11 +267,11 @@ pub fn dts_service(cfg: &DpfServiceConfig) -> ServiceDefinition {
         })),
         config_ports: Some(vec![ServiceConfigPort {
             name: "httpserverport".to_string(),
-            port: 9100,
+            port: 9189,
             protocol: ServiceConfigPortProtocol::Tcp,
             node_port: None,
         }]),
-        config_ports_service_type: Some(ConfigPortsServiceType::None),
+        config_ports_service_type: Some(ConfigPortsServiceType::ClusterIp),
         ..ServiceDefinition::new(
             &cfg.name,
             &cfg.helm_repo_url,
@@ -414,7 +414,8 @@ pub fn otelcol_service(cfg: &DpfServiceConfig) -> ServiceDefinition {
         service_daemon_set_annotations: Some(BTreeMap::new()),
         config_values: Some(serde_json::json!({
             "nico_dpu_agent": "{{ (index .Services \"carbide-dpu-agent\").Name }}",
-            "nico_fmds": "{{ (index .Services \"carbide-fmds\").Name }}"
+            "nico_fmds": "{{ (index .Services \"carbide-fmds\").Name }}",
+            "nico_dts": "{{ (index .Services \"dts\").Name }}"
         })),
 
         ..ServiceDefinition::new(

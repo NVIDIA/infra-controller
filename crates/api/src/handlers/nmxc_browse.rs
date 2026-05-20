@@ -129,6 +129,10 @@ pub(crate) async fn nmxc_browse(
             .await
             .map_err(CarbideError::from)?;
 
+        nmxc.hello(NMX_C_GATEWAY_ID)
+            .await
+            .map_err(|e| CarbideError::internal(format!("Failed to call NMX-C hello: {e}")))?;
+
         let result = match op {
             rpc::NmxcBrowseOperation::Unspecified => Err(CarbideError::InvalidArgument(
                 "operation must be set to a supported NmxcBrowseOperation".to_string(),
