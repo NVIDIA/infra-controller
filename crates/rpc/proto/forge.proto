@@ -2194,6 +2194,8 @@ message SwitchSearchFilter {
   optional string bmc_mac = 4;
   // Filter by NVOS MAC address via expected_switches.nvos_mac_addresses
   optional string nvos_mac = 5;
+  // For example, to search for leak alerts, set the below to "hardware-health.tray-leak-detection"
+  optional string only_with_health_alert = 6;
 }
 
 message SwitchesByIdsRequest {
@@ -2634,8 +2636,7 @@ message InlineIpxe {
   string ipxe_script = 1;
   // Optional user-data that is associated with the iPXE script
   // This can be a cloud-init script
-  // Deprecated, use InstanceOperatingSystemConfig user_data field
-  optional string user_data = 2;
+  reserved 2; // was: optional string user_data, now use InstanceOperatingSystemConfig user_data
 }
 
 // Desired configuration for an instance

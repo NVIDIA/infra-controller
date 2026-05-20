@@ -22,9 +22,10 @@ use std::borrow::Cow;
 
 use chrono::{DateTime, Utc};
 use prettytable::{Cell, Row, Table};
-use rpc::admin_cli::{CarbideCliResult, OutputFormat};
+use rpc::admin_cli::OutputFormat;
 
 use super::args::{ConnectionsCommand, ConnectionsDisconnectCommand, ConnectionsShowCommand};
+use crate::errors::CarbideCliResult;
 use crate::mlx::CliContext;
 
 // dispatch routes connections subcommands to their handlers.

@@ -18,7 +18,7 @@
 //!
 //! `measurement report` subcommand dispatcher + backing functions.
 
-use ::rpc::admin_cli::{CarbideCliError, CarbideCliResult, ToTable, cli_output};
+use ::rpc::admin_cli::ToTable;
 use ::rpc::protos::measured_boot::ListMeasurementReportRequest;
 use measured_boot::bundle::MeasurementBundle;
 use measured_boot::records::MeasurementReportRecord;
@@ -30,6 +30,8 @@ use crate::attestation::measured_boot::report::args::{
     CmdReport, Create, Delete, List, ListMachines, Match, Promote, Revoke, ShowFor, ShowForId,
     ShowForMachine,
 };
+use crate::cli_output;
+use crate::errors::{CarbideCliError, CarbideCliResult};
 use crate::rpc::ApiClient;
 
 /// dispatch matches + dispatches the correct command for
@@ -43,28 +45,28 @@ pub async fn dispatch(
             cli_output(
                 create_for_id(cli.grpc_conn, local_args).await?,
                 &cli.args.format,
-                ::rpc::admin_cli::Destination::Stdout(),
+                crate::Destination::Stdout(),
             )?;
         }
         CmdReport::Delete(local_args) => {
             cli_output(
                 delete(cli.grpc_conn, local_args).await?,
                 &cli.args.format,
-                ::rpc::admin_cli::Destination::Stdout(),
+                crate::Destination::Stdout(),
             )?;
         }
         CmdReport::Promote(local_args) => {
             cli_output(
                 promote(cli.grpc_conn, local_args).await?,
                 &cli.args.format,
-                ::rpc::admin_cli::Destination::Stdout(),
+                crate::Destination::Stdout(),
             )?;
         }
         CmdReport::Revoke(local_args) => {
             cli_output(
                 revoke(cli.grpc_conn, local_args).await?,
                 &cli.args.format,
-                ::rpc::admin_cli::Destination::Stdout(),
+                crate::Destination::Stdout(),
             )?;
         }
         CmdReport::Show(selector) => match selector {
@@ -72,20 +74,20 @@ pub async fn dispatch(
                 cli_output(
                     show_for_id(cli.grpc_conn, local_args).await?,
                     &cli.args.format,
-                    ::rpc::admin_cli::Destination::Stdout(),
+                    crate::Destination::Stdout(),
                 )?;
             }
             ShowFor::Machine(local_args) => {
                 cli_output(
                     show_for_machine(cli.grpc_conn, local_args).await?,
                     &cli.args.format,
-                    ::rpc::admin_cli::Destination::Stdout(),
+                    crate::Destination::Stdout(),
                 )?;
             }
             ShowFor::All => cli_output(
                 show_all(cli.grpc_conn).await?,
                 &cli.args.format,
-                ::rpc::admin_cli::Destination::Stdout(),
+                crate::Destination::Stdout(),
             )?,
         },
         CmdReport::List(selector) => match selector {
@@ -93,14 +95,14 @@ pub async fn dispatch(
                 cli_output(
                     list_machines(cli.grpc_conn, local_args).await?,
                     &cli.args.format,
-                    ::rpc::admin_cli::Destination::Stdout(),
+                    crate::Destination::Stdout(),
                 )?;
             }
             List::All(_) => {
                 cli_output(
                     list_all(cli.grpc_conn).await?,
                     &cli.args.format,
-                    ::rpc::admin_cli::Destination::Stdout(),
+                    crate::Destination::Stdout(),
                 )?;
             }
         },
@@ -108,7 +110,7 @@ pub async fn dispatch(
             cli_output(
                 match_values(cli.grpc_conn, local_args).await?,
                 &cli.args.format,
-                ::rpc::admin_cli::Destination::Stdout(),
+                crate::Destination::Stdout(),
             )?;
         }
     }

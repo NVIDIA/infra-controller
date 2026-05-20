@@ -15,10 +15,10 @@
  * limitations under the License.
  */
 
-use ::rpc::admin_cli::CarbideCliResult;
 use ::rpc::forge as rpc;
 
 use super::args::MaintenanceOptions;
+use crate::errors::CarbideCliResult;
 use crate::rpc::ApiClient;
 
 pub async fn on_demand_rack_maintenance(

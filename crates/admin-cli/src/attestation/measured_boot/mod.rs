@@ -27,13 +27,14 @@ pub mod profile;
 pub mod report;
 pub mod site;
 
-use ::rpc::admin_cli::{CarbideCliResult, ToTable, set_summary};
+use ::rpc::admin_cli::{ToTable, set_summary};
 use carbide_uuid::machine::MachineId;
 use serde::Serialize;
 
 use crate::cfg::dispatch::Dispatch;
 use crate::cfg::measurement::{Cmd, GlobalOptions};
 use crate::cfg::runtime::RuntimeContext;
+use crate::errors::CarbideCliResult;
 
 impl Dispatch for Cmd {
     async fn dispatch(self, ctx: RuntimeContext) -> CarbideCliResult<()> {

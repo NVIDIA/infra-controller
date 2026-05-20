@@ -20,7 +20,7 @@
 
 use std::str::FromStr;
 
-use ::rpc::admin_cli::{CarbideCliError, CarbideCliResult, ToTable, cli_output};
+use ::rpc::admin_cli::ToTable;
 use ::rpc::protos::measured_boot::{
     DeleteMeasurementSystemProfileRequest, ListMeasurementSystemProfileBundlesRequest,
     ListMeasurementSystemProfileMachinesRequest, RenameMeasurementSystemProfileRequest,
@@ -36,6 +36,8 @@ use crate::attestation::measured_boot::profile::args::{
     CmdProfile, Create, Delete, List, ListBundles, ListMachines, Rename, Show,
 };
 use crate::attestation::measured_boot::{MachineIdList, global};
+use crate::cli_output;
+use crate::errors::{CarbideCliError, CarbideCliResult};
 use crate::rpc::ApiClient;
 
 /// dispatch matches + dispatches the correct command for
@@ -49,21 +51,21 @@ pub async fn dispatch(
             cli_output(
                 create(cli.grpc_conn, local_args).await?,
                 &cli.args.format,
-                ::rpc::admin_cli::Destination::Stdout(),
+                crate::Destination::Stdout(),
             )?;
         }
         CmdProfile::Delete(local_args) => {
             cli_output(
                 delete(cli.grpc_conn, local_args).await?,
                 &cli.args.format,
-                ::rpc::admin_cli::Destination::Stdout(),
+                crate::Destination::Stdout(),
             )?;
         }
         CmdProfile::Rename(local_args) => {
             cli_output(
                 rename(cli.grpc_conn, local_args).await?,
                 &cli.args.format,
-                ::rpc::admin_cli::Destination::Stdout(),
+                crate::Destination::Stdout(),
             )?;
         }
         CmdProfile::Show(local_args) => {
@@ -71,13 +73,13 @@ pub async fn dispatch(
                 cli_output(
                     show_by_id_or_name(cli.grpc_conn, local_args).await?,
                     &cli.args.format,
-                    ::rpc::admin_cli::Destination::Stdout(),
+                    crate::Destination::Stdout(),
                 )?;
             } else {
                 cli_output(
                     show_all(cli.grpc_conn).await?,
                     &cli.args.format,
-                    ::rpc::admin_cli::Destination::Stdout(),
+                    crate::Destination::Stdout(),
                 )?;
             }
         }
@@ -86,21 +88,21 @@ pub async fn dispatch(
                 cli_output(
                     list_bundles_for_id_or_name(cli.grpc_conn, local_args).await?,
                     &cli.args.format,
-                    ::rpc::admin_cli::Destination::Stdout(),
+                    crate::Destination::Stdout(),
                 )?;
             }
             List::Machines(local_args) => {
                 cli_output(
                     list_machines_for_id_or_name(cli.grpc_conn, local_args).await?,
                     &cli.args.format,
-                    ::rpc::admin_cli::Destination::Stdout(),
+                    crate::Destination::Stdout(),
                 )?;
             }
             List::All(_) => {
                 cli_output(
                     list_all(cli.grpc_conn).await?,
                     &cli.args.format,
-                    ::rpc::admin_cli::Destination::Stdout(),
+                    crate::Destination::Stdout(),
                 )?;
             }
         },
