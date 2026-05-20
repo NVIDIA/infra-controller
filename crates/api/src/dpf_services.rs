@@ -413,8 +413,8 @@ pub fn otelcol_service(cfg: &DpfServiceConfig) -> ServiceDefinition {
         })),
         service_daemon_set_annotations: Some(BTreeMap::new()),
         config_values: Some(serde_json::json!({
-            "carbide_dpu_agent": "{{ (index .Services \"carbide-dpu-agent\").Name }}",
-            "carbide_fmds": "{{ (index .Services \"carbide-fmds\").Name }}"
+            "nico_dpu_agent": "{{ (index .Services \"carbide-dpu-agent\").Name }}",
+            "nico_fmds": "{{ (index .Services \"carbide-fmds\").Name }}"
         })),
 
         ..ServiceDefinition::new(
