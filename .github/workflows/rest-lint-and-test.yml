@@ -200,6 +200,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # TODO: add flow / powershelf-manager / nvswitch-manager when rest-api/Makefile gets test-<X> targets
         module:
           - api
           - auth
@@ -207,39 +208,10 @@ jobs:
           - common
           - db
           - ipam
-          - powershelf-manager
-          - nvswitch-manager
-          - flow
           - site-agent
           - site-manager
           - site-workflow
           - workflow
-          - workflow-schema
-
-    services:
-      postgres:
-        image: postgres:14.4-alpine
-        env:
-          POSTGRES_DB: nicotest
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_HOST_AUTH_METHOD: trust
-        ports:
-          - 30432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
-    env:
-      CI: "false"
-      DB_NAME: nicotest
-      DB_USER: postgres
-      DB_PASSWORD: postgres
-      DB_HOST: localhost
-      DB_PORT: 30432
-      CGO_ENABLED: 1
 
     steps:
       - name: Checkout code
@@ -252,87 +224,6 @@ jobs:
           cache: true
           cache-dependency-path: rest-api/go.sum
 
-      - name: Download dependencies
-        run: go mod download
-
-      - name: Install go-junit-report
-        run: go install github.com/jstemmer/go-junit-report/v2@latest
-
-      - name: Tune PostgreSQL for faster tests
-        run: |
-          docker exec ${{ job.services.postgres.id }} \
-            psql -U postgres -d nicotest -v ON_ERROR_STOP=1 \
-              -c "ALTER SYSTEM SET fsync = 'off'" \
-              -c "ALTER SYSTEM SET synchronous_commit = 'off'" \
-              -c "ALTER SYSTEM SET full_page_writes = 'off'" \
-              -c "ALTER SYSTEM SET autovacuum = 'off'" \
-              -c "SELECT pg_reload_conf()"
-
       - name: Run unit tests for ${{ matrix.module }}
-        run: |
-          set -o pipefail
-          echo "Testing module: ${{ matrix.module }}"
-
-          if [ "${{ matrix.module }}" = "site-agent" ]; then
-            make nico-mock-server-start
-            make flow-mock-server-start
-          fi
-
-          go test -v -race -p 1 ./${{ matrix.module }}/... -coverprofile=coverage-${{ matrix.module }}.txt -covermode=atomic 2>&1 | tee test-output-${{ matrix.module }}.txt
-
-          if [ "${{ matrix.module }}" = "site-agent" ]; then
-            make nico-mock-server-stop
-            make flow-mock-server-stop
-          fi
-
-      - name: Generate JUnit report
-        if: always()
-        run: |
-          cat test-output-${{ matrix.module }}.txt | go-junit-report -set-exit-code > report-${{ matrix.module }}.xml || true
-
-      - name: Display coverage summary
-        if: always()
-        run: |
-          if [ -f coverage-${{ matrix.module }}.txt ]; then
-            go tool cover -func coverage-${{ matrix.module }}.txt
-          fi
-
-      - name: Upload test report artifact
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: test-report-${{ matrix.module }}
-          path: rest-api/report-${{ matrix.module }}.xml
-          retention-days: 7
-
-  publish-test-results:
-    name: Publish Test Results
-    runs-on: ubuntu-latest
-    needs: [test]
-    if: always()
-    defaults:
-      run:
         working-directory: .
-    permissions:
-      contents: read
-      checks: write
-      pull-requests: write
-    steps:
-      - name: Download all test report artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: test-report-*
-          path: test-reports
-          merge-multiple: true
-
-      - name: Publish Test Results
-        uses: EnricoMi/publish-unit-test-result-action@v2
-        if: always()
-        with:
-          files: test-reports/**/*.xml
-          check_name: Test Results
-          comment_mode: always
-          compare_to_earlier_commit: true
-          job_summary: true
-          report_individual_runs: true
-          report_suite_logs: info
+        run: make rest-api/test-${{ matrix.module }}
