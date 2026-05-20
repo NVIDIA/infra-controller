@@ -216,7 +216,6 @@ async fn test_zero_dpu_instance_allocation_rejects_explicit_interfaces(
                     variant: Some(forge::instance_operating_system_config::Variant::Ipxe(
                         forge::InlineIpxe {
                             ipxe_script: "exit".to_string(),
-                            user_data: None,
                         },
                     )),
                 }),
@@ -293,7 +292,6 @@ async fn test_zero_dpu_instance_allocation_auto(
                     variant: Some(forge::instance_operating_system_config::Variant::Ipxe(
                         forge::InlineIpxe {
                             ipxe_script: "exit".to_string(),
-                            user_data: None,
                         },
                     )),
                 }),
@@ -389,7 +387,6 @@ async fn test_zero_dpu_instance_allocation_rejects_missing_auto(
                     variant: Some(forge::instance_operating_system_config::Variant::Ipxe(
                         forge::InlineIpxe {
                             ipxe_script: "exit".to_string(),
-                            user_data: None,
                         },
                     )),
                 }),
@@ -478,7 +475,6 @@ async fn test_zero_dpu_instance_allocation_auto_multi_segment(
                     variant: Some(forge::instance_operating_system_config::Variant::Ipxe(
                         forge::InlineIpxe {
                             ipxe_script: "exit".to_string(),
-                            user_data: None,
                         },
                     )),
                 }),
@@ -625,7 +621,6 @@ async fn test_reject_single_dpu_instance_allocation_no_network_config(
                     variant: Some(forge::instance_operating_system_config::Variant::Ipxe(
                         forge::InlineIpxe {
                             ipxe_script: "exit".to_string(),
-                            user_data: None,
                         },
                     )),
                 }),
@@ -686,7 +681,6 @@ async fn test_reject_single_dpu_instance_allocation_host_inband_network_config(
                     variant: Some(forge::instance_operating_system_config::Variant::Ipxe(
                         forge::InlineIpxe {
                             ipxe_script: "exit".to_string(),
-                            user_data: None,
                         },
                     )),
                 }),
@@ -838,7 +832,6 @@ async fn test_reject_zero_dpu_instance_allocation_multiple_vpcs(
                     variant: Some(forge::instance_operating_system_config::Variant::Ipxe(
                         forge::InlineIpxe {
                             ipxe_script: "exit".to_string(),
-                            user_data: None,
                         },
                     )),
                 }),
@@ -899,7 +892,6 @@ async fn test_single_dpu_instance_allocation(
                     variant: Some(forge::instance_operating_system_config::Variant::Ipxe(
                         forge::InlineIpxe {
                             ipxe_script: "exit".to_string(),
-                            user_data: None,
                         },
                     )),
                 }),
@@ -1046,7 +1038,6 @@ async fn test_reject_zero_dpu_instance_with_tenant_network_segment(
                     variant: Some(forge::instance_operating_system_config::Variant::Ipxe(
                         forge::InlineIpxe {
                             ipxe_script: "exit".to_string(),
-                            user_data: None,
                         },
                     )),
                 }),
@@ -1126,7 +1117,6 @@ async fn test_zero_dpu_instance_surfaces_underlay_ip_in_status(
                     variant: Some(forge::instance_operating_system_config::Variant::Ipxe(
                         forge::InlineIpxe {
                             ipxe_script: "exit".to_string(),
-                            user_data: None,
                         },
                     )),
                 }),
@@ -1255,7 +1245,6 @@ async fn test_reject_zero_dpu_instance_with_extension_services(
                     variant: Some(forge::instance_operating_system_config::Variant::Ipxe(
                         forge::InlineIpxe {
                             ipxe_script: "exit".to_string(),
-                            user_data: None,
                         },
                     )),
                 }),
@@ -1320,7 +1309,6 @@ async fn test_instance_allocation_rejects_auto_with_explicit_interfaces(
                     variant: Some(forge::instance_operating_system_config::Variant::Ipxe(
                         forge::InlineIpxe {
                             ipxe_script: "exit".to_string(),
-                            user_data: None,
                         },
                     )),
                 }),
@@ -1393,7 +1381,6 @@ async fn test_instance_allocation_rejects_auto_on_dpu_host(
                     variant: Some(forge::instance_operating_system_config::Variant::Ipxe(
                         forge::InlineIpxe {
                             ipxe_script: "exit".to_string(),
-                            user_data: None,
                         },
                     )),
                 }),

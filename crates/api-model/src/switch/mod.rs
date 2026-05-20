@@ -342,6 +342,7 @@ pub struct SwitchSearchFilter {
     pub controller_state: Option<String>,
     pub bmc_mac: Option<MacAddress>,
     pub nvos_mac: Option<MacAddress>,
+    pub only_with_health_alert: Option<String>,
 }
 
 #[cfg(test)]

@@ -20,11 +20,12 @@ use std::fmt::Write;
 
 use carbide_uuid::switch::SwitchId;
 use prettytable::{Cell, Row, Table};
-use rpc::admin_cli::{CarbideCliError, CarbideCliResult, OutputFormat};
+use rpc::admin_cli::OutputFormat;
 use rpc::forge::{LinkedExpectedSwitch, MachineInterface, Switch};
 use serde::Serialize;
 
 use super::args::Args;
+use crate::errors::{CarbideCliError, CarbideCliResult};
 use crate::rpc::ApiClient;
 use crate::{async_write, async_write_table_as_csv};
 

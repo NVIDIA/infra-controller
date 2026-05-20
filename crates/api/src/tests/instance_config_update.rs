@@ -82,7 +82,6 @@ async fn test_update_instance_config(_: PgPoolOptions, options: PgConnectOptions
         variant: Some(rpc::forge::instance_operating_system_config::Variant::Ipxe(
             rpc::forge::InlineIpxe {
                 ipxe_script: "SomeRandomiPxe1".to_string(),
-                user_data: Some("SomeRandomData1".to_string()),
             },
         )),
     };
@@ -132,7 +131,6 @@ async fn test_update_instance_config(_: PgPoolOptions, options: PgConnectOptions
         variant: Some(rpc::forge::instance_operating_system_config::Variant::Ipxe(
             rpc::forge::InlineIpxe {
                 ipxe_script: "SomeRandomiPxe2".to_string(),
-                user_data: Some("SomeRandomData2".to_string()),
             },
         )),
     };
@@ -234,7 +232,6 @@ async fn test_update_instance_config(_: PgPoolOptions, options: PgConnectOptions
         variant: Some(rpc::forge::instance_operating_system_config::Variant::Ipxe(
             rpc::forge::InlineIpxe {
                 ipxe_script: "SomeRandomiPxe3".to_string(),
-                user_data: Some("SomeRandomData3".to_string()),
             },
         )),
     };
@@ -338,7 +335,6 @@ async fn test_reject_invalid_instance_config_updates(_: PgPoolOptions, options: 
         variant: Some(rpc::forge::instance_operating_system_config::Variant::Ipxe(
             rpc::forge::InlineIpxe {
                 ipxe_script: "SomeRandomiPxe1".to_string(),
-                user_data: Some("SomeRandomData1".to_string()),
             },
         )),
     };
@@ -375,7 +371,6 @@ async fn test_reject_invalid_instance_config_updates(_: PgPoolOptions, options: 
         variant: Some(rpc::forge::instance_operating_system_config::Variant::Ipxe(
             rpc::forge::InlineIpxe {
                 ipxe_script: "".to_string(),
-                user_data: Some("SomeRandomData2".to_string()),
             },
         )),
     };
@@ -605,7 +600,6 @@ async fn test_update_instance_config_vpc_prefix_no_network_update(
         variant: Some(rpc::forge::instance_operating_system_config::Variant::Ipxe(
             rpc::forge::InlineIpxe {
                 ipxe_script: "SomeRandomiPxe1".to_string(),
-                user_data: Some("SomeRandomData1".to_string()),
             },
         )),
     };
@@ -739,7 +733,6 @@ async fn test_update_instance_config_vpc_prefix_network_update(
         variant: Some(rpc::forge::instance_operating_system_config::Variant::Ipxe(
             rpc::forge::InlineIpxe {
                 ipxe_script: "SomeRandomiPxe1".to_string(),
-                user_data: Some("SomeRandomData1".to_string()),
             },
         )),
     };
@@ -944,7 +937,6 @@ async fn test_update_instance_config_vpc_prefix_network_update_post_instance_del
         variant: Some(rpc::forge::instance_operating_system_config::Variant::Ipxe(
             rpc::forge::InlineIpxe {
                 ipxe_script: "SomeRandomiPxe1".to_string(),
-                user_data: Some("SomeRandomData1".to_string()),
             },
         )),
     };
@@ -1099,7 +1091,6 @@ async fn test_update_instance_config_vpc_prefix_network_update_multidpu(
         variant: Some(rpc::forge::instance_operating_system_config::Variant::Ipxe(
             rpc::forge::InlineIpxe {
                 ipxe_script: "SomeRandomiPxe1".to_string(),
-                user_data: Some("SomeRandomData1".to_string()),
             },
         )),
     };
@@ -1266,7 +1257,6 @@ async fn test_update_instance_config_vpc_prefix_network_update_multidpu_differen
         variant: Some(rpc::forge::instance_operating_system_config::Variant::Ipxe(
             rpc::forge::InlineIpxe {
                 ipxe_script: "SomeRandomiPxe1".to_string(),
-                user_data: Some("SomeRandomData1".to_string()),
             },
         )),
     };
@@ -1459,7 +1449,6 @@ async fn test_update_instance_config_vpc_prefix_network_update_different_prefix_
         variant: Some(rpc::forge::instance_operating_system_config::Variant::Ipxe(
             rpc::forge::InlineIpxe {
                 ipxe_script: "SomeRandomiPxe1".to_string(),
-                user_data: Some("SomeRandomData1".to_string()),
             },
         )),
     };

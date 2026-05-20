@@ -281,7 +281,7 @@ pub(crate) async fn get_machine_attestations_status(
 
     Ok(Response::new(rpc::SpdmMachineAttestationStatusResponse {
         machine_id: Some(*machine_id),
-        attestation_status: attestation_status.into(),
+        attestation_status: rpc::SpdmAttestationStatus::from(attestation_status).into(),
     }))
 }
 
@@ -482,7 +482,6 @@ fn from_component_integrity(
         completed_at: None,
     }
 }
-
 #[cfg(not(feature = "linux-build"))]
 pub(crate) async fn attest_quote(
     _api: &Api,

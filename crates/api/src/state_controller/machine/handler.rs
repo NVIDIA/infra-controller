@@ -6210,6 +6210,13 @@ impl StateHandler for InstanceStateHandler {
                     // we just bump each DPA interface's config version so the
                     // DPA state controller re-evaluates with the new host value
                     // (READY -> WaitingForSetVNI, triggering SetVNI).
+
+                    // Note that we have to defer setting use_admin_network for the DPUs
+                    // till after DPA provisioning is complete. This is due to the fact
+                    // that we have to interact with scout to unlock/apply firmware/lock
+                    // the card. If we switch the DPUs also out of admin network, we will
+                    // no longer be able to interact with scout.
+
                     let mut txn = ctx.services.db_pool.begin().await?;
                     if ctx.services.site_config.is_dpa_enabled() {
                         for dpa_interface in &mh_snapshot.dpa_interface_snapshots {

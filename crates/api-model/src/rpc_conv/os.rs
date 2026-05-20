@@ -36,7 +36,6 @@ impl TryFrom<InlineIpxe> for rpc::forge::InlineIpxe {
     fn try_from(config: InlineIpxe) -> Result<rpc::forge::InlineIpxe, Self::Error> {
         Ok(Self {
             ipxe_script: config.ipxe_script,
-            user_data: None,
         })
     }
 }
@@ -53,10 +52,9 @@ impl TryFrom<rpc::forge::InstanceOperatingSystemConfig> for OperatingSystem {
             .ok_or(RpcDataConversionError::MissingArgument(
                 "InstanceOperatingSystemConfig::variant",
             ))?;
-        let mut ipxe_user_data = None;
+        let ipxe_user_data = None;
         let variant = match variant {
             rpc::forge::instance_operating_system_config::Variant::Ipxe(ipxe) => {
-                ipxe_user_data = ipxe.user_data.clone();
                 OperatingSystemVariant::Ipxe(ipxe.try_into()?)
             }
             rpc::forge::instance_operating_system_config::Variant::OsImageId(id) => {
@@ -87,8 +85,7 @@ impl TryFrom<OperatingSystem> for rpc::forge::InstanceOperatingSystemConfig {
     ) -> Result<rpc::forge::InstanceOperatingSystemConfig, Self::Error> {
         let variant = match config.variant {
             OperatingSystemVariant::Ipxe(ipxe) => {
-                let mut ipxe: rpc::forge::InlineIpxe = ipxe.try_into()?;
-                ipxe.user_data = config.user_data.clone();
+                let ipxe: rpc::forge::InlineIpxe = ipxe.try_into()?;
                 rpc::forge::instance_operating_system_config::Variant::Ipxe(ipxe)
             }
             OperatingSystemVariant::OsImage(id) => {

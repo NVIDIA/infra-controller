@@ -17,7 +17,8 @@
 
 use std::fmt::Write;
 
-use ::rpc::admin_cli::{CarbideCliError, CarbideCliResult, OutputFormat};
+use crate::errors::{CarbideCliError, CarbideCliResult};
+use ::rpc::admin_cli::OutputFormat;
 use ::rpc::forge as forgerpc;
 use carbide_uuid::spx::SpxPartitionId;
 use prettytable::{Table, row};

@@ -957,12 +957,11 @@ mod tests {
             user_data: Some("def".to_string()),
             variant: Some(Variant::Ipxe(InlineIpxe {
                 ipxe_script: "abc".to_string(),
-                user_data: Some("def".to_string()),
             })),
         };
 
         assert_eq!(
-            "{\"phone_home_enabled\":true,\"run_provisioning_instructions_on_every_boot\":true,\"user_data\":\"def\",\"variant\":{\"Ipxe\":{\"ipxe_script\":\"abc\",\"user_data\":\"def\"}}}",
+            "{\"phone_home_enabled\":true,\"run_provisioning_instructions_on_every_boot\":true,\"user_data\":\"def\",\"variant\":{\"Ipxe\":{\"ipxe_script\":\"abc\"}}}",
             serde_json::to_string(&os).unwrap()
         );
     }

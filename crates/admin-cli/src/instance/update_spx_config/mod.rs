@@ -18,7 +18,7 @@
 pub mod args;
 pub mod cmd;
 
-use ::rpc::admin_cli::CarbideCliResult;
+use crate::errors::{CarbideCliResult};
 pub use args::Args;
 
 use super::common::GlobalOptions;

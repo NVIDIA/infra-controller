@@ -39,7 +39,6 @@ async fn test_update_instance_operating_system(_: PgPoolOptions, options: PgConn
         variant: Some(rpc::forge::instance_operating_system_config::Variant::Ipxe(
             rpc::forge::InlineIpxe {
                 ipxe_script: "SomeRandomiPxe1".to_string(),
-                user_data: Some("SomeRandomData1".to_string()),
             },
         )),
     };
@@ -73,7 +72,6 @@ async fn test_update_instance_operating_system(_: PgPoolOptions, options: PgConn
         variant: Some(rpc::forge::instance_operating_system_config::Variant::Ipxe(
             rpc::forge::InlineIpxe {
                 ipxe_script: "SomeRandomiPxe2".to_string(),
-                user_data: Some("SomeRandomData2".to_string()),
             },
         )),
     };
@@ -102,7 +100,6 @@ async fn test_update_instance_operating_system(_: PgPoolOptions, options: PgConn
         variant: Some(rpc::forge::instance_operating_system_config::Variant::Ipxe(
             rpc::forge::InlineIpxe {
                 ipxe_script: "SomeRandomiPxe3".to_string(),
-                user_data: Some("SomeRandomData3".to_string()),
             },
         )),
     };
@@ -179,7 +176,6 @@ async fn test_update_instance_operating_system(_: PgPoolOptions, options: PgConn
         variant: Some(rpc::forge::instance_operating_system_config::Variant::Ipxe(
             rpc::forge::InlineIpxe {
                 ipxe_script: "".to_string(),
-                user_data: None,
             },
         )),
     };
@@ -478,7 +474,6 @@ async fn test_update_instance_os_rejects_inactive_os(_: PgPoolOptions, options: 
         variant: Some(rpc::forge::instance_operating_system_config::Variant::Ipxe(
             rpc::forge::InlineIpxe {
                 ipxe_script: "chain http://example.com".to_string(),
-                user_data: None,
             },
         )),
     };

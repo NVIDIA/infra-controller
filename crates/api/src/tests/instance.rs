@@ -3646,7 +3646,6 @@ async fn test_instance_cannot_allocate_requested_ip_with_network_segment(
                         variant: Some(rpc::forge::instance_operating_system_config::Variant::Ipxe(
                             rpc::forge::InlineIpxe {
                                 ipxe_script: "SomeRandomiPxe1".to_string(),
-                                user_data: Some("SomeRandomData1".to_string()),
                             },
                         )),
                     }),
@@ -3967,7 +3966,6 @@ async fn test_update_instance_config_vpc_prefix_network_update_delete_vf(
         variant: Some(rpc::forge::instance_operating_system_config::Variant::Ipxe(
             rpc::forge::InlineIpxe {
                 ipxe_script: "SomeRandomiPxe1".to_string(),
-                user_data: Some("SomeRandomData1".to_string()),
             },
         )),
     };
@@ -4374,7 +4372,6 @@ async fn test_update_instance_config_vpc_prefix_network_update_state_machine(
         variant: Some(rpc::forge::instance_operating_system_config::Variant::Ipxe(
             rpc::forge::InlineIpxe {
                 ipxe_script: "SomeRandomiPxe1".to_string(),
-                user_data: Some("SomeRandomData1".to_string()),
             },
         )),
     };
@@ -5710,7 +5707,6 @@ async fn test_can_not_update_instance_config_after_deletion(
         variant: Some(rpc::forge::instance_operating_system_config::Variant::Ipxe(
             rpc::forge::InlineIpxe {
                 ipxe_script: "SomeRandomiPxe1".to_string(),
-                user_data: Some("SomeRandomData1".to_string()),
             },
         )),
     };

@@ -832,12 +832,34 @@ impl SiteExplorer {
         }
 
         // Create a new power shelf
-        // Generate power_shelf_id similar to machine_id using deterministic hashing
-        // Extract power shelf metadata similar to how machine_id extracts hardware info
-        //TODO fetch these from chassis
-        let power_shelf_serial = expected_shelf.metadata.name.as_str();
-        let power_shelf_vendor = "NVIDIA"; // Default vendor for power shelves
-        let power_shelf_model = "PowerShelf"; // Default model identifier
+        // Generate power_shelf_id similar to machine_id using deterministic hashing.
+        // Extract serial / vendor / model from the chassis reported by the
+        // explored endpoint. Prefer a chassis whose id identifies it as a
+        // power shelf, falling back to the first chassis if none match.
+        // Fall back to sensible defaults if the chassis is missing fields so
+        // that we can still mint a stable id during exploration.
+        let chassis_list = &explored_endpoint.report.chassis;
+        let power_shelf_chassis = chassis_list
+            .iter()
+            .find(|c| c.id.to_lowercase().contains("powershelf"))
+            .or_else(|| chassis_list.first());
+
+        if power_shelf_chassis.is_none() {
+            tracing::warn!(
+                endpoint = %explored_endpoint.address,
+                "No chassis reported for power shelf endpoint; falling back to defaults for id generation",
+            );
+        }
+
+        let power_shelf_serial = power_shelf_chassis
+            .and_then(|c| c.serial_number.as_deref())
+            .unwrap_or(expected_shelf.metadata.name.as_str());
+        let power_shelf_vendor = power_shelf_chassis
+            .and_then(|c| c.manufacturer.as_deref())
+            .unwrap_or("NVIDIA");
+        let power_shelf_model = power_shelf_chassis
+            .and_then(|c| c.model.as_deref())
+            .unwrap_or("PowerShelf");
         let power_shelf_id = match model::power_shelf::power_shelf_id::from_hardware_info(
             power_shelf_serial,
             power_shelf_vendor,

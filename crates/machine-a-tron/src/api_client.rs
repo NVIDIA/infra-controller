@@ -278,7 +278,6 @@ impl ApiClient {
             os: Some(InstanceOperatingSystemConfig {
                 variant: Some(Variant::Ipxe(InlineIpxe {
                     ipxe_script: "Non-existing-ipxe".to_string(),
-                    user_data: None,
                 })),
                 user_data: None,
                 phone_home_enabled: false,

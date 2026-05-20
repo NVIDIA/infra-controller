@@ -16,7 +16,7 @@
  */
 use std::collections::HashMap;
 
-use ::rpc::admin_cli::{CarbideCliResult, OutputFormat};
+use ::rpc::admin_cli::OutputFormat;
 use clap::ValueEnum;
 use mac_address::MacAddress;
 use prettytable::{Table, row};
@@ -24,6 +24,7 @@ use rpc::forge::ExpectedMachineRequest;
 
 use super::args::Args;
 use crate::async_write;
+use crate::errors::CarbideCliResult;
 use crate::rpc::ApiClient;
 
 pub async fn show_expected_machines(

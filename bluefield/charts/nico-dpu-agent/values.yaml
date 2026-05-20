@@ -9,6 +9,9 @@ exposedPorts:
   labels: {}
   ports: {}
 
+### Cert directory on the host (also used as the container mountPath).
+certsDir: /opt/forge
+
 ### Service specific values ###
 image:
   repository: ""

@@ -18,7 +18,7 @@
 /// Model for SPDM attestation via Redfish
 pub mod spdm {
 
-    use crate::attestation::spdm::SpdmDeviceAttestationDetails;
+    use crate::attestation::spdm::{SpdmAttestationStatus, SpdmDeviceAttestationDetails};
 
     impl From<SpdmDeviceAttestationDetails> for rpc::forge::SpdmAttestationDetails {
         fn from(value: SpdmDeviceAttestationDetails) -> Self {
@@ -29,6 +29,17 @@ pub mod spdm {
                 cancelled_at: value.cancelled_at.map(|x| x.into()),
                 state: format!("{:?}", value.state),
                 device_id: value.device_id,
+            }
+        }
+    }
+
+    impl From<SpdmAttestationStatus> for rpc::forge::SpdmAttestationStatus {
+        fn from(value: SpdmAttestationStatus) -> Self {
+            match value {
+                SpdmAttestationStatus::InProgress => Self::SpdmAttInProgress,
+                SpdmAttestationStatus::Cancelled => Self::SpdmAttCancelled,
+                SpdmAttestationStatus::Passed => Self::SpdmAttPassed,
+                SpdmAttestationStatus::Failed => Self::SpdmAttFailed,
             }
         }
     }

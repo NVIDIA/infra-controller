@@ -760,7 +760,6 @@ async fn handle_netconf(AxumState(state): AxumState<Arc<Mutex<State>>>) -> impl 
                 user_data: Some("".to_string()),
                 variant: Some(rpc::forge::instance_operating_system_config::Variant::Ipxe(rpc::forge::InlineIpxe {
                     ipxe_script: " chain http://10.217.126.4/public/blobs/internal/x86_64/qcow-imager.efi loglevel=7 console=ttyS0,115200 console=tty0 pci=realloc=off image_url=https://pbss.s8k.io/v1/AUTH_team-forge/images.qcow2/carbide-dev-environment/carbide-dev-environment-latest.qcow2".to_string(),
-                    user_data: Some("".to_string()),
                 })),
             }),
             network: Some(rpc::InstanceNetworkConfig {
@@ -844,6 +843,7 @@ async fn handle_netconf(AxumState(state): AxumState<Arc<Mutex<State>>>) -> impl 
             leak_default_route_from_underlay: false,
             leak_tenant_host_routes_to_underlay: false,
             accepted_leaks_from_underlay: vec![],
+            allowed_anycast_prefixes: vec![],
             route_target_imports: vec![rpc_common::RouteTarget {
                 asn: 44444,
                 vni: 55555,

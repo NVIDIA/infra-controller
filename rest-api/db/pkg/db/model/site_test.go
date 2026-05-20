@@ -1,0 +1,1851 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package model
+
+import (
+	"context"
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/NVIDIA/infra-controller-rest/db/pkg/db"
+	"github.com/NVIDIA/infra-controller-rest/db/pkg/db/paginator"
+	stracer "github.com/NVIDIA/infra-controller-rest/db/pkg/tracer"
+	"github.com/NVIDIA/infra-controller-rest/db/pkg/util"
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
+	"github.com/uptrace/bun/extra/bundebug"
+	otrace "go.opentelemetry.io/otel/trace"
+)
+
+func setupSchema(t *testing.T, dbSession *db.Session) {
+	// Create Infrastructure Provider table
+	err := dbSession.DB.ResetModel(context.Background(), (*InfrastructureProvider)(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create Site table
+	err = dbSession.DB.ResetModel(context.Background(), (*Site)(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Add tsv index with new columns
+	_, err = dbSession.DB.Exec("CREATE INDEX site_tsv_idx ON site USING gin(to_tsvector('english', name || ' ' || description || ' ' || status || ' ' || location::text || ' ' || contact::text))")
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSiteSQLDAO_GetByID(t *testing.T) {
+	// Create test DB
+	dbSession := util.GetTestDBSession(t, false)
+	defer dbSession.Close()
+
+	setupSchema(t, dbSession)
+
+	// Create infrastructure provider
+	ip := &InfrastructureProvider{
+		ID:          uuid.New(),
+		Name:        "test",
+		DisplayName: db.GetStrPtr("Test"),
+		Org:         "test",
+	}
+
+	_, err := dbSession.DB.NewInsert().Model(ip).Exec(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// time.Now sets a timezone, but reading back from postgres doesn't load a TZ for zero offset
+	expirationTime := db.GetCurTime()
+
+	// Create site
+	st1 := &Site{
+		ID:                          uuid.New(),
+		Name:                        "test-site-1",
+		DisplayName:                 db.GetStrPtr("Test Site 1"),
+		Org:                         "test-org",
+		InfrastructureProviderID:    ip.ID,
+		SiteControllerVersion:       db.GetStrPtr("1.0.0"),
+		SiteAgentVersion:            db.GetStrPtr("1.0.0"),
+		RegistrationToken:           db.GetStrPtr("1234-5678-9012-3456"),
+		RegistrationTokenExpiration: db.GetTimePtr(expirationTime),
+		Status:                      SiteStatusPending,
+		CreatedBy:                   uuid.New(),
+	}
+
+	_, err = dbSession.DB.NewInsert().Model(st1).Exec(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create deleted site
+	st2 := &Site{
+		ID:                       uuid.New(),
+		Name:                     "test-site-2",
+		DisplayName:              db.GetStrPtr("Test"),
+		Org:                      "test-org",
+		InfrastructureProviderID: ip.ID,
+		Status:                   SiteStatusRegistered,
+		CreatedBy:                uuid.New(),
+		Deleted:                  db.GetTimePtr(time.Now().Add(time.Hour * 24)),
+	}
+
+	_, err = dbSession.DB.NewInsert().Model(st2).Exec(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// OTEL Spanner configuration
+	_, _, ctx := testCommonTraceProviderSetup(t, context.Background())
+
+	type fields struct {
+		dbSession *db.Session
+	}
+	type args struct {
+		ctx              context.Context
+		id               uuid.UUID
+		includeRelations bool
+		includeDeleted   bool
+	}
+
+	// Define tests
+	tests := []struct {
+		name               string
+		fields             fields
+		args               args
+		want               *Site
+		wantErr            bool
+		wantErrVal         error
+		verifyChildSpanner bool
+	}{
+		{
+			name: "get a Site by ID",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			args: args{
+				ctx:              ctx,
+				id:               st1.ID,
+				includeRelations: false,
+			},
+			want:               st1,
+			wantErr:            false,
+			verifyChildSpanner: true,
+		},
+		{
+			name: "error getting a Site by ID",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			args: args{
+				ctx:              context.Background(),
+				id:               uuid.New(),
+				includeRelations: false,
+			},
+			want:       st1,
+			wantErr:    true,
+			wantErrVal: db.ErrDoesNotExist,
+		},
+		{
+			name: "get a Site by ID and include relations",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			args: args{
+				ctx:              context.Background(),
+				id:               st1.ID,
+				includeRelations: true,
+			},
+			want:    st1,
+			wantErr: false,
+		},
+		{
+			name: "get a deleted Site by ID",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			args: args{
+				ctx:            context.Background(),
+				id:             st2.ID,
+				includeDeleted: true,
+			},
+			want: st2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ssd := SiteSQLDAO{
+				dbSession: tt.fields.dbSession,
+			}
+
+			relations := []string{}
+			if tt.args.includeRelations {
+				relations = append(relations, InfrastructureProviderRelationName)
+				tt.want.InfrastructureProvider = ip
+			} else {
+				tt.want.InfrastructureProvider = nil
+			}
+
+			got, err := ssd.GetByID(tt.args.ctx, nil, tt.args.id, relations, tt.args.includeDeleted)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("SiteSQLDAO.GetByID()\nerror = %v,\nwantErr = %v", err, tt.wantErr)
+				return
+			}
+			if tt.wantErr {
+				assert.Equal(t, tt.wantErrVal, err)
+				return
+			}
+			if got.ID != tt.want.ID {
+				t.Errorf("SiteSQLDAO.GetByID()\ngotID = %v,\nwantID = %v", got.ID, tt.want.ID)
+			}
+			if tt.verifyChildSpanner {
+				span := otrace.SpanFromContext(ctx)
+				assert.True(t, span.SpanContext().IsValid())
+				_, ok := ctx.Value(stracer.TracerKey).(otrace.Tracer)
+				assert.True(t, ok)
+			}
+		})
+	}
+}
+
+func TestSiteSQLDAO_GetAll(t *testing.T) {
+	type fields struct {
+		dbSession *db.Session
+	}
+	type args struct {
+		ctx                    context.Context
+		filter                 SiteFilterInput
+		page                   paginator.PageInput
+		infrastructureProvider *InfrastructureProvider
+		firstEntry             *Site
+		includeRelations       bool
+	}
+
+	// Create test DB
+	dbSession := util.GetTestDBSession(t, false)
+	dbSession.DB.AddQueryHook(bundebug.NewQueryHook(
+		bundebug.WithEnabled(false),
+		bundebug.FromEnv(""),
+	))
+	defer dbSession.Close()
+
+	setupSchema(t, dbSession)
+
+	// Create infrastructure provider
+	ip := &InfrastructureProvider{
+		ID:          uuid.New(),
+		Name:        "test",
+		DisplayName: db.GetStrPtr("Test"),
+		Org:         "test-org",
+	}
+
+	_, err := dbSession.DB.NewInsert().Model(ip).Exec(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// time.Now sets a timezone, but reading back from postgres doesn't load a TZ for zero offset
+	expirationTime := db.GetCurTime()
+
+	// Create sites
+	sites := []Site{}
+	for i := 25; i > 0; i-- {
+		site := &Site{
+			ID:                          uuid.New(),
+			Name:                        fmt.Sprintf("test%v", i),
+			Description:                 db.GetStrPtr(fmt.Sprintf("test-description-%v", i)),
+			DisplayName:                 db.GetStrPtr(fmt.Sprintf("Test %v", i)),
+			Org:                         ip.Org,
+			InfrastructureProviderID:    ip.ID,
+			SiteControllerVersion:       db.GetStrPtr("1.0.0"),
+			SiteAgentVersion:            db.GetStrPtr("1.0.0"),
+			RegistrationToken:           db.GetStrPtr("1234-5678-9012-3456"),
+			RegistrationTokenExpiration: db.GetTimePtr(expirationTime),
+			SerialConsoleHostname:       db.GetStrPtr(fmt.Sprintf("test-serial-console-hostname%v", i)),
+			Status:                      SiteStatusPending,
+			CreatedBy:                   uuid.New(),
+			Config:                      &SiteConfig{},
+		}
+
+		if i == 25 || i == 24 {
+			site.Config.NativeNetworking = true
+			site.Config.NVLinkPartition = true
+			site.Config.Flow = true
+		}
+
+		if i == 23 {
+			site.Config.NetworkSecurityGroup = true
+		}
+
+		if i == 22 {
+			site.Config.NetworkSecurityGroup = true
+			site.Config.NativeNetworking = true
+			site.Config.NVLinkPartition = true
+			site.Config.MaxNetworkSecurityGroupRuleCount = db.GetIntPtr(100)
+		}
+
+		_, err = dbSession.DB.NewInsert().Model(site).Exec(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		sites = append(sites, *site)
+	}
+
+	// OTEL Spanner configuration
+	_, _, ctx := testCommonTraceProviderSetup(t, context.Background())
+
+	tests := []struct {
+		name               string
+		fields             fields
+		args               args
+		wantCount          int
+		wantTotalCount     int
+		wantErr            bool
+		verifyChildSpanner bool
+	}{
+		{
+			name: "get all Sites by Infrastructure Provider ID",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			args: args{
+				ctx: ctx,
+				filter: SiteFilterInput{
+					Name:                      nil,
+					Org:                       nil,
+					InfrastructureProviderIDs: []uuid.UUID{ip.ID},
+					SiteIDs:                   nil,
+				},
+				infrastructureProvider: ip,
+				includeRelations:       true,
+			},
+			wantCount:          paginator.DefaultLimit,
+			wantTotalCount:     len(sites),
+			wantErr:            false,
+			verifyChildSpanner: true,
+		},
+		{
+			name: "get all Sites by name and include relations",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			args: args{
+				ctx: context.Background(),
+				filter: SiteFilterInput{
+					Name:                      db.GetStrPtr("test1"),
+					Org:                       nil,
+					InfrastructureProviderIDs: nil,
+					SiteIDs:                   nil,
+				},
+				infrastructureProvider: ip,
+				includeRelations:       true,
+			},
+			wantCount:      1,
+			wantTotalCount: 1,
+			wantErr:        false,
+		},
+		{
+			name: "get all Sites by Org",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			args: args{
+				ctx: context.Background(),
+				filter: SiteFilterInput{
+					Org:                       &ip.Org,
+					InfrastructureProviderIDs: nil,
+					SiteIDs:                   nil,
+				},
+				includeRelations: false,
+			},
+			wantCount:      paginator.DefaultLimit,
+			wantTotalCount: len(sites),
+			wantErr:        false,
+		},
+		{
+			name: "get all Sites by set of IDs",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			args: args{
+				ctx: context.Background(),
+				filter: SiteFilterInput{
+					Org:                       nil,
+					InfrastructureProviderIDs: nil,
+					SiteIDs:                   []uuid.UUID{sites[0].ID, sites[1].ID},
+				},
+				includeRelations: false,
+			},
+			wantCount:      2,
+			wantTotalCount: 2,
+			wantErr:        false,
+		},
+		{
+			name: "get all Sites by native networking flag",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			args: args{
+				ctx: context.Background(),
+				filter: SiteFilterInput{
+					Org:                       nil,
+					InfrastructureProviderIDs: nil,
+					Config:                    &SiteConfigFilterInput{NativeNetworking: db.GetBoolPtr(true)},
+				},
+				includeRelations: false,
+			},
+			wantCount:      3,
+			wantTotalCount: 3,
+			wantErr:        false,
+		},
+		{
+			name: "get all Sites by NVLink partitioning flag",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			args: args{
+				ctx: context.Background(),
+				filter: SiteFilterInput{
+					Org:                       nil,
+					InfrastructureProviderIDs: nil,
+					Config:                    &SiteConfigFilterInput{NVLinkPartition: db.GetBoolPtr(true)},
+				},
+				includeRelations: false,
+			},
+			wantCount:      3,
+			wantTotalCount: 3,
+			wantErr:        false,
+		},
+		{
+			name: "get all Sites by rack level administration flag",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			args: args{
+				ctx: context.Background(),
+				filter: SiteFilterInput{
+					Org:                       nil,
+					InfrastructureProviderIDs: nil,
+					Config:                    &SiteConfigFilterInput{Flow: db.GetBoolPtr(true)},
+				},
+				includeRelations: false,
+			},
+			wantCount:      2,
+			wantTotalCount: 2,
+			wantErr:        false,
+		},
+		{
+			name: "get all Sites by security group flag",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			args: args{
+				ctx: context.Background(),
+				filter: SiteFilterInput{
+					Org:                       nil,
+					InfrastructureProviderIDs: nil,
+					Config:                    &SiteConfigFilterInput{NetworkSecurityGroup: db.GetBoolPtr(true)},
+				},
+				includeRelations: false,
+			},
+			wantCount:      2,
+			wantTotalCount: 2,
+			wantErr:        false,
+		},
+		{
+			name: "get all Sites by security group flag via config struct",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			args: args{
+				ctx: context.Background(),
+				filter: SiteFilterInput{
+					Org:                       nil,
+					InfrastructureProviderIDs: nil,
+					Config:                    &SiteConfigFilterInput{NetworkSecurityGroup: db.GetBoolPtr(true)},
+				},
+				includeRelations: false,
+			},
+			wantCount:      2,
+			wantTotalCount: 2,
+			wantErr:        false,
+		},
+		{
+			name: "get all Sites by combined config",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			args: args{
+				ctx: context.Background(),
+				filter: SiteFilterInput{
+					Org:                       nil,
+					InfrastructureProviderIDs: nil,
+					Config: &SiteConfigFilterInput{
+						NetworkSecurityGroup:             db.GetBoolPtr(true),
+						NativeNetworking:                 db.GetBoolPtr(true),
+						MaxNetworkSecurityGroupRuleCount: db.GetIntPtr(100),
+					},
+				},
+				includeRelations: false,
+			},
+			wantCount:      1,
+			wantTotalCount: 1,
+			wantErr:        false,
+		},
+		{
+			name: "get all Sites by set of IDs and include relations",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			args: args{
+				ctx: context.Background(),
+				filter: SiteFilterInput{
+					Org:                       nil,
+					InfrastructureProviderIDs: nil,
+					SiteIDs:                   []uuid.UUID{sites[0].ID, sites[1].ID},
+				},
+				infrastructureProvider: ip,
+				includeRelations:       true,
+			},
+			wantCount:      2,
+			wantTotalCount: 2,
+			wantErr:        false,
+		},
+		{
+			name: "get all Sites by set of IDs when number of ids is 0",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			args: args{
+				ctx: context.Background(),
+				filter: SiteFilterInput{
+					Org:                       nil,
+					InfrastructureProviderIDs: nil,
+					SiteIDs:                   []uuid.UUID{},
+				},
+				includeRelations: false,
+			},
+			wantCount:      0,
+			wantTotalCount: 0,
+			wantErr:        false,
+		},
+		{
+			name: "get all Sites with limit",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			args: args{
+				ctx: context.Background(),
+				filter: SiteFilterInput{
+					Org:                       &ip.Org,
+					InfrastructureProviderIDs: nil,
+				},
+				page: paginator.PageInput{
+					Limit: db.GetIntPtr(10),
+				},
+				includeRelations: false,
+			},
+			wantCount:      10,
+			wantTotalCount: len(sites),
+			wantErr:        false,
+		},
+		{
+			name: "get all Sites with offset",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			args: args{
+				ctx: context.Background(),
+				filter: SiteFilterInput{
+					Org:                       &ip.Org,
+					InfrastructureProviderIDs: nil,
+				},
+				page: paginator.PageInput{
+					Offset: db.GetIntPtr(20),
+				},
+				includeRelations: false,
+			},
+			wantCount:      5,
+			wantTotalCount: len(sites),
+			wantErr:        false,
+		},
+		{
+			name: "get all Sites ordered by name",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			args: args{
+				ctx: context.Background(),
+				filter: SiteFilterInput{
+					Org:                       &ip.Org,
+					InfrastructureProviderIDs: nil,
+				},
+				page: paginator.PageInput{
+					OrderBy: &paginator.OrderBy{Field: "name", Order: paginator.OrderAscending},
+				},
+				firstEntry:       &sites[24],
+				includeRelations: false,
+			},
+			wantCount:      paginator.DefaultLimit,
+			wantTotalCount: len(sites),
+			wantErr:        false,
+		},
+		{
+			name: "get all Sites with name search query",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			args: args{
+				ctx: context.Background(),
+				filter: SiteFilterInput{
+					Org:                       nil,
+					InfrastructureProviderIDs: nil,
+					SiteIDs:                   nil,
+					SearchQuery:               db.GetStrPtr("test"),
+				},
+				includeRelations: false,
+			},
+			wantCount:      paginator.DefaultLimit,
+			wantTotalCount: len(sites),
+			wantErr:        false,
+		},
+		{
+			name: "get all Sites with name substring in search query",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			args: args{
+				ctx: context.Background(),
+				filter: SiteFilterInput{
+					Org:                       nil,
+					InfrastructureProviderIDs: nil,
+					SiteIDs:                   nil,
+					SearchQuery:               db.GetStrPtr("est"),
+				},
+				includeRelations: false,
+			},
+			wantCount:      paginator.DefaultLimit,
+			wantTotalCount: len(sites),
+			wantErr:        false,
+		},
+		{
+			name: "get all Sites with description search query",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			args: args{
+				ctx: context.Background(),
+				filter: SiteFilterInput{
+					Org:                       nil,
+					InfrastructureProviderIDs: nil,
+					SiteIDs:                   nil,
+					SearchQuery:               db.GetStrPtr("test-description"),
+				},
+				includeRelations: false,
+			},
+			wantCount:      paginator.DefaultLimit,
+			wantTotalCount: len(sites),
+			wantErr:        false,
+		},
+		{
+			name: "get all Sites with status search query",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			args: args{
+				ctx: context.Background(),
+				filter: SiteFilterInput{
+					Org:                       nil,
+					InfrastructureProviderIDs: nil,
+					SiteIDs:                   nil,
+					SearchQuery:               db.GetStrPtr(SiteStatusPending),
+				},
+				includeRelations: false,
+			},
+			wantCount:      paginator.DefaultLimit,
+			wantTotalCount: len(sites),
+			wantErr:        false,
+		},
+		{
+			name: "get all Sites with empty search query returns success",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			args: args{
+				ctx: context.Background(),
+				filter: SiteFilterInput{
+					Org:                       nil,
+					InfrastructureProviderIDs: nil,
+					SiteIDs:                   nil,
+					SearchQuery:               db.GetStrPtr(""),
+				},
+				includeRelations: false,
+			},
+			wantCount:      paginator.DefaultLimit,
+			wantTotalCount: len(sites),
+			wantErr:        false,
+		},
+		{
+			name: "get all Sites with status query",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			args: args{
+				ctx: context.Background(),
+				filter: SiteFilterInput{
+					Org:                       nil,
+					InfrastructureProviderIDs: nil,
+					SiteIDs:                   nil,
+					Statuses:                  []string{SiteStatusPending},
+				},
+				includeRelations: false,
+			},
+			wantCount:      paginator.DefaultLimit,
+			wantTotalCount: len(sites),
+			wantErr:        false,
+		},
+		{
+			name: "get all Sites with multiple status query values",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			args: args{
+				ctx: context.Background(),
+				filter: SiteFilterInput{
+					Org:                       nil,
+					InfrastructureProviderIDs: nil,
+					SiteIDs:                   nil,
+					Statuses:                  []string{SiteStatusPending, SiteStatusError},
+				},
+				includeRelations: false,
+			},
+			wantCount:      paginator.DefaultLimit,
+			wantTotalCount: len(sites),
+			wantErr:        false,
+		},
+		{
+			name: "get all Sites ordered by description",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			args: args{
+				ctx: context.Background(),
+				filter: SiteFilterInput{
+					Org:                       &ip.Org,
+					InfrastructureProviderIDs: nil,
+				},
+				page: paginator.PageInput{
+					OrderBy: &paginator.OrderBy{Field: "description", Order: paginator.OrderAscending},
+				},
+				firstEntry:       &sites[24],
+				includeRelations: false,
+			},
+			wantCount:      paginator.DefaultLimit,
+			wantTotalCount: len(sites),
+			wantErr:        false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ssd := SiteSQLDAO{
+				dbSession: tt.fields.dbSession,
+			}
+
+			relations := []string{}
+			if tt.args.includeRelations {
+				relations = append(relations, InfrastructureProviderRelationName)
+			}
+
+			got, total, err := ssd.GetAll(tt.args.ctx, nil, tt.args.filter, tt.args.page, relations)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("SiteSQLDAO.GetAll() error = %v, wantErr = %v", err, tt.wantErr)
+				return
+			}
+
+			assert.Equal(t, tt.wantCount, len(got))
+			assert.Equal(t, tt.wantTotalCount, total)
+
+			if tt.args.includeRelations {
+				assert.Equal(t, tt.args.infrastructureProvider.ID, got[0].InfrastructureProvider.ID)
+			}
+
+			if tt.args.firstEntry != nil {
+				assert.Equal(t, tt.args.firstEntry.Name, got[0].Name)
+			}
+			if tt.verifyChildSpanner {
+				span := otrace.SpanFromContext(ctx)
+				assert.True(t, span.SpanContext().IsValid())
+				_, ok := ctx.Value(stracer.TracerKey).(otrace.Tracer)
+				assert.True(t, ok)
+			}
+		})
+	}
+}
+
+func TestSiteSQLDAO_GetCount(t *testing.T) {
+	type fields struct {
+		dbSession *db.Session
+	}
+	type args struct {
+		ctx    context.Context
+		filter SiteFilterInput
+	}
+
+	// Create test DB
+	dbSession := util.GetTestDBSession(t, false)
+	dbSession.DB.AddQueryHook(bundebug.NewQueryHook(
+		bundebug.WithEnabled(false),
+		bundebug.FromEnv(""),
+	))
+	defer dbSession.Close()
+
+	setupSchema(t, dbSession)
+
+	// Create infrastructure provider
+	ip := &InfrastructureProvider{
+		ID:          uuid.New(),
+		Name:        "test",
+		DisplayName: db.GetStrPtr("Test"),
+		Org:         "test-org",
+	}
+
+	_, err := dbSession.DB.NewInsert().Model(ip).Exec(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// time.Now sets a timezone, but reading back from postgres doesn't load a TZ for zero offset
+	expirationTime := db.GetCurTime()
+
+	// Create sites
+	sites := []Site{}
+	for i := 25; i > 0; i-- {
+		site := &Site{
+			ID:                          uuid.New(),
+			Name:                        fmt.Sprintf("test%v", i),
+			Description:                 db.GetStrPtr("test-description"),
+			DisplayName:                 db.GetStrPtr(fmt.Sprintf("Test %v", i)),
+			Org:                         ip.Org,
+			InfrastructureProviderID:    ip.ID,
+			SiteControllerVersion:       db.GetStrPtr("1.0.0"),
+			SiteAgentVersion:            db.GetStrPtr("1.0.0"),
+			RegistrationToken:           db.GetStrPtr("1234-5678-9012-3456"),
+			RegistrationTokenExpiration: db.GetTimePtr(expirationTime),
+			SerialConsoleHostname:       db.GetStrPtr(fmt.Sprintf("test-serial-console-hostname%v", i)),
+			Status:                      SiteStatusPending,
+			CreatedBy:                   uuid.New(),
+		}
+
+		_, err = dbSession.DB.NewInsert().Model(site).Exec(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		sites = append(sites, *site)
+	}
+
+	// OTEL Spanner configuration
+	_, _, ctx := testCommonTraceProviderSetup(t, context.Background())
+
+	tests := []struct {
+		name               string
+		fields             fields
+		args               args
+		wantCount          int
+		wantErr            bool
+		verifyChildSpanner bool
+	}{
+		{
+			name: "get count Sites by Infrastructure Provider ID",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			args: args{
+				ctx: ctx,
+				filter: SiteFilterInput{
+					Name:                      nil,
+					Org:                       nil,
+					InfrastructureProviderIDs: []uuid.UUID{ip.ID},
+					SiteIDs:                   nil,
+				},
+			},
+			wantCount:          len(sites),
+			wantErr:            false,
+			verifyChildSpanner: true,
+		},
+		{
+			name: "get all Sites by name",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			args: args{
+				ctx: context.Background(),
+				filter: SiteFilterInput{
+					Name:                      db.GetStrPtr("test1"),
+					Org:                       nil,
+					InfrastructureProviderIDs: nil,
+					SiteIDs:                   nil,
+				},
+			},
+			wantCount: 1,
+			wantErr:   false,
+		},
+		{
+			name: "get count Sites by Org",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			args: args{
+				ctx: context.Background(),
+				filter: SiteFilterInput{
+					Org:                       &ip.Org,
+					InfrastructureProviderIDs: nil,
+					SiteIDs:                   nil,
+				},
+			},
+			wantCount: len(sites),
+			wantErr:   false,
+		},
+		{
+			name: "get all Sites by set of IDs",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			args: args{
+				ctx: context.Background(),
+				filter: SiteFilterInput{
+					Org:                       nil,
+					InfrastructureProviderIDs: nil,
+					SiteIDs:                   []uuid.UUID{sites[0].ID, sites[1].ID},
+				},
+			},
+			wantCount: 2,
+			wantErr:   false,
+		},
+		{
+			name: "get count Sites by set of IDs when number of ids is 0",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			args: args{
+				ctx: context.Background(),
+				filter: SiteFilterInput{
+					Org:                       nil,
+					InfrastructureProviderIDs: nil,
+					SiteIDs:                   []uuid.UUID{},
+				},
+			},
+			wantCount: 0,
+			wantErr:   false,
+		},
+		{
+			name: "get all Sites with name search query",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			args: args{
+				ctx: context.Background(),
+				filter: SiteFilterInput{
+					Org:                       nil,
+					InfrastructureProviderIDs: nil,
+					SiteIDs:                   nil,
+					SearchQuery:               db.GetStrPtr("test"),
+				},
+			},
+			wantCount: len(sites),
+			wantErr:   false,
+		},
+		{
+			name: "get count Sites with name substring in search query",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			args: args{
+				ctx: context.Background(),
+				filter: SiteFilterInput{
+					Org:                       nil,
+					InfrastructureProviderIDs: nil,
+					SiteIDs:                   nil,
+					SearchQuery:               db.GetStrPtr("est"),
+				},
+			},
+			wantCount: len(sites),
+			wantErr:   false,
+		},
+		{
+			name: "get count Sites with description search query",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			args: args{
+				ctx: context.Background(),
+				filter: SiteFilterInput{
+					Org:                       nil,
+					InfrastructureProviderIDs: nil,
+					SiteIDs:                   nil,
+					SearchQuery:               db.GetStrPtr("test-description"),
+				},
+			},
+			wantCount: len(sites),
+			wantErr:   false,
+		},
+		{
+			name: "get count Sites with status search query",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			args: args{
+				ctx: context.Background(),
+				filter: SiteFilterInput{
+					Org:                       nil,
+					InfrastructureProviderIDs: nil,
+					SiteIDs:                   nil,
+					SearchQuery:               db.GetStrPtr(SiteStatusPending),
+				},
+			},
+			wantCount: len(sites),
+			wantErr:   false,
+		},
+		{
+			name: "get count Sites with empty search query returns success",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			args: args{
+				ctx: context.Background(),
+				filter: SiteFilterInput{
+					Org:                       nil,
+					InfrastructureProviderIDs: nil,
+					SiteIDs:                   nil,
+					SearchQuery:               db.GetStrPtr(""),
+				},
+			},
+			wantCount: len(sites),
+			wantErr:   false,
+		},
+		{
+			name: "get count Sites with status query",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			args: args{
+				ctx: context.Background(),
+				filter: SiteFilterInput{
+					Org:                       nil,
+					InfrastructureProviderIDs: nil,
+					SiteIDs:                   nil,
+					Statuses:                  []string{SiteStatusPending},
+				},
+			},
+			wantCount: len(sites),
+			wantErr:   false,
+		},
+		{
+			name: "get count Sites with multiple status query values",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			args: args{
+				ctx: context.Background(),
+				filter: SiteFilterInput{
+					Org:                       nil,
+					InfrastructureProviderIDs: nil,
+					SiteIDs:                   nil,
+					Statuses:                  []string{SiteStatusPending, SiteStatusError},
+				},
+			},
+			wantCount: len(sites),
+			wantErr:   false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ssd := SiteSQLDAO{
+				dbSession: tt.fields.dbSession,
+			}
+
+			count, err := ssd.GetCount(tt.args.ctx, nil, tt.args.filter)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("SiteSQLDAO.GetAllByInfrastructureProvider() error = %v, wantErr = %v", err, tt.wantErr)
+				return
+			}
+
+			assert.Equal(t, tt.wantCount, count)
+
+			if tt.verifyChildSpanner {
+				span := otrace.SpanFromContext(ctx)
+				assert.True(t, span.SpanContext().IsValid())
+				_, ok := ctx.Value(stracer.TracerKey).(otrace.Tracer)
+				assert.True(t, ok)
+			}
+		})
+	}
+}
+
+func TestSiteSQLDAO_Create(t *testing.T) {
+	type fields struct {
+		dbSession *db.Session
+	}
+
+	dbSession := util.GetTestDBSession(t, false)
+	defer dbSession.Close()
+
+	setupSchema(t, dbSession)
+
+	// Create infrastructure provider
+	ip := &InfrastructureProvider{
+		ID:          uuid.New(),
+		Name:        "test",
+		DisplayName: db.GetStrPtr("Test"),
+		Org:         "test",
+	}
+
+	_, err := dbSession.DB.NewInsert().Model(ip).Exec(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	st := &Site{
+		ID:                            uuid.New(),
+		Name:                          "test",
+		DisplayName:                   db.GetStrPtr("Test"),
+		Description:                   db.GetStrPtr("Test"),
+		Org:                           "test",
+		InfrastructureProviderID:      ip.ID,
+		SiteControllerVersion:         db.GetStrPtr("1.0.0"),
+		SiteAgentVersion:              db.GetStrPtr("1.0.0"),
+		RegistrationToken:             db.GetStrPtr("1234-5678-9012-3456"),
+		RegistrationTokenExpiration:   db.GetTimePtr(db.GetCurTime()),
+		IsInfinityEnabled:             false,
+		SerialConsoleHostname:         db.GetStrPtr("serialConsoleHostname"),
+		IsSerialConsoleEnabled:        true,
+		SerialConsoleIdleTimeout:      db.GetIntPtr(10),
+		SerialConsoleMaxSessionLength: db.GetIntPtr(20),
+		Status:                        SiteStatusPending,
+		CreatedBy:                     uuid.New(),
+		Config:                        &SiteConfig{NativeNetworking: true},
+	}
+
+	// OTEL Spanner configuration
+	_, _, ctx := testCommonTraceProviderSetup(t, context.Background())
+
+	tests := []struct {
+		name               string
+		fields             fields
+		ctx                context.Context
+		input              SiteCreateInput
+		want               *Site
+		wantErr            bool
+		verifyChildSpanner bool
+	}{
+		{
+			name: "create Site from params",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			ctx: ctx,
+			input: SiteCreateInput{
+				Name:                          st.Name,
+				DisplayName:                   st.DisplayName,
+				Description:                   st.Description,
+				Org:                           st.Org,
+				InfrastructureProviderID:      st.InfrastructureProviderID,
+				SiteControllerVersion:         st.SiteControllerVersion,
+				SiteAgentVersion:              st.SiteAgentVersion,
+				RegistrationToken:             st.RegistrationToken,
+				RegistrationTokenExpiration:   st.RegistrationTokenExpiration,
+				IsInfinityEnabled:             st.IsInfinityEnabled,
+				SerialConsoleHostname:         st.SerialConsoleHostname,
+				IsSerialConsoleEnabled:        st.IsSerialConsoleEnabled,
+				SerialConsoleIdleTimeout:      st.SerialConsoleIdleTimeout,
+				SerialConsoleMaxSessionLength: st.SerialConsoleMaxSessionLength,
+				Status:                        st.Status,
+				CreatedBy:                     st.CreatedBy,
+				Config:                        *st.Config,
+			},
+			want:               st,
+			wantErr:            false,
+			verifyChildSpanner: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ssd := SiteSQLDAO{
+				dbSession: tt.fields.dbSession,
+			}
+			got, err := ssd.Create(tt.ctx, nil, tt.input)
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+
+			assert.Equal(t, tt.want.Name, got.Name)
+			assert.Equal(t, *tt.want.DisplayName, *got.DisplayName)
+			assert.Equal(t, *tt.want.Description, *got.Description)
+			assert.Equal(t, tt.want.Org, got.Org)
+			assert.Equal(t, tt.want.InfrastructureProviderID, got.InfrastructureProviderID)
+			assert.Equal(t, *tt.want.SiteControllerVersion, *got.SiteControllerVersion)
+			assert.Equal(t, *tt.want.SiteAgentVersion, *got.SiteAgentVersion)
+			assert.Equal(t, *tt.want.RegistrationToken, *got.RegistrationToken)
+			assert.True(t, got.RegistrationTokenExpiration.Equal(*tt.want.RegistrationTokenExpiration))
+			assert.Equal(t, tt.want.IsInfinityEnabled, got.IsInfinityEnabled)
+			assert.Equal(t, *tt.want.SerialConsoleHostname, *got.SerialConsoleHostname)
+			assert.Equal(t, tt.want.IsSerialConsoleEnabled, got.IsSerialConsoleEnabled)
+			assert.Equal(t, *tt.want.SerialConsoleIdleTimeout, *got.SerialConsoleIdleTimeout)
+			assert.Equal(t, *tt.want.SerialConsoleMaxSessionLength, *got.SerialConsoleMaxSessionLength)
+			assert.Equal(t, tt.want.Status, got.Status)
+			assert.Equal(t, tt.want.CreatedBy, got.CreatedBy)
+			assert.Equal(t, *tt.want.Config, *got.Config)
+
+			if tt.verifyChildSpanner {
+				span := otrace.SpanFromContext(ctx)
+				assert.True(t, span.SpanContext().IsValid())
+				_, ok := ctx.Value(stracer.TracerKey).(otrace.Tracer)
+				assert.True(t, ok)
+			}
+		})
+	}
+}
+
+func TestSiteSQLDAO_Update(t *testing.T) {
+	type fields struct {
+		dbSession *db.Session
+	}
+
+	dbSession := util.GetTestDBSession(t, false)
+	defer dbSession.Close()
+
+	setupSchema(t, dbSession)
+
+	// Create infrastructure provider
+	ip := &InfrastructureProvider{
+		ID:          uuid.New(),
+		Name:        "test",
+		DisplayName: db.GetStrPtr("Test"),
+		Org:         "test",
+	}
+
+	_, err := dbSession.DB.NewInsert().Model(ip).Exec(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	st := &Site{
+		ID:                          uuid.New(),
+		Name:                        "test",
+		DisplayName:                 db.GetStrPtr("Test"),
+		Description:                 db.GetStrPtr("Test"),
+		Org:                         "test",
+		InfrastructureProviderID:    ip.ID,
+		SiteControllerVersion:       db.GetStrPtr("1.0.0"),
+		SiteAgentVersion:            db.GetStrPtr("1.0.0"),
+		RegistrationToken:           db.GetStrPtr("1234-5678-9012-3456"),
+		RegistrationTokenExpiration: db.GetTimePtr(db.GetCurTime()),
+		SerialConsoleHostname:       db.GetStrPtr("serialConsoleHostname"),
+		IsInfinityEnabled:           false,
+		Status:                      SiteStatusPending,
+		CreatedBy:                   uuid.New(),
+		Config: &SiteConfig{
+			NetworkSecurityGroup: true,
+			NativeNetworking:     false,
+		},
+	}
+
+	_, err = dbSession.DB.NewInsert().Model(st).Exec(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create another site without AgentCertExpiry for additional AgentCertExpiry-specific tests
+	st2 := &Site{
+		ID:                          uuid.New(),
+		Name:                        "test-agent-cert",
+		DisplayName:                 db.GetStrPtr("Test Agent Cert"),
+		Description:                 db.GetStrPtr("Test Agent Cert Desc"),
+		Org:                         "test",
+		InfrastructureProviderID:    ip.ID,
+		SiteControllerVersion:       db.GetStrPtr("1.0.0"),
+		SiteAgentVersion:            db.GetStrPtr("1.0.0"),
+		RegistrationToken:           db.GetStrPtr("abcd-efgh-ijkl-mnop"),
+		RegistrationTokenExpiration: db.GetTimePtr(db.GetCurTime()),
+		SerialConsoleHostname:       db.GetStrPtr("serialConsoleHostname2"),
+		IsInfinityEnabled:           true,
+		Status:                      SiteStatusPending,
+		CreatedBy:                   uuid.New(),
+		Config: &SiteConfig{
+			NativeNetworking: true,
+		},
+		// No AgentCertExpiry initially
+	}
+
+	_, err = dbSession.DB.NewInsert().Model(st2).Exec(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Current time
+	curTime := db.GetCurTime()
+
+	ust := &Site{
+		ID:                            st.ID,
+		Name:                          "test 2",
+		DisplayName:                   db.GetStrPtr("Test 2"),
+		Description:                   db.GetStrPtr("Test 2"),
+		SiteControllerVersion:         db.GetStrPtr("1.0.1"),
+		SiteAgentVersion:              db.GetStrPtr("1.0.1"),
+		RegistrationToken:             db.GetStrPtr("9867-6543-2109-8765"),
+		RegistrationTokenExpiration:   db.GetTimePtr(time.Now().Add(time.Hour * 24).UTC().Round(time.Microsecond)),
+		IsInfinityEnabled:             true,
+		SerialConsoleHostname:         st.SerialConsoleHostname,
+		IsSerialConsoleEnabled:        true,
+		SerialConsoleIdleTimeout:      db.GetIntPtr(10),
+		SerialConsoleMaxSessionLength: db.GetIntPtr(20),
+		InventoryReceived:             &curTime,
+		Status:                        SiteStatusRegistered,
+		Config: &SiteConfig{
+			NativeNetworking:     true,
+			NetworkSecurityGroup: true,
+		},
+	}
+
+	agentCertTime1 := time.Now().Add(48 * time.Hour).UTC().Round(time.Microsecond)
+	agentCertTime2 := time.Now().Add(72 * time.Hour).UTC().Round(time.Microsecond)
+
+	// OTEL Spanner configuration
+	_, _, ctx := testCommonTraceProviderSetup(t, context.Background())
+
+	tests := []struct {
+		name               string
+		fields             fields
+		ctx                context.Context
+		input              SiteUpdateInput
+		want               *Site
+		wantErr            bool
+		verifyChildSpanner bool
+		verifyAgentCert    bool
+		agentCertExpected  *time.Time
+	}{
+		{
+			name: "update only site config from params",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			ctx: ctx,
+			input: SiteUpdateInput{
+				SiteID: ust.ID,
+				Config: &SiteConfigUpdateInput{
+					NativeNetworking: db.GetBoolPtr(false),
+				},
+			},
+			want:               nil,
+			wantErr:            false,
+			verifyChildSpanner: true,
+		},
+		{
+			name: "update site from params",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			ctx: ctx,
+			input: SiteUpdateInput{
+				SiteID:                        ust.ID,
+				Name:                          db.GetStrPtr(ust.Name),
+				DisplayName:                   ust.DisplayName,
+				Description:                   ust.Description,
+				SiteControllerVersion:         ust.SiteControllerVersion,
+				SiteAgentVersion:              ust.SiteAgentVersion,
+				RegistrationToken:             ust.RegistrationToken,
+				RegistrationTokenExpiration:   ust.RegistrationTokenExpiration,
+				IsInfinityEnabled:             &ust.IsInfinityEnabled,
+				SerialConsoleHostname:         ust.SerialConsoleHostname,
+				IsSerialConsoleEnabled:        &ust.IsSerialConsoleEnabled,
+				SerialConsoleIdleTimeout:      ust.SerialConsoleIdleTimeout,
+				SerialConsoleMaxSessionLength: ust.SerialConsoleMaxSessionLength,
+				InventoryReceived:             db.GetTimePtr(curTime),
+				Status:                        db.GetStrPtr(ust.Status),
+				Config: &SiteConfigUpdateInput{
+					NativeNetworking: db.GetBoolPtr(true),
+				},
+			},
+			want:               ust,
+			wantErr:            false,
+			verifyChildSpanner: true,
+		},
+		{
+			name: "update site by setting AgentCertExpiry",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			ctx: ctx,
+			input: SiteUpdateInput{
+				SiteID:          st2.ID,
+				AgentCertExpiry: &agentCertTime1,
+			},
+			want:               st2,
+			wantErr:            false,
+			verifyChildSpanner: true,
+			verifyAgentCert:    true,
+			agentCertExpected:  &agentCertTime1,
+		},
+		{
+			name: "update site by changing AgentCertExpiry",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			ctx: ctx,
+			input: SiteUpdateInput{
+				SiteID:          st2.ID,
+				AgentCertExpiry: &agentCertTime2,
+			},
+			want:               st2,
+			wantErr:            false,
+			verifyChildSpanner: true,
+			verifyAgentCert:    true,
+			agentCertExpected:  &agentCertTime2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ssd := SiteSQLDAO{
+				dbSession: tt.fields.dbSession,
+			}
+			got, err := ssd.Update(tt.ctx, nil, tt.input)
+
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+
+			assert.NoError(t, err)
+			assert.NotNil(t, got)
+
+			if tt.want == ust {
+				assert.Equal(t, tt.want.Name, got.Name)
+				assert.Equal(t, *tt.want.DisplayName, *got.DisplayName)
+				assert.Equal(t, *tt.want.Description, *got.Description)
+				assert.Equal(t, *tt.want.SiteControllerVersion, *got.SiteControllerVersion)
+				assert.Equal(t, *tt.want.SiteAgentVersion, *got.SiteAgentVersion)
+				assert.Equal(t, *tt.want.RegistrationToken, *got.RegistrationToken)
+				assert.True(t, got.RegistrationTokenExpiration.Equal(*tt.want.RegistrationTokenExpiration))
+				assert.Equal(t, tt.want.IsInfinityEnabled, got.IsInfinityEnabled)
+				assert.Equal(t, *tt.want.SerialConsoleHostname, *got.SerialConsoleHostname)
+				assert.Equal(t, tt.want.IsSerialConsoleEnabled, got.IsSerialConsoleEnabled)
+				assert.Equal(t, *tt.want.SerialConsoleIdleTimeout, *got.SerialConsoleIdleTimeout)
+				assert.Equal(t, *tt.want.SerialConsoleMaxSessionLength, *got.SerialConsoleMaxSessionLength)
+				assert.True(t, got.InventoryReceived.Equal(*tt.want.InventoryReceived))
+				assert.Equal(t, tt.want.Status, got.Status)
+				assert.Equal(t, *tt.want.Config, *got.Config)
+			}
+
+			// Verify AgentCertExpiry
+			if tt.verifyAgentCert && tt.agentCertExpected != nil {
+				assert.NotNil(t, got.AgentCertExpiry)
+				assert.True(t, got.AgentCertExpiry.Equal(*tt.agentCertExpected), "AgentCertExpiry did not match expected value")
+			}
+
+			if tt.verifyChildSpanner {
+				span := otrace.SpanFromContext(tt.ctx)
+				assert.True(t, span.SpanContext().IsValid())
+				_, ok := tt.ctx.Value(stracer.TracerKey).(otrace.Tracer)
+				assert.True(t, ok)
+			}
+		})
+	}
+}
+
+func TestSiteSQLDAO_Delete(t *testing.T) {
+	type fields struct {
+		dbSession *db.Session
+	}
+	type args struct {
+		ctx context.Context
+		id  uuid.UUID
+	}
+
+	// Create test DB
+	dbSession := util.GetTestDBSession(t, false)
+	defer dbSession.Close()
+
+	setupSchema(t, dbSession)
+
+	// Create infrastructure provider
+	ip := &InfrastructureProvider{
+		ID:          uuid.New(),
+		Name:        "test",
+		DisplayName: db.GetStrPtr("Test"),
+		Org:         "test",
+	}
+
+	_, err := dbSession.DB.NewInsert().Model(ip).Exec(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// time.Now sets a timezone, but reading back from postgres doesn't load a TZ for zero offset
+	expirationTime := db.GetCurTime()
+
+	// Create site
+	st := &Site{
+		ID:                          uuid.New(),
+		Name:                        "test",
+		DisplayName:                 db.GetStrPtr("Test"),
+		Org:                         "test",
+		InfrastructureProviderID:    ip.ID,
+		SiteControllerVersion:       db.GetStrPtr("1.0.0"),
+		SiteAgentVersion:            db.GetStrPtr("1.0.0"),
+		RegistrationToken:           db.GetStrPtr("1234-5678-9012-3456"),
+		RegistrationTokenExpiration: db.GetTimePtr(expirationTime),
+		Status:                      SiteStatusPending,
+		CreatedBy:                   uuid.New(),
+	}
+
+	_, err = dbSession.DB.NewInsert().Model(st).Exec(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// OTEL Spanner configuration
+	_, _, ctx := testCommonTraceProviderSetup(t, context.Background())
+
+	tests := []struct {
+		name               string
+		fields             fields
+		args               args
+		wantErr            bool
+		verifyChildSpanner bool
+	}{
+		{
+			name: "delete site by ID",
+			fields: fields{
+				dbSession: dbSession,
+			},
+			args: args{
+				ctx: ctx,
+				id:  st.ID,
+			},
+			wantErr:            false,
+			verifyChildSpanner: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ssd := SiteSQLDAO{
+				dbSession: tt.fields.dbSession,
+			}
+			if err := ssd.Delete(tt.args.ctx, nil, tt.args.id); (err != nil) != tt.wantErr {
+				t.Errorf("SiteSQLDAO.DeleteByID() error = %v, wantErr %v", err, tt.wantErr)
+			}
+
+			// Check that the site was deleted
+			dst := &Site{}
+			err := dbSession.DB.NewSelect().Model(dst).WhereDeleted().Where("id = ?", st.ID).Scan(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if dst.Deleted == nil {
+				t.Errorf("Failed to soft-delete InfrastructureProvider")
+			}
+
+			if tt.verifyChildSpanner {
+				span := otrace.SpanFromContext(ctx)
+				assert.True(t, span.SpanContext().IsValid())
+				_, ok := ctx.Value(stracer.TracerKey).(otrace.Tracer)
+				assert.True(t, ok)
+			}
+		})
+	}
+}
+
+func TestSiteSQLDAO_ContactLocation(t *testing.T) {
+	dbSession := util.GetTestDBSession(t, false)
+	defer dbSession.Close()
+
+	setupSchema(t, dbSession)
+
+	// Create infrastructure provider
+	ip := &InfrastructureProvider{
+		ID:          uuid.New(),
+		Name:        "test",
+		DisplayName: db.GetStrPtr("Test"),
+		Org:         "test",
+	}
+
+	_, err := dbSession.DB.NewInsert().Model(ip).Exec(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name        string
+		want        Site
+		create      bool
+		update      bool
+		updateInput SiteUpdateInput
+	}{
+		{
+			name:   "create no location no contact",
+			want:   buildSite("Test1", ip.ID, nil, nil),
+			create: true,
+		},
+		{
+			name:   "create with location",
+			want:   buildSite("Test2", ip.ID, &SiteLocation{City: "Seattle", State: "WA", Country: "USA"}, nil),
+			create: true,
+		},
+		{
+			name:   "create with contact",
+			want:   buildSite("Test3", ip.ID, nil, &SiteContact{Email: "test@nvidia.com"}),
+			create: true,
+		},
+		{
+			name:   "create with location and contact",
+			want:   buildSite("Test4", ip.ID, &SiteLocation{City: "Seattle", State: "WA", Country: "USA"}, &SiteContact{Email: "test@nvidia.com"}),
+			create: true,
+		},
+		{
+			name:        "update no location to location",
+			want:        buildSite("Test5", ip.ID, nil, nil),
+			update:      true,
+			updateInput: SiteUpdateInput{Location: &SiteLocation{City: "Seattle", State: "WA", Country: "USA"}},
+		},
+		{
+			name:        "update no contact to contact",
+			want:        buildSite("Test6", ip.ID, nil, nil),
+			update:      true,
+			updateInput: SiteUpdateInput{Contact: &SiteContact{Email: "test@nvidia.com"}},
+		},
+		{
+			name:        "update no location and contact to location and contact",
+			want:        buildSite("Test7", ip.ID, nil, nil),
+			update:      true,
+			updateInput: SiteUpdateInput{Location: &SiteLocation{City: "Seattle", State: "WA", Country: "USA"}, Contact: &SiteContact{Email: "test@nvidia.com"}},
+		},
+		{
+			name:        "update location city state",
+			want:        buildSite("Test8", ip.ID, &SiteLocation{City: "Seattle", State: "WA", Country: "USA"}, nil),
+			update:      true,
+			updateInput: SiteUpdateInput{Location: &SiteLocation{City: "San Jose", State: "CA", Country: "USA"}},
+		},
+		{
+			name:        "update contact email",
+			want:        buildSite("Test9", ip.ID, nil, &SiteContact{Email: "test@nvidia.com"}),
+			update:      true,
+			updateInput: SiteUpdateInput{Contact: &SiteContact{Email: "test@amazon.com"}},
+		},
+		{
+			name:        "update location city state and contact email",
+			want:        buildSite("Test9", ip.ID, &SiteLocation{City: "Seattle", State: "WA", Country: "USA"}, &SiteContact{Email: "test@nvidia.com"}),
+			update:      true,
+			updateInput: SiteUpdateInput{Location: &SiteLocation{City: "San Jose", State: "CA", Country: "USA"}, Contact: &SiteContact{Email: "test@amazon.com"}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ssd := SiteSQLDAO{
+				dbSession: dbSession,
+			}
+			// OTEL Spanner configuration
+			_, _, ctx := testCommonTraceProviderSetup(t, context.Background())
+
+			want := tt.want
+			if tt.create {
+				createInput := buildSiteCreateInput(want)
+				got, err := ssd.Create(ctx, nil, createInput)
+				assert.NoError(t, err)
+				assert.NotNil(t, got)
+				validateSite(t, *got, want)
+			} else if tt.update {
+				// first create
+				createInput := buildSiteCreateInput(want)
+				got, err := ssd.Create(ctx, nil, createInput)
+				assert.NoError(t, err)
+				assert.NotNil(t, got)
+				validateSite(t, *got, want)
+				// update
+				want.Location = tt.updateInput.Location
+				want.Contact = tt.updateInput.Contact
+				updateInput := tt.updateInput
+				updateInput.SiteID = got.ID
+				got, err = ssd.Update(ctx, nil, updateInput)
+				assert.NoError(t, err)
+				assert.NotNil(t, got)
+				validateSite(t, *got, want)
+			}
+		})
+	}
+}
+
+func TestSiteSQLDAO_QueryByContactLocation(t *testing.T) {
+	dbSession := util.GetTestDBSession(t, false)
+	defer dbSession.Close()
+
+	setupSchema(t, dbSession)
+
+	// Create infrastructure provider
+	ip := &InfrastructureProvider{
+		ID:          uuid.New(),
+		Name:        "test",
+		DisplayName: db.GetStrPtr("Test"),
+		Org:         "test",
+	}
+
+	_, err := dbSession.DB.NewInsert().Model(ip).Exec(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ssd := SiteSQLDAO{
+		dbSession: dbSession,
+	}
+	// OTEL Spanner configuration
+	_, _, ctx := testCommonTraceProviderSetup(t, context.Background())
+
+	// create sites with different locations and contacts
+	var createdSites []*Site
+	for i := 0; i < 30; i++ {
+		var location *SiteLocation
+		var contact *SiteContact
+		if i%2 == 0 {
+			location = &SiteLocation{City: "Seattle", State: "WA", Country: "USA"}
+			contact = &SiteContact{Email: "test@nvidia.com"}
+		} else if i%3 == 0 {
+			location = &SiteLocation{City: "San Jose", State: "CA", Country: "USA"}
+			contact = &SiteContact{Email: "test@amazon.com"}
+		}
+		site := buildSite(fmt.Sprintf("Test%d", i), ip.ID, location, contact)
+		createInput := buildSiteCreateInput(site)
+		got, err := ssd.Create(ctx, nil, createInput)
+		assert.NoError(t, err)
+		assert.NotNil(t, got)
+		validateSite(t, *got, site)
+		createdSites = append(createdSites, got)
+	}
+
+	// query by location city
+	sites, total, err := ssd.GetAll(ctx, nil, SiteFilterInput{SearchQuery: db.GetStrPtr("San Jose")}, paginator.PageInput{}, nil)
+	assert.NoError(t, err)
+	assert.Equal(t, 5, len(sites))
+	assert.Equal(t, 5, total)
+
+	// query by location city or state
+	sites, total, err = ssd.GetAll(ctx, nil, SiteFilterInput{SearchQuery: db.GetStrPtr("San Jose CA")}, paginator.PageInput{}, nil)
+	assert.NoError(t, err)
+	assert.Equal(t, 5, len(sites))
+	assert.Equal(t, 5, total)
+
+	// query by location city or country
+	sites, total, err = ssd.GetAll(ctx, nil, SiteFilterInput{SearchQuery: db.GetStrPtr("San Jose USA")}, paginator.PageInput{}, nil)
+	assert.NoError(t, err)
+	assert.Equal(t, 20, len(sites))
+	assert.Equal(t, 20, total)
+
+	// query by email
+	sites, total, err = ssd.GetAll(ctx, nil, SiteFilterInput{SearchQuery: db.GetStrPtr("test@nvidia.com")}, paginator.PageInput{}, nil)
+	assert.NoError(t, err)
+	assert.Equal(t, 15, len(sites))
+	assert.Equal(t, 15, total)
+
+	// test sort by location
+	sites, total, err = ssd.GetAll(ctx, nil, SiteFilterInput{}, paginator.PageInput{OrderBy: &paginator.OrderBy{Field: "location", Order: "ASC"}}, nil)
+	assert.NoError(t, err)
+	assert.Equal(t, 20, len(sites))
+	assert.Equal(t, 30, total)
+	// make sure correct site is returned first
+	assert.Equal(t, createdSites[3].ID, sites[0].ID)
+
+	// test sort by contact
+	sites, total, err = ssd.GetAll(ctx, nil, SiteFilterInput{}, paginator.PageInput{OrderBy: &paginator.OrderBy{Field: "contact", Order: "DESC"}}, nil)
+	assert.NoError(t, err)
+	assert.Equal(t, 20, len(sites))
+	assert.Equal(t, 30, total)
+	// make sure correct site is returned first
+	assert.Equal(t, createdSites[1].ID, sites[0].ID)
+}
+
+func buildSite(name string, ipID uuid.UUID, location *SiteLocation, contact *SiteContact) Site {
+	return Site{
+		Name:                          name,
+		DisplayName:                   &name,
+		Description:                   db.GetStrPtr("Test Site"),
+		Org:                           "test",
+		InfrastructureProviderID:      ipID,
+		SiteControllerVersion:         db.GetStrPtr("1.0.0"),
+		SiteAgentVersion:              db.GetStrPtr("1.0.0"),
+		RegistrationToken:             db.GetStrPtr("1234-5678-9012-3456"),
+		RegistrationTokenExpiration:   db.GetTimePtr(db.GetCurTime()),
+		IsInfinityEnabled:             false,
+		SerialConsoleHostname:         db.GetStrPtr("serialConsoleHostname"),
+		IsSerialConsoleEnabled:        true,
+		SerialConsoleIdleTimeout:      db.GetIntPtr(10),
+		SerialConsoleMaxSessionLength: db.GetIntPtr(20),
+		Status:                        SiteStatusPending,
+		CreatedBy:                     uuid.New(),
+		Location:                      location,
+		Contact:                       contact,
+	}
+}
+
+func buildSiteCreateInput(site Site) SiteCreateInput {
+	return SiteCreateInput{
+		Name:                          site.Name,
+		DisplayName:                   site.DisplayName,
+		Description:                   site.Description,
+		Org:                           site.Org,
+		InfrastructureProviderID:      site.InfrastructureProviderID,
+		SiteControllerVersion:         site.SiteControllerVersion,
+		SiteAgentVersion:              site.SiteAgentVersion,
+		RegistrationToken:             site.RegistrationToken,
+		RegistrationTokenExpiration:   site.RegistrationTokenExpiration,
+		IsInfinityEnabled:             site.IsInfinityEnabled,
+		SerialConsoleHostname:         site.SerialConsoleHostname,
+		IsSerialConsoleEnabled:        site.IsSerialConsoleEnabled,
+		SerialConsoleIdleTimeout:      site.SerialConsoleIdleTimeout,
+		SerialConsoleMaxSessionLength: site.SerialConsoleMaxSessionLength,
+		Status:                        site.Status,
+		CreatedBy:                     site.CreatedBy,
+		Location:                      site.Location,
+		Contact:                       site.Contact,
+	}
+}
+
+func validateSite(t *testing.T, got Site, want Site) {
+	assert.Equal(t, want.Name, got.Name)
+	assert.Equal(t, *want.DisplayName, *got.DisplayName)
+	assert.Equal(t, *want.Description, *got.Description)
+	assert.Equal(t, want.Org, got.Org)
+	assert.Equal(t, want.InfrastructureProviderID, got.InfrastructureProviderID)
+	assert.Equal(t, *want.SiteControllerVersion, *got.SiteControllerVersion)
+	assert.Equal(t, *want.SiteAgentVersion, *got.SiteAgentVersion)
+	assert.Equal(t, *want.RegistrationToken, *got.RegistrationToken)
+	assert.True(t, got.RegistrationTokenExpiration.Equal(*want.RegistrationTokenExpiration))
+	assert.Equal(t, want.IsInfinityEnabled, got.IsInfinityEnabled)
+	assert.Equal(t, *want.SerialConsoleHostname, *got.SerialConsoleHostname)
+	assert.Equal(t, want.IsSerialConsoleEnabled, got.IsSerialConsoleEnabled)
+	assert.Equal(t, *want.SerialConsoleIdleTimeout, *got.SerialConsoleIdleTimeout)
+	assert.Equal(t, *want.SerialConsoleMaxSessionLength, *got.SerialConsoleMaxSessionLength)
+	assert.Equal(t, want.Status, got.Status)
+	assert.Equal(t, want.CreatedBy, got.CreatedBy)
+	assert.Equal(t, want.Location, got.Location)
+	assert.Equal(t, want.Contact, got.Contact)
+}

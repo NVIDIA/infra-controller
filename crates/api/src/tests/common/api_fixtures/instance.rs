@@ -294,7 +294,6 @@ pub fn default_os_config() -> rpc::forge::InstanceOperatingSystemConfig {
         variant: Some(rpc::forge::instance_operating_system_config::Variant::Ipxe(
             rpc::forge::InlineIpxe {
                 ipxe_script: "SomeRandomiPxe".to_string(),
-                user_data: Some("SomeRandomData".to_string()),
             },
         )),
     }

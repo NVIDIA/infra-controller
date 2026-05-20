@@ -6,4 +6,6 @@ metadata:
     {{- include "nico-dpu-otel-agent.labels" . | nindent 4 }}
 data:
   config.toml: |
-    {{- .Files.Get "files/otel-agent-config.toml" | nindent 4 }}
+    {{- /* Swap the embedded /opt/nico/nico_root.pem path to certsDir/rootCaFile. */ -}}
+    {{- $rootCa := printf "%s/%s" (.Values.certsDir | default "/opt/nico") (.Values.rootCaFile | default "nico_root.pem") -}}
+    {{- .Files.Get "files/otel-agent-config.toml" | replace "/opt/nico/nico_root.pem" $rootCa | nindent 4 }}

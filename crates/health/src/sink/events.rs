@@ -202,6 +202,12 @@ pub struct HealthReport {
     pub alerts: Vec<HealthReportAlert>,
 }
 
+impl HealthReport {
+    pub fn is_empty(&self) -> bool {
+        self.successes.is_empty() && self.alerts.is_empty()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum CollectorEvent {
     MetricCollectionStart,

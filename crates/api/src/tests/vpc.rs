@@ -121,6 +121,7 @@ async fn create_vpc(pool: sqlx::PgPool) -> Result<(), Box<dyn std::error::Error>
                         tenant_leak_communities_accepted: false,
                         access_tier: 1,
                         accepted_leaks_from_underlay: vec![],
+                        allowed_anycast_prefixes: vec![],
                     },
                 ),
                 (
@@ -134,6 +135,7 @@ async fn create_vpc(pool: sqlx::PgPool) -> Result<(), Box<dyn std::error::Error>
                         tenant_leak_communities_accepted: false,
                         access_tier: 0,
                         accepted_leaks_from_underlay: vec![],
+                        allowed_anycast_prefixes: vec![],
                     },
                 ),
             ]),

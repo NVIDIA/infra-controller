@@ -21,9 +21,10 @@ use carbide_utils::has_duplicates;
 use carbide_uuid::rack::RackId;
 use clap::Parser;
 use mac_address::MacAddress;
-use rpc::admin_cli::{CarbideCliError, CarbideCliResult};
 use rpc::forge::{DpuMode, ExpectedHostNic};
 use serde::{Deserialize, Serialize};
+
+use crate::errors::{CarbideCliError, CarbideCliResult};
 
 /// `forge-admin-cli expected-machine add` — mirrors expected switch flags; optional
 /// `--bmc-ip-address` forwards to the API static-BMC pre-allocation path.

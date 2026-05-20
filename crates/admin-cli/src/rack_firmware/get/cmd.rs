@@ -17,11 +17,12 @@
 
 use std::collections::BTreeMap;
 
-use ::rpc::admin_cli::{CarbideCliError, OutputFormat};
+use ::rpc::admin_cli::OutputFormat;
 use prettytable::{Cell, Row, Table, row};
 use serde::Deserialize;
 
 use super::args::Args;
+use crate::errors::CarbideCliError;
 use crate::rpc::ApiClient;
 
 #[derive(Debug, Deserialize, Default)]

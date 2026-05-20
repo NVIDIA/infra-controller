@@ -538,7 +538,7 @@ impl InternalRBACRules {
         );
         x.perm("RedfishBrowse", vec![ForgeAdminCLI]);
         x.perm("UfmBrowse", vec![ForgeAdminCLI]);
-        x.perm("NmxmBrowse", vec![ForgeAdminCLI]);
+        x.perm("NmxcBrowse", vec![ForgeAdminCLI]);
         x.perm("UpdateMachineMetadata", vec![ForgeAdminCLI, SiteAgent]);
         x.perm("UpdateRackMetadata", vec![ForgeAdminCLI, SiteAgent]);
         x.perm("UpdateSwitchMetadata", vec![ForgeAdminCLI, SiteAgent]);
@@ -614,6 +614,10 @@ impl InternalRBACRules {
             vec![Agent, Scout, Machineatron, ForgeAdminCLI],
         );
         x.perm("TrimTable", vec![ForgeAdminCLI, MaintenanceJobs]);
+        x.perm("ListNvlinkNmxcEndpoints", vec![ForgeAdminCLI]);
+        x.perm("CreateNvlinkNmxcEndpoint", vec![ForgeAdminCLI]);
+        x.perm("UpdateNvlinkNmxcEndpoint", vec![ForgeAdminCLI]);
+        x.perm("DeleteNvlinkNmxcEndpoint", vec![ForgeAdminCLI]);
         x.perm("CreateRemediation", vec![ForgeAdminCLI]);
         x.perm("ApproveRemediation", vec![ForgeAdminCLI]);
         x.perm("RevokeRemediation", vec![ForgeAdminCLI]);

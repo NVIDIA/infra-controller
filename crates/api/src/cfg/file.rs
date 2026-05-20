@@ -435,7 +435,7 @@ pub struct CarbideConfig {
 
     /// NvLink partitioning configuration, used by the
     /// NvLink monitor to manage GPU mesh partitions
-    /// via NMX-M.
+    /// via NMX-C.
     #[serde(default)]
     pub nvlink_config: Option<NvLinkConfig>,
 
@@ -1016,6 +1016,11 @@ pub struct FnnRoutingProfileConfig {
     /// impact on ACLs.
     #[serde(default)]
     pub accepted_leaks_from_underlay: Vec<PrefixFilterPolicyEntry>,
+
+    /// Prefixes that tenant hosts are allowed to announce
+    /// to the DPU as anycast routes.
+    #[serde(default)]
+    pub allowed_anycast_prefixes: Vec<PrefixFilterPolicyEntry>,
 
     /// Currently controls which profiles a tenant can use
     /// when creating VPCs.  Lower value means broader access.
