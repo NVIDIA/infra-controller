@@ -34,6 +34,7 @@ use db::{self, ObjectColumnFilter, dhcp_entry};
 use ipnetwork::IpNetwork;
 use itertools::Itertools;
 use mac_address::MacAddress;
+use model::machine_interface::InterfaceType;
 use model::network_segment::NetworkSegmentType;
 use rpc::forge::ManagedHostNetworkConfigRequest;
 use rpc::forge::forge_server::Forge;
@@ -679,6 +680,57 @@ async fn test_dhcp_rejects_dpu_host_with_instance(
         "unexpected error: {}",
         status.message()
     );
+
+    Ok(())
+}
+
+// Host BMC DHCP must continue to work after an instance is allocated on a
+// DPU-backed host. The instance DHCP rejection only applies to host data/admin
+// DHCP that the DPU proxies, not to out-of-band BMC management.
+#[crate::sqlx_test]
+async fn test_dhcp_allows_host_bmc_with_instance_on_dpu_host(
+    pool: sqlx::PgPool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let env = create_test_env(pool).await;
+    let mh = create_managed_host(&env).await;
+
+    // Find the already-linked host BMC interface.
+    let mut txn = env.pool.begin().await?;
+    let interfaces = db::machine_interface::find_all(txn.as_mut()).await?;
+    let bmc_interface = interfaces
+        .iter()
+        .find(|interface| {
+            interface.machine_id == Some(mh.host().id)
+                && interface.interface_type == InterfaceType::Bmc
+        })
+        .ok_or("host has no BMC machine_interface")?;
+    let bmc_mac = bmc_interface.mac_address;
+    let bmc_segment_id = bmc_interface.segment_id;
+
+    // Resolve the BMC segment gateway for the follow-up DHCP request.
+    let prefix = db::network_prefix::find_by(
+        txn.as_mut(),
+        ObjectColumnFilter::One(db::network_prefix::SegmentIdColumn, &bmc_segment_id),
+    )
+    .await?
+    .into_iter()
+    .next()
+    .ok_or("no network_prefix for BMC segment")?;
+    let gateway = prefix.gateway.ok_or("BMC segment prefix has no gateway")?;
+    txn.rollback().await?;
+
+    // Allocate an instance after the BMC interface is linked.
+    attach_bare_instance(&env, mh.host().id).await?;
+
+    // A later BMC DHCP request should still return the BMC lease.
+    let response = env
+        .api
+        .discover_dhcp(DhcpDiscovery::builder(bmc_mac, gateway.to_string()).tonic_request())
+        .await
+        .expect("host BMC DHCP should not be rejected because the host has an instance")
+        .into_inner();
+
+    assert_eq!(response.mac_address, bmc_mac.to_string());
 
     Ok(())
 }

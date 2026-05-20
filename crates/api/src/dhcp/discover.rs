@@ -24,6 +24,7 @@ use db::{self, expected_machine, machine_interface};
 use mac_address::MacAddress;
 use model::dpa_interface::DpaInterface;
 use model::expected_machine::ExpectedHostNic;
+use model::machine_interface::InterfaceType;
 use model::network_segment::{AllocationStrategy, NetworkSegmentSearchConfig, NetworkSegmentType};
 use sqlx::PgConnection;
 use tonic::{Request, Response};
@@ -372,7 +373,8 @@ pub async fn discover_dhcp(
         .await?;
     }
 
-    if let Some(machine_id) = machine_interface.machine_id
+    if machine_interface.interface_type != InterfaceType::Bmc
+        && let Some(machine_id) = machine_interface.machine_id
         && machine_id.machine_type().is_host()
         && let Some(instance_id) =
             db::instance::find_id_by_machine_id(&mut txn, &machine_id).await?
