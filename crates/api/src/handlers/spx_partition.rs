@@ -111,20 +111,21 @@ pub(crate) async fn delete(
         .id
         .ok_or_else(|| CarbideError::MissingArgument("id"))?;
 
-    let mut txn = api.txn_begin().await?;
-
     let resp = api
         .with_txn(|txn| db::spx_partition::mark_as_deleted(id, txn).boxed())
         .await?
         .map_err(CarbideError::from)?;
 
     if let Some(vni) = resp.vni {
+
+        let mut txn = api.txn_begin().await?;
+
         db::resource_pool::release(&api.common_pools.ethernet.pool_dpa_vni, &mut txn, vni)
             .await
             .map_err(CarbideError::from)?;
-    }
 
-    txn.commit().await?;
+        txn.commit().await?;
+    }
 
     Ok(Response::new(rpc::SpxPartitionDeletionResult {}))
 }

@@ -78,8 +78,8 @@ axum = { workspace = true }
 carbide-version = { path = "../version" }
 
 [features]
-#default = []
-default = ["mockdpa"]
+default = []
+#default = ["mockdpa"]
 mockdpa = []
 
 [lints]

@@ -319,22 +319,27 @@ impl DpaMonitor {
             ));
         }
 
-        let mut txn =
-            db_services.db_pool.begin().await.map_err(|e| {
-                db::AnnotatedSqlxError::new("reconcile_assigned_state begin txn", e)
-            })?;
 
         if this_nic_configured_attachments.is_empty() {
             if !this_nic_observed_attachments.is_empty() {
                 need_deletion = true;
             }
         } else {
+            let mut txn =
+                db_services.db_pool.begin().await.map_err(|e| {
+                    db::AnnotatedSqlxError::new("reconcile_assigned_state begin txn", e)
+                })?;
             let partition_id = this_nic_configured_attachments.remove(0).spx_partition_id;
             let partition = db::spx_partition::find_by(
                 txn.as_mut(),
                 ObjectColumnFilter::List(db::spx_partition::IdColumn, &[partition_id]),
             )
             .await?;
+
+            txn.commit().await.map_err(|e| {
+                db::AnnotatedSqlxError::new("reconcile_assigned_state commit txn", e)
+            })?;
+
             if partition.len() != 1 {
                 tracing::error!(
                     "reconcile_assigned_state SPX partition {partition_id} is not found"
