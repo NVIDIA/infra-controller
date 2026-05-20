@@ -20,6 +20,7 @@
 
 use ::rpc::admin_cli::ToTable;
 use ::rpc::protos::measured_boot::ShowCandidateMachineRequest;
+use measured_boot::FromGrpcOpt;
 use measured_boot::machine::CandidateMachine;
 use measured_boot::records::CandidateMachineSummary;
 use measured_boot::report::MeasurementReport;
@@ -76,7 +77,7 @@ pub async fn dispatch(
 pub async fn attest(grpc_conn: &ApiClient, attest: Attest) -> CarbideCliResult<MeasurementReport> {
     let response = grpc_conn.0.attest_candidate_machine(attest).await?;
 
-    MeasurementReport::from_grpc(response.report.as_ref())
+    MeasurementReport::from_grpc_opt(response.report)
         .map_err(|e| CarbideCliError::GenericError(e.to_string()))
 }
 
@@ -87,7 +88,7 @@ pub async fn show_by_id(grpc_conn: &ApiClient, show: Show) -> CarbideCliResult<C
         .show_candidate_machine(ShowCandidateMachineRequest::try_from(show)?)
         .await?;
 
-    CandidateMachine::from_grpc(response.machine.as_ref())
+    CandidateMachine::from_grpc_opt(response.machine)
         .map_err(|e| CarbideCliError::GenericError(e.to_string()))
 }
 

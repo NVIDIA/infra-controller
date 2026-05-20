@@ -37,6 +37,7 @@ use common::api_fixtures::{
 };
 use health_report::HealthReport;
 use ipnetwork::IpNetwork;
+use measured_boot::FromGrpc;
 use measured_boot::bundle::MeasurementBundle;
 use measured_boot::pcr::PcrRegisterValue;
 use measured_boot::records::MeasurementBundleState;
@@ -1398,7 +1399,7 @@ async fn test_measurement_failed_state_transition(pool: sqlx::PgPool) {
         .unwrap()
         .into_inner();
     assert_eq!(1, bundles_response.bundles.len());
-    let bundle = MeasurementBundle::from_grpc(Some(&bundles_response.bundles[0])).unwrap();
+    let bundle = MeasurementBundle::from_grpc(bundles_response.bundles[0].clone()).unwrap();
     assert_eq!(bundle.state, MeasurementBundleState::Active);
     let mut txn = env.db_txn().await;
     let retired_bundle = db::measured_boot::bundle::set_state_for_id(
@@ -1500,7 +1501,7 @@ async fn test_measurement_ready_to_retired_to_ca_fail_to_revoked_to_ready(pool: 
         .unwrap()
         .into_inner();
     assert_eq!(1, bundles_response.bundles.len());
-    let bundle = MeasurementBundle::from_grpc(Some(&bundles_response.bundles[0])).unwrap();
+    let bundle = MeasurementBundle::from_grpc(bundles_response.bundles[0].clone()).unwrap();
     assert_eq!(bundle.state, MeasurementBundleState::Active);
     let mut txn = env.db_txn().await;
     let retired_bundle = db::measured_boot::bundle::set_state_for_id(
@@ -1771,7 +1772,7 @@ async fn test_measurement_host_init_failed_to_waiting_for_measurements_to_pendin
         .unwrap()
         .into_inner();
     assert_eq!(1, reports_response.reports.len());
-    let report = MeasurementReport::from_grpc(Some(&reports_response.reports[0])).unwrap();
+    let report = MeasurementReport::from_grpc(reports_response.reports[0].clone()).unwrap();
 
     let _promotion_response = env
         .api

@@ -32,3 +32,41 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+pub trait DisplayName {
+    fn display_name() -> &'static str;
+}
+
+pub trait FromGrpc<M>: TryFrom<M> + DisplayName
+where
+    <Self as std::convert::TryFrom<M>>::Error: std::fmt::Display,
+{
+    fn from_grpc(msg: M) -> Result<Self> {
+        Self::try_from(msg).map_err(|e| {
+            Error::RpcConversion(format!("bad message: {}: {e}", Self::display_name()))
+        })
+    }
+}
+
+pub trait FromGrpcOpt<M>: FromGrpc<M>
+where
+    <Self as std::convert::TryFrom<M>>::Error: std::fmt::Display,
+{
+    fn from_grpc_opt(msg: Option<M>) -> Result<Self> {
+        msg.ok_or_else(|| {
+            Error::RpcConversion(format!("{} is unexpectedly empty", Self::display_name()))
+        })
+        .and_then(Self::from_grpc)
+    }
+}
+
+pub trait FromPbVec<M: Clone>: FromGrpc<M>
+where
+    <Self as std::convert::TryFrom<M>>::Error: std::fmt::Display,
+{
+    fn from_pb_vec(pbs: &[M]) -> Result<Vec<Self>> {
+        pbs.iter()
+            .map(|record| Self::from_grpc(record.clone()))
+            .collect()
+    }
+}
