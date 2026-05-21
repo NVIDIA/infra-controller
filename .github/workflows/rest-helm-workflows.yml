@@ -10,77 +10,18 @@ on:
         description: "Application version for Helm chart appVersion"
         required: true
         type: string
+      chart_version:
+        description: "Helm chart version (SemVer-strict, derived from git describe). Aligned with core's helm_version."
+        required: true
+        type: string
     secrets:
       NVCR_STG_TOKEN:
         required: true
 
 jobs:
-  detect-changes:
-    name: Detect Helm Chart Changes
-    runs-on: ubuntu-latest
-    outputs:
-      any_changed: ${{ steps.changes.outputs.any_changed }}
-      nico_rest_changed: ${{ steps.changes.outputs.nico_rest }}
-      site_agent_changed: ${{ steps.changes.outputs.site_agent }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Check for helm/ changes
-        uses: dorny/paths-filter@v3
-        id: changes
-        with:
-          filters: |
-            any_changed:
-              - 'rest-api/helm/**'
-            nico_rest:
-              - 'rest-api/helm/charts/nico-rest/**'
-            site_agent:
-              - 'rest-api/helm/charts/nico-rest-site-agent/**'
-
-  validate-versions:
-    name: Validate Helm Chart Versions
-    needs:
-      - detect-changes
-    if: ${{ needs.detect-changes.outputs.any_changed == 'true' && contains(github.ref, 'pull-request/') }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Verify Chart.yaml versions are updated
-        run: |
-          FAILED=false
-          check_version() {
-            local chart_dir="$1" changed="$2"
-            if [ "$changed" != "true" ]; then
-              echo "⊘ ${chart_dir}: no changes, skipping version check"
-              return
-            fi
-            local chart_yaml="${chart_dir}/Chart.yaml"
-            local current_version=$(grep '^version:' "$chart_yaml" | awk '{print $2}')
-            local base_version=$(git show origin/main:"$chart_yaml" 2>/dev/null | grep '^version:' | awk '{print $2}' || echo "")
-            if [ -n "$base_version" ] && [ "$current_version" = "$base_version" ]; then
-              echo "::error file=${chart_yaml}::Chart version ($current_version) was not updated. Please bump the version in $chart_yaml"
-              FAILED=true
-            else
-              echo "✓ ${chart_dir}: version updated to $current_version"
-            fi
-          }
-          check_version "rest-api/helm/charts/nico-rest" "${{ needs.detect-changes.outputs.nico_rest_changed }}"
-          check_version "rest-api/helm/charts/nico-rest-site-agent" "${{ needs.detect-changes.outputs.site_agent_changed }}"
-          if [ "$FAILED" = "true" ]; then
-            exit 1
-          fi
-
   validate-charts:
     name: Validate Helm Charts
-    needs:
-      - detect-changes
-      - validate-versions
-    if: ${{ always() && needs.detect-changes.outputs.any_changed == 'true' && (needs.validate-versions.result == 'success' || needs.validate-versions.result == 'skipped') }}
+    if: ${{ !cancelled() && github.event_name != 'schedule' }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -104,9 +45,8 @@ jobs:
   push-charts:
     name: Push Helm Charts
     needs:
-      - detect-changes
       - validate-charts
-    if: false
+    if: ${{ !cancelled() && github.event_name != 'schedule' && needs.validate-charts.result == 'success' && !contains(github.ref, 'pull-request/') }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -117,17 +57,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Read chart version from Chart.yaml
-        id: chart-version
-        run: |
-          VERSION=$(grep '^version:' ${{ matrix.chart }}/Chart.yaml | awk '{print $2}')
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
       - name: Package and push Helm chart to NGC
-        uses: NVIDIA/dsx-github-actions/.github/actions/helm-package-push@94bde998f5d7965576b0c663db7d5d709c918167
+        uses: NVIDIA/dsx-github-actions/.github/actions/helm-package-push@7de619729962a6bd5e8355b6fb3582a22517d7e5
         with:
           chart-path: ${{ matrix.chart }}
-          chart-version: ${{ steps.chart-version.outputs.version }}
+          chart-version: ${{ inputs.chart_version }}
           app-version: ${{ inputs.app_version }}
           lint: 'false'
           ngc-key: ${{ secrets.NVCR_STG_TOKEN }}

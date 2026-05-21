@@ -140,6 +140,7 @@ jobs:
     uses: ./.github/workflows/rest-helm-workflows.yml
     with:
       app_version: ${{ needs.prepare.outputs.semantic_version }}
+      chart_version: ${{ needs.prepare.outputs.helm_version }}
     secrets:
       NVCR_STG_TOKEN: ${{ secrets.NVCR_TOKEN }}
 
@@ -149,15 +150,17 @@ jobs:
   # Fails iff any leaf job's result is `failure` or `cancelled`.
   # `skipped` counts as pass — that's how core-only PRs unblock when the
   # `changes` gate intentionally skips the REST pipeline.
-  # Scope: mirrors core's 4-check coverage — lint, security, container build,
-  # and helm packaging. Tighten later by adding prepare / build-binaries /
-  # changes if regressions appear.
+  # `changes` + `prepare` are in needs so a gate or prepare failure doesn't
+  # silently pass (downstream leaves become SKIPPED in those cases).
   rest-ci-pass:
     name: rest-ci-pass
     runs-on: ubuntu-latest
     if: always()
     needs:
+      - changes
+      - prepare
       - lint-and-test
+      - build-binaries
       - security-secret-scan
       - build-and-push
       - helm

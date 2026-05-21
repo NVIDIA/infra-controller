@@ -1445,6 +1445,8 @@ jobs:
     runs-on: ubuntu-latest
     if: always()
     needs:
+      - changes
+      - prepare
       - build-release-container-x86_64
       - build-release-container-aarch64
       - security-secret-scan

@@ -112,7 +112,9 @@ jobs:
           echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
           echo "push_requested=$PUSH_REQUESTED" >> $GITHUB_OUTPUT
 
-          HELM_VERSION=$(grep '^version:' rest-api/helm/charts/nico-rest/Chart.yaml | awk '{print $2}')
+          # Strict SemVer for Helm chart version, aligned with core's helm_version derivation.
+          # `git describe` output `1.6.0-3-gabc1234` becomes `1.6.0-3.gabc1234` (last `-` -> `.`).
+          HELM_VERSION=$(echo "$SEMANTIC_VERSION" | sed 's/\(.*\)-/\1./')
           echo "helm_version=$HELM_VERSION" >> $GITHUB_OUTPUT
 
           echo "Generated build information:"
