@@ -190,11 +190,14 @@ pub async fn handle_nvlink_info_populate(
                     "GPU entry missing gpu_id in NMX-C GPU list response".to_string(),
                 )
             })?;
-        let gpu_device_uid = gpu_json.get("gpu_uid").and_then(|v| v.as_u64()).ok_or_else(|| {
-            CarbideCliError::GenericError(
-                "GPU entry missing gpu_uid in NMX-C GPU list response".to_string(),
-            )
-        })?;
+        let gpu_device_uid = gpu_json
+            .get("gpu_uid")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| {
+                CarbideCliError::GenericError(
+                    "GPU entry missing gpu_uid in NMX-C GPU list response".to_string(),
+                )
+            })?;
         let gpu_slot_id = gpu_json
             .get("loc")
             .and_then(|loc| loc.get("slot_id"))
