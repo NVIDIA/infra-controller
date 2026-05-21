@@ -41,14 +41,15 @@ enum RulePrincipal {
     SshRs,
     Health,
     Pxe,
+    BmcProxy,
     Flow,
     MaintenanceJobs,
     DsxExchangeConsumer,
     Anonymous, // Permitted for everything
 }
 use self::RulePrincipal::{
-    Agent, Anonymous, Dhcp, Dns, DsxExchangeConsumer, Flow, ForgeAdminCLI, Health, Machineatron,
-    MaintenanceJobs, Pxe, Scout, SiteAgent, Ssh, SshRs,
+    Agent, Anonymous, BmcProxy, Dhcp, Dns, DsxExchangeConsumer, Flow, ForgeAdminCLI, Health,
+    Machineatron, MaintenanceJobs, Pxe, Scout, SiteAgent, Ssh, SshRs,
 };
 
 impl InternalRBACRules {
@@ -248,7 +249,7 @@ impl InternalRBACRules {
         x.perm("UpdateTenantKeyset", vec![SiteAgent]);
         x.perm("DeleteTenantKeyset", vec![SiteAgent]);
         x.perm("ValidateTenantPublicKey", vec![SiteAgent, Ssh, SshRs]);
-        x.perm("GetBmcCredentials", vec![Health]);
+        x.perm("GetBmcCredentials", vec![Health, BmcProxy]);
         x.perm("GetAllManagedHostNetworkStatus", vec![ForgeAdminCLI]);
         x.perm(
             "GetSiteExplorationReport",
@@ -494,7 +495,7 @@ impl InternalRBACRules {
             "FindTenantsByOrganizationIds",
             vec![SiteAgent, ForgeAdminCLI],
         );
-        x.perm("FindMacAddressByBmcIp", vec![SiteAgent]);
+        x.perm("FindMacAddressByBmcIp", vec![SiteAgent, BmcProxy]);
         x.perm("BmcCredentialStatus", vec![ForgeAdminCLI, SiteAgent]);
         x.perm(
             "GetMachineValidationExternalConfigs",
@@ -936,6 +937,9 @@ impl RuleInfo {
                     RulePrincipal::Pxe => {
                         Principal::SpiffeServiceIdentifier("carbide-pxe".to_string())
                     }
+                    RulePrincipal::BmcProxy => {
+                        Principal::SpiffeServiceIdentifier("carbide-bmc-proxy".to_string())
+                    }
                     RulePrincipal::Health => {
                         Principal::SpiffeServiceIdentifier("carbide-hardware-health".to_string())
                     }
@@ -1133,6 +1137,17 @@ mod rbac_rule_tests {
                 "carbide-rla".to_string()
             )]
         ));
+        for method in ["FindMacAddressByBmcIp", "GetBmcCredentials"] {
+            assert!(
+                InternalRBACRules::allowed_from_static(
+                    method,
+                    &[Principal::SpiffeServiceIdentifier(
+                        "carbide-bmc-proxy".to_string()
+                    )]
+                ),
+                "{method} should allow bmc-proxy"
+            );
+        }
 
         // Ensure Ssh and SshRs both have identical permissions. (ssh-console-rs is a rust rewrite
         // of ssh-console, and to keep things straightforward, it has its own set of DNS names,
