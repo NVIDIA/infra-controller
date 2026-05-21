@@ -62,6 +62,11 @@ navigation:
         - page: SKU Validation
           path: provisioning/sku-validation.md
 
+    - section: Configuration (Day 1)
+      contents:
+        - page: Day One Operations
+          path: manuals/day_one_operations.md
+
     - section: DPU Management
       contents:
         - page: DPU Lifecycle Management
@@ -108,8 +113,6 @@ navigation:
 
     - section: Operations
       contents:
-        - page: Day One Operations
-          path: manuals/day_one_operations.md
         - page: NVLink Partitioning
           path: manuals/nvlink_partitioning.md
         - page: Release Instance API Enhancements

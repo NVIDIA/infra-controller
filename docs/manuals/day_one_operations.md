@@ -8,7 +8,7 @@ The primary tool throughout this guide is `nicocli`, the CLI client that wraps t
 
 ## Before You Start
 
-This guide assumes you have completed the [Quick Start Guide](getting-started/quick-start.md), which covers NICo deployment, site creation, and host discovery (Day Zero). You should already have:
+This guide assumes you have completed the [Quick Start Guide](../getting-started/quick-start.md), which covers NICo deployment, site creation, and host discovery (Day Zero). You should already have:
 
 - A running NICo deployment with healthy REST API, database, Temporal workflow engine, and at least one site controller.
 - At least one site registered and in `Registered` status, with machines discovered and available for allocation.
@@ -16,7 +16,7 @@ This guide assumes you have completed the [Quick Start Guide](getting-started/qu
 
 > **Note on CLI naming**: Older docs reference `carbidecli` (built via `make carbide-cli`). It's the same source under a previous name. This guide uses `nicocli` (built via `make nico-cli`) consistently.
 
-For nicocli mechanics and conventions (flag ordering, `api.name` selection, `--data` vs flag forms, output formats, pagination, `--debug`), see the [nicocli Reference](nicocli-reference.md). The examples in this guide assume you've read it.
+For nicocli mechanics and conventions (flag ordering, `api.name` selection, `--data` vs flag forms, output formats, pagination, `--debug`), see the nicocli reference guide. The examples in this guide assume you've read it.
 
 ### Roles Required
 
@@ -32,7 +32,7 @@ A single user can hold roles in multiple orgs simultaneously. On dev/service-acc
 
 ### Authentication
 
-The Quick Start covers `nicocli login` end-to-end for Keycloak-backed deployments (the default for `setup.sh` installs). For other identity providers and for the static-token / token-command flows useful in automation, see the [nicocli Reference](nicocli-reference.md).
+The Quick Start covers `nicocli login` end-to-end for Keycloak-backed deployments (the default for `setup.sh` installs). For other identity providers and for the static-token / token-command flows useful in automation, see the nicocli reference guide.
 
 ### Verifying Connectivity
 
@@ -71,7 +71,7 @@ nicocli tui
 - The authenticated user must be a member of the organization specified in the nicocli config (`api.org`).
 - The user must hold the Tenant Admin role within that org.
 
-If either condition is not met, the API returns HTTP 403. NICo trusts whatever the IdP says in the token's claims, so getting these conditions met is an IdP administration task -- it is not done through nicocli or the NICo API. The [Quick Start Guide](getting-started/quick-start.md) walks through the bundled Keycloak reference implementation (a dev Keycloak deployed by `setup.sh` with a pre-loaded realm), which is the simplest path for first-time setup. For production, point NICo at any OIDC-compatible IdP (Keycloak, Okta, Auth0, your existing enterprise IdP) by configuring the `issuers` block in `carbide-rest-api`'s config -- see [`getting-started/installation-options/reference-install.md`](getting-started/installation-options/reference-install.md) for the deployment-side wiring.
+If either condition is not met, the API returns HTTP 403. NICo trusts whatever the IdP says in the token's claims, so getting these conditions met is an IdP administration task -- it is not done through nicocli or the NICo API. The [Quick Start Guide](../getting-started/quick-start.md) walks through the bundled Keycloak reference implementation (a dev Keycloak deployed by `setup.sh` with a pre-loaded realm), which is the simplest path for first-time setup. For production, point NICo at any OIDC-compatible IdP (Keycloak, Okta, Auth0, your existing enterprise IdP) by configuring the `issuers` block in `carbide-rest-api`'s config -- see [`getting-started/installation-options/reference-install.md`](../getting-started/installation-options/reference-install.md) for the deployment-side wiring.
 
 ### Worked Example
 
@@ -453,7 +453,7 @@ Verify the VPC reaches `Ready` status:
 nicocli vpc list --output table
 ```
 
-> **Routing profiles** govern which VPCs can exchange routes with which others. The REST API accepts `external`, `internal`, and `privileged-internal`; the underlying gRPC API supports any profile defined under `fnn.routing_profiles` in the API server config. For details, see [VPC Routing Profiles](manuals/vpc/vpc_routing_profiles.md). For the full networking architecture (VRFs, VNI pools, BGP, deny prefixes), see [VPC Network Virtualization](manuals/vpc/vpc_network_virtualization.md).
+> **Routing profiles** govern which VPCs can exchange routes with which others. The REST API accepts `external`, `internal`, and `privileged-internal`; the underlying gRPC API supports any profile defined under `fnn.routing_profiles` in the API server config. For details, see [VPC Routing Profiles](vpc/vpc_routing_profiles.md). For the full networking architecture (VRFs, VNI pools, BGP, deny prefixes), see [VPC Network Virtualization](vpc/vpc_network_virtualization.md).
 
 ### Subnet Creation
 
@@ -632,7 +632,7 @@ Key properties:
 - `deny_prefixes` ACLs block tenant traffic from reaching management networks
 - Network Security Groups provide per-subnet firewall rules
 
-For the full networking architecture, see [VPC Network Virtualization](manuals/vpc/vpc_network_virtualization.md).
+For the full networking architecture, see [VPC Network Virtualization](vpc/vpc_network_virtualization.md).
 
 ### InfiniBand (East-West)
 
@@ -745,7 +745,7 @@ carbide-admin-cli -c <core-api-url> machine reboot --machine-id="<machine-id>"
 carbide-admin-cli -c <core-api-url> machine force-delete --machine="<machine-id>"
 ```
 
-See the [Machine Reboot](playbooks/machine_reboot.md) and [Force Delete](playbooks/force_delete.md) playbooks in the core documentation for detailed procedures.
+See the [Machine Reboot](../playbooks/machine_reboot.md) and [Force Delete](../playbooks/force_delete.md) playbooks in the core documentation for detailed procedures.
 
 ## Users and Roles
 
@@ -753,7 +753,7 @@ See the [Machine Reboot](playbooks/machine_reboot.md) and [Force Delete](playboo
 
 NICo does not maintain its own user directory. Identity, org membership, and role assignments are all managed in the upstream identity provider. The REST API reads role claims from the authentication token on every request. Adding or removing a user is done in the identity provider, not through nicocli.
 
-NICo accepts tokens from any OIDC-compatible IdP. The bundled dev Keycloak (deployed by `setup.sh` and documented in the [Quick Start Guide](getting-started/quick-start.md)) is the recommended starting point and the reference implementation for IdP wiring -- you can use it as-is for evaluation, or model your production IdP setup after it. Configure additional or replacement IdPs via the `issuers` block in `carbide-rest-api`'s config; see the [Reference Installation](getting-started/installation-options/reference-install.md) guide for the configuration surface and the claim mappings NICo expects (org name, display name, role claim).
+NICo accepts tokens from any OIDC-compatible IdP. The bundled dev Keycloak (deployed by `setup.sh` and documented in the [Quick Start Guide](../getting-started/quick-start.md)) is the recommended starting point and the reference implementation for IdP wiring -- you can use it as-is for evaluation, or model your production IdP setup after it. Configure additional or replacement IdPs via the `issuers` block in `carbide-rest-api`'s config; see the [Reference Installation](../getting-started/installation-options/reference-install.md) guide for the configuration surface and the claim mappings NICo expects (org name, display name, role claim).
 
 ### Adding a User to a Tenant
 
@@ -761,7 +761,7 @@ NICo accepts tokens from any OIDC-compatible IdP. The bundled dev Keycloak (depl
 2. Assign the `TENANT_ADMIN` role at the org level.
 3. Have the user authenticate with nicocli and verify: `nicocli user get`
 
-The exact steps depend on your IdP. For the bundled dev Keycloak, this is realm administration in the Keycloak admin console -- create the user, add them to the realm group that maps to the tenant org, and assign the role. See the [Quick Start Guide](getting-started/quick-start.md) for the realm layout.
+The exact steps depend on your IdP. For the bundled dev Keycloak, this is realm administration in the Keycloak admin console -- create the user, add them to the realm group that maps to the tenant org, and assign the role. See the [Quick Start Guide](../getting-started/quick-start.md) for the realm layout.
 
 ### Adding a Provider Admin
 
@@ -972,7 +972,7 @@ The instance should reach `Ready` (or `BootCompleted` if `phoneHomeEnabled: true
 
 | Symptom | Cause | Resolution |
 |---------|-------|-----------|
-| HTTP 404 "The requested path could not be found" on every command | `api.name` in your config does not match the deployment | See [nicocli Reference](nicocli-reference.md) for how to find the deployment's expected `api.name` and update your config |
+| HTTP 404 "The requested path could not be found" on every command | `api.name` in your config does not match the deployment | See the nicocli reference guide for how to find the deployment's expected `api.name` and update your config |
 | HTTP 401 "Request is missing authorization header" | No bearer token cached | Run `nicocli login` (or for SSA deployments, run your token-fetch script and set `auth.token` / `auth.token_command`) |
 | HTTP 401 on previously-working session | Token expired | If using OIDC or token-command, nicocli auto-refreshes; if using a static `auth.token`, mint a new token |
 | `No help topic for 'get-current-user'` | Command name wrong; CLI generates `user get`, not `user get-current-user` | Use `nicocli user get` |
@@ -1052,11 +1052,11 @@ Flag-first ordering -- always put flags before positional args.
 
 ## Related Documentation
 
-- [Quick Start Guide](getting-started/quick-start.md) -- NICo deployment and Day Zero walkthrough
-- [VPC Routing Profiles](manuals/vpc/vpc_routing_profiles.md) -- Profile configuration and behavior
-- [VPC Network Virtualization](manuals/vpc/vpc_network_virtualization.md) -- Full networking architecture
-- [VPC Peering](manuals/vpc/vpc_peering_management.md) -- Connecting VPCs (gRPC only)
-- [NVLink Partitioning](manuals/nvlink_partitioning.md) -- NVLink domain management
-- [Machine Reboot Playbook](playbooks/machine_reboot.md) -- Emergency BMC reboot procedures
-- [Force Delete Playbook](playbooks/force_delete.md) -- Removing stuck machines
-- [Day 0/1/2 Lifecycle](overview/lifecycle.md) -- NICo lifecycle model overview
+- [Quick Start Guide](../getting-started/quick-start.md) -- NICo deployment and Day Zero walkthrough
+- [VPC Routing Profiles](vpc/vpc_routing_profiles.md) -- Profile configuration and behavior
+- [VPC Network Virtualization](vpc/vpc_network_virtualization.md) -- Full networking architecture
+- [VPC Peering](vpc/vpc_peering_management.md) -- Connecting VPCs (gRPC only)
+- [NVLink Partitioning](nvlink_partitioning.md) -- NVLink domain management
+- [Machine Reboot Playbook](../playbooks/machine_reboot.md) -- Emergency BMC reboot procedures
+- [Force Delete Playbook](../playbooks/force_delete.md) -- Removing stuck machines
+- [Day 0/1/2 Lifecycle](../overview/lifecycle.md) -- NICo lifecycle model overview
