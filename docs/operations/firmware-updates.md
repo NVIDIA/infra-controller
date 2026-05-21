@@ -278,7 +278,30 @@ firmware workflow.
 
 For NVIDIA-managed platforms, follow the approved NVIDIA service procedure for
 the exact platform and firmware package. GB200 is the common example for this
-flow.
+flow. NICo normally runs the automated firmware lifecycle. Use the manual
+procedure only when the site runbook or platform support path requires a manual
+GB200 update gate.
+
+A GB200 firmware service procedure can cover several component groups:
+
+| Component group | Purpose |
+|---|---|
+| NVSwitch trays | Updates switch firmware before the rack is returned to service. |
+| GB200 compute tray BMC | Updates the compute tray management controller used for out-of-band control. |
+| HGX firmware | Updates the GPU/HGX firmware package for the compute tray. |
+| System BIOS or UEFI | Updates host boot firmware and platform initialization behavior. |
+| Auxiliary power or BMC power state | Applies platform power-state changes required for firmware activation. |
+| CPU node BMC and BIOS | Updates CPU node management and boot firmware through the applicable OEM procedure. |
+| TPM state | Clears or resets TPM state when required by the platform procedure. |
+| NVMe SSD firmware and secure erase | Updates storage firmware and returns storage to the expected clean state. |
+| CX7 firmware | Updates ConnectX firmware used by the host networking stack. |
+| BlueField-3 firmware | Updates DPU NIC and boot-related firmware where the GB200 rack uses BF3 DPUs. |
+| Power cycle and validation | Activates pending firmware and verifies platform health, including NVLink status. |
+
+The exact order, package names, credentials, BMC addresses, and validation
+commands are site- and release-specific. Keep those details in the approved
+GB200 service procedure. This Operations guide documents where NICo waits and
+how to resume the lifecycle after that procedure is complete.
 
 When manual firmware upgrade is required, NICo moves the managed host to a
 manual waiting state. Complete the approved GB200 firmware procedure first.
