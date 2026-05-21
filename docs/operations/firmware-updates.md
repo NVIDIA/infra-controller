@@ -32,8 +32,8 @@ updated.
 | Host BMC, BIOS, UEFI, and platform firmware listed in host firmware metadata | Machine Update Manager and the managed-host state machine | Fleet host firmware drift and host firmware service windows. |
 | DPU NIC firmware drift | Machine Update Manager and DPU reprovisioning | Automatic DPU reprovisioning when DPU NIC firmware is outside the configured baseline. |
 | DPU BMC, UEFI, CEC, ERoT, and related DPU firmware | DPU reprovisioning | Verification and update as part of the DPU lifecycle. |
-| GB200 manual firmware procedures | Manual service procedure plus NICo completion gate | Platforms that require a field procedure before NICo resumes automatic checks. |
-| SMC/Supermicro and other OEM procedures | OEM instructions plus NICo scheduling or script handoff | Vendor-specific packages where NICo does not own the field procedure. |
+| NVIDIA platform procedures | Manual service procedure plus NICo completion gate | NVIDIA-managed platforms, such as GB200, that require a field procedure before NICo resumes automatic checks. |
+| OEM platform procedures | OEM instructions plus NICo scheduling or script handoff | Vendor-specific packages, such as SMC/Supermicro platforms, where the OEM procedure is the authority for platform-specific steps. |
 | Rack, compute tray, switch, and power shelf firmware | Rack maintenance, RMS, and component-manager workflows | Rack-level and component-level firmware outside host Machine Update Manager scheduling. |
 
 Use `carbide-admin-cli` for the examples below. These commands talk to the NICo
@@ -274,7 +274,11 @@ For the full DPU firmware flow, see
 Some platforms require a manual field procedure before NICo can complete the
 firmware workflow.
 
-### GB200
+### NVIDIA Platforms
+
+For NVIDIA-managed platforms, follow the approved NVIDIA service procedure for
+the exact platform and firmware package. GB200 is the common example for this
+flow.
 
 When manual firmware upgrade is required, NICo moves the managed host to a
 manual waiting state. Complete the approved GB200 firmware procedure first.
@@ -285,13 +289,13 @@ complete so NICo can resume automatic checks:
 carbide-admin-cli -c <core-api-url> host reprovision mark-manual-upgrade-complete --id <machine-id>
 ```
 
-### SMC and Other OEM Platforms
+### OEM Platforms
 
-For SMC/Supermicro and other OEM platforms, follow the approved OEM firmware
-instructions for the exact platform and firmware package. NICo can still
-schedule, track, or hand off the update when the site has integrated an
-approved script or manual workflow. Treat the OEM procedure as the authority
-for vendor-specific prerequisites, activation steps, and recovery.
+For OEM platforms, consult the OEM support site for the exact platform and
+firmware package before starting work. SMC/Supermicro is one example of this
+path. NICo can still schedule, track, or hand off the update when the site has
+integrated an approved script or manual workflow. Treat the OEM procedure as
+the authority for vendor-specific prerequisites, activation steps, and recovery.
 
 ## Rack and Component Firmware
 
