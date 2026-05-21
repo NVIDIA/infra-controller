@@ -1265,7 +1265,7 @@ pub async fn handle_maintenance(
                     .unwrap_or_default();
                 let software_type = profile.map(firmware_type_for_profile).unwrap_or("prod");
 
-                let inventory = load_rack_firmware_inventory(
+                let switch_inventory = load_rack_switch_firmware_inventory(
                     &ctx.services.db_pool,
                     ctx.services.credential_manager.as_ref(),
                     id,
@@ -1273,13 +1273,13 @@ pub async fn handle_maintenance(
                 .await
                 .map_err(|error| {
                     StateHandlerError::GenericError(eyre::eyre!(
-                        "failed to load rack inventory for NVOS update: {}",
+                        "failed to load rack switch firmware inventory for NVOS update: {}",
                         error
                     ))
                 })?;
-                let inventory = filter_inventory_by_scope(inventory, scope);
+                let switch_inventory = filter_switch_inventory_by_scope(switch_inventory, scope);
 
-                if inventory.switches.is_empty() {
+                if switch_inventory.switches.is_empty() {
                     let next = next_state_after_nvos(scope);
                     tracing::info!(
                         rack_id = %id,
@@ -1297,7 +1297,7 @@ pub async fn handle_maintenance(
                     firmware_object_id.as_deref().unwrap_or("<default>"),
                 );
 
-                for switch in &inventory.switches {
+                for switch in &switch_inventory.switches {
                     switch.os_ip.as_ref().ok_or_else(|| {
                         StateHandlerError::GenericError(eyre::eyre!(
                             "switch {} has no NVOS IP for rack NVOS update",
@@ -1324,7 +1324,7 @@ pub async fn handle_maintenance(
                     firmware_object_id.as_deref(),
                     software_type,
                     &rack_hardware_type,
-                    inventory.switches,
+                    switch_inventory.switches,
                 )
                 .await
                 {
@@ -1345,7 +1345,7 @@ pub async fn handle_maintenance(
                 };
 
                 let mut txn = ctx.services.db_pool.begin().await?;
-                clear_nvos_update_statuses(txn.as_mut(), &inventory.switch_ids).await?;
+                clear_nvos_update_statuses(txn.as_mut(), &switch_inventory.switch_ids).await?;
                 db_rack::update_nvos_update_job(txn.as_mut(), id, Some(&job)).await?;
                 state.nvos_update_job = Some(job);
 
