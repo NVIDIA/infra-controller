@@ -919,6 +919,43 @@ pub async fn handle_maintenance(
                     })
                     .unwrap_or((None, &[]));
 
+                let Some(rms_client) = ctx.services.rms_client.as_ref() else {
+                    return transition_to_rack_error_with_firmware_job(
+                        id,
+                        state,
+                        requested_fw_version.unwrap_or_default(),
+                        "RMS client not configured",
+                        ctx,
+                    )
+                    .await;
+                };
+
+                if requested_fw_version.is_none() {
+                    let default_available = rms_client
+                        .list_firmware_objects(rms::ListFirmwareObjectsRequest {
+                            metadata: None,
+                            only_available: true,
+                            hardware_type: rack_hardware_type.clone(),
+                        })
+                        .await
+                        .map_err(|error| {
+                            StateHandlerError::GenericError(eyre::eyre!(
+                                "failed to list RMS firmware objects: {}",
+                                rack_manager_error("list_firmware_objects", error)
+                            ))
+                        })?
+                        .objects
+                        .iter()
+                        .any(|object| object.is_default);
+                    if !default_available {
+                        return Ok(skip_firmware_upgrade_outcome(
+                            id,
+                            "no default firmware object configured in RMS",
+                            scope,
+                        ));
+                    }
+                }
+
                 let inventory = load_rack_firmware_inventory(
                     &ctx.services.db_pool,
                     ctx.services.credential_manager.as_ref(),
@@ -940,16 +977,6 @@ pub async fn handle_maintenance(
                         scope,
                     ));
                 }
-                let Some(rms_client) = ctx.services.rms_client.as_ref() else {
-                    return transition_to_rack_error_with_firmware_job(
-                        id,
-                        state,
-                        requested_fw_version.unwrap_or_default(),
-                        "RMS client not configured",
-                        ctx,
-                    )
-                    .await;
-                };
 
                 let mut devices =
                     Vec::with_capacity(inventory.machines.len() + inventory.switches.len());
@@ -1232,17 +1259,11 @@ pub async fn handle_maintenance(
                     return transition_to_rack_error(id, state, "RMS client not configured", ctx)
                         .await;
                 };
-                let Some(profile) = super::resolve_profile(id, rack_profile_id, ctx) else {
-                    return transition_to_rack_error(
-                        id,
-                        state,
-                        "rack profile is missing or unknown; cannot resolve switch system image type",
-                        ctx,
-                    )
-                    .await;
-                };
-                let rack_hardware_type = profile_hardware_type_wire_value(profile);
-                let software_type = firmware_type_for_profile(profile);
+                let profile = super::resolve_profile(id, rack_profile_id, ctx);
+                let rack_hardware_type = profile
+                    .map(profile_hardware_type_wire_value)
+                    .unwrap_or_default();
+                let software_type = profile.map(firmware_type_for_profile).unwrap_or("prod");
 
                 let inventory = load_rack_firmware_inventory(
                     &ctx.services.db_pool,
