@@ -19,18 +19,19 @@ use clap::Parser;
 
 #[derive(Parser, Debug)]
 pub struct Args {
-    #[clap(long, help = "Filter by firmware ID")]
-    pub firmware_id: Option<String>,
-
-    #[clap(long, help = "Filter by rack ID(s)")]
-    pub rack_id: Vec<String>,
+    #[clap(long, help = "Show only available configurations.")]
+    pub only_available: bool,
+    #[clap(help = "Filter by rack hardware type.")]
+    pub rack_hardware_type: Option<String>,
 }
 
-impl From<Args> for rpc::forge::RackFirmwareHistoryRequest {
+impl From<Args> for rpc::forge::FirmwareObjectSearchFilter {
     fn from(args: Args) -> Self {
         Self {
-            firmware_id: args.firmware_id.unwrap_or_default(),
-            rack_ids: args.rack_id,
+            only_available: args.only_available,
+            rack_hardware_type: args
+                .rack_hardware_type
+                .map(|v| rpc::common::RackHardwareType { value: v }),
         }
     }
 }

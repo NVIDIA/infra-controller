@@ -28,7 +28,7 @@ pub async fn get_job_status(
 ) -> Result<(), CarbideCliError> {
     let response = api_client
         .0
-        .get_rack_firmware_job_status(opts)
+        .get_firmware_object_job_status(opts)
         .await
         .map_err(CarbideCliError::from)?;
 

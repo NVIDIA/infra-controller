@@ -23,7 +23,7 @@ use crate::errors::CarbideCliError;
 
 #[derive(Parser, Debug)]
 pub struct Args {
-    #[clap(help = "Rack hardware type for this firmware configuration.")]
+    #[clap(help = "Rack hardware type for this firmware object.")]
     pub rack_hardware_type: String,
     #[clap(help = "Path to JSON configuration file.")]
     pub json_file: PathBuf,
@@ -33,7 +33,7 @@ pub struct Args {
     pub set_default: bool,
 }
 
-impl TryFrom<Args> for rpc::forge::RackFirmwareCreateRequest {
+impl TryFrom<Args> for rpc::forge::CreateFirmwareObjectRequest {
     type Error = CarbideCliError;
 
     fn try_from(args: Args) -> Result<Self, Self::Error> {

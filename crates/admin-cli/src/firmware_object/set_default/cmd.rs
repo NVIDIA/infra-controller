@@ -20,8 +20,8 @@ use crate::errors::CarbideCliError;
 use crate::rpc::ApiClient;
 
 pub async fn set_default(opts: Args, api_client: &ApiClient) -> Result<(), CarbideCliError> {
-    let firmware_id = opts.firmware_id.clone();
-    api_client.0.rack_firmware_set_default(opts).await?;
-    println!("Set firmware '{}' as default.", firmware_id);
+    let object_id = opts.object_id.clone();
+    api_client.0.set_default_firmware_object(opts).await?;
+    println!("Set firmware object '{}' as default.", object_id);
     Ok(())
 }

@@ -27,13 +27,13 @@ pub async fn history(
     format: OutputFormat,
     api_client: &ApiClient,
 ) -> Result<(), CarbideCliError> {
-    let result = api_client.0.get_rack_firmware_history(opts).await?;
+    let result = api_client.0.get_firmware_object_history(opts).await?;
 
     if format == OutputFormat::Json {
         // Flatten to map<rack_id, Vec<record>> for serialization
         let json_histories: std::collections::HashMap<
             &str,
-            Vec<&rpc::forge::RackFirmwareHistoryRecord>,
+            Vec<&rpc::forge::FirmwareObjectHistoryRecord>,
         > = result
             .histories
             .iter()
@@ -41,12 +41,12 @@ pub async fn history(
             .collect();
         println!("{}", serde_json::to_string_pretty(&json_histories)?);
     } else if result.histories.is_empty() {
-        println!("No rack firmware apply history found.");
+        println!("No firmware object apply history found.");
     } else {
         let mut table = Table::new();
         table.set_titles(Row::new(vec![
             Cell::new("Rack ID"),
-            Cell::new("Firmware ID"),
+            Cell::new("Object ID"),
             Cell::new("Hardware Type"),
             Cell::new("Firmware Type"),
             Cell::new("Applied At"),
@@ -62,7 +62,7 @@ pub async fn history(
                     .unwrap_or("N/A");
                 table.add_row(Row::new(vec![
                     Cell::new(rack_id),
-                    Cell::new(&record.firmware_id),
+                    Cell::new(&record.object_id),
                     Cell::new(hw_type),
                     Cell::new(&record.firmware_type),
                     Cell::new(&record.applied_at),

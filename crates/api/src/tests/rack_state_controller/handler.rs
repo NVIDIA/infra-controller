@@ -159,56 +159,22 @@ pub(crate) fn config_with_rack_profiles() -> crate::cfg::file::CarbideConfig {
     config
 }
 
-fn default_lookup_table_json() -> serde_json::Value {
-    json!({
-        "devices": {
-            "Compute Node": {
-                "HMC_prod": {
-                    "filename": "hmc-prod.bin",
-                    "target": "/redfish/v1/Chassis/HGX_Chassis_0",
-                    "component": "HMC",
-                    "bundle": "bundle-hmc",
-                    "firmware_type": "prod",
-                    "version": "1.0.0"
-                },
-                "BMC_prod": {
-                    "filename": "bmc-prod.bin",
-                    "target": "FW_BMC_0",
-                    "component": "BMC",
-                    "bundle": "bundle-bmc",
-                    "firmware_type": "prod",
-                    "version": "1.0.0"
-                }
-            }
-        }
-    })
-}
-
-async fn insert_default_rack_firmware(
-    pool: &sqlx::PgPool,
-    firmware_id: &str,
+async fn insert_default_firmware_object(
+    env: &TestEnv,
+    object_id: &str,
     rack_hardware_type: RackHardwareType,
     available: bool,
 ) {
-    let mut txn = pool.begin().await.unwrap();
-    db::rack_firmware::create(
-        &mut txn,
-        firmware_id,
-        rack_hardware_type,
-        json!({ "Id": firmware_id }),
-        Some(default_lookup_table_json()),
-    )
-    .await
-    .unwrap();
-    if available {
-        db::rack_firmware::set_available(&mut txn, firmware_id, true)
-            .await
-            .unwrap();
-    }
-    db::rack_firmware::set_default(&mut txn, firmware_id)
+    env.rms_sim
+        .insert_firmware_object(rms::FirmwareObject {
+            id: object_id.to_string(),
+            config_json: json!({ "Id": object_id }).to_string(),
+            available,
+            hardware_type: rack_hardware_type.to_string(),
+            is_default: true,
+            ..Default::default()
+        })
         .await
-        .unwrap();
-    txn.commit().await.unwrap();
 }
 
 async fn create_single_compute_rack(
@@ -396,36 +362,6 @@ async fn create_expected_rack(pool: &sqlx::PgPool, rack_id: &RackId, rack_profil
     db_expected_rack::create(&mut txn, &er).await.unwrap();
 }
 
-async fn create_default_nvos_rack_firmware(pool: &sqlx::PgPool, firmware_id: &str) {
-    let mut txn = pool.acquire().await.unwrap();
-    sqlx::query(
-        "INSERT INTO rack_firmware \
-         (id, rack_hardware_type, config, parsed_components, available, is_default) \
-         VALUES ($1, $2, $3::jsonb, $4::jsonb, true, true)",
-    )
-    .bind(firmware_id)
-    .bind(RackHardwareType::any())
-    .bind(sqlx::types::Json(json!({ "Id": firmware_id })))
-    .bind(sqlx::types::Json(json!({
-        "devices": {},
-        "switch_system_images": {
-            "Switch Tray": {
-                "NVOS_prod": {
-                    "component": "NVOS",
-                    "package_name": "GB200NVL72_NVOS",
-                    "version": "25.02.2553",
-                    "image_filename": "nvos-amd64-25.02.2553.bin",
-                    "location_type": "HTTPS",
-                    "firmware_type": "prod"
-                }
-            }
-        }
-    })))
-    .execute(txn.as_mut())
-    .await
-    .unwrap();
-}
-
 pub(crate) fn new_machine_id(seed: u8) -> MachineId {
     let mut hash = [0u8; 32];
     hash[0] = seed;
@@ -455,7 +391,7 @@ async fn test_on_demand_rack_maintenance_schedules_nvos_only_scope(
                     activity: Some(
                         rpc::forge::maintenance_activity_config::Activity::NvosUpdate(
                             rpc::forge::NvosUpdateActivity {
-                                rack_firmware_id: "fw-nvos".to_string(),
+                                firmware_object_id: "fw-nvos".to_string(),
                             },
                         ),
                     ),
@@ -475,7 +411,7 @@ async fn test_on_demand_rack_maintenance_schedules_nvos_only_scope(
     assert!(matches!(
         &scope.activities[0],
         MaintenanceActivity::NvosUpdate {
-            rack_firmware_id: Some(id)
+            firmware_object_id: Some(id)
         } if id == "fw-nvos"
     ));
 
@@ -554,7 +490,7 @@ async fn test_on_demand_rack_maintenance_schedules_firmware_and_nvos_scope(
                         activity: Some(
                             rpc::forge::maintenance_activity_config::Activity::NvosUpdate(
                                 rpc::forge::NvosUpdateActivity {
-                                    rack_firmware_id: "fw-mixed".to_string(),
+                                    firmware_object_id: "fw-mixed".to_string(),
                                 },
                             ),
                         ),
@@ -582,7 +518,7 @@ async fn test_on_demand_rack_maintenance_schedules_firmware_and_nvos_scope(
     assert!(matches!(
         &scope.activities[1],
         MaintenanceActivity::NvosUpdate {
-            rack_firmware_id: Some(id)
+            firmware_object_id: Some(id)
         } if id == "fw-mixed"
     ));
 
@@ -1307,7 +1243,7 @@ async fn test_firmware_upgrade_start_without_default_advances_to_nvos_update(
                     RackState::Maintenance {
                         maintenance_state: RackMaintenanceState::NVOSUpdate {
                             nvos_update: NvosUpdateState::Start {
-                                rack_firmware_id: None,
+                                firmware_object_id: None,
                             },
                         },
                     }
@@ -1323,8 +1259,10 @@ async fn test_firmware_upgrade_start_without_default_advances_to_nvos_update(
     }
 
     let requests = env.rms_sim.submitted_apply_firmware_object_requests().await;
-    assert_eq!(requests.len(), 1);
-    assert!(requests[0].object_id.is_empty());
+    assert!(
+        requests.is_empty(),
+        "firmware apply should not be submitted when no default firmware object is available"
+    );
     let machine = db::machine::find_one(
         &pool,
         &host.host_snapshot.id,
@@ -1354,8 +1292,8 @@ async fn test_firmware_upgrade_start_with_unavailable_default_advances_to_nvos_u
     )
     .await;
     let (rack_id, host) = create_single_compute_rack(&env, &pool).await?;
-    insert_default_rack_firmware(
-        &pool,
+    insert_default_firmware_object(
+        &env,
         "fw-default-unavailable",
         RackHardwareType::any(),
         false,
@@ -1393,7 +1331,7 @@ async fn test_firmware_upgrade_start_with_unavailable_default_advances_to_nvos_u
                     RackState::Maintenance {
                         maintenance_state: RackMaintenanceState::NVOSUpdate {
                             nvos_update: NvosUpdateState::Start {
-                                rack_firmware_id: None,
+                                firmware_object_id: None,
                             },
                         },
                     }
@@ -1409,8 +1347,10 @@ async fn test_firmware_upgrade_start_with_unavailable_default_advances_to_nvos_u
     }
 
     let requests = env.rms_sim.submitted_apply_firmware_object_requests().await;
-    assert_eq!(requests.len(), 1);
-    assert!(requests[0].object_id.is_empty());
+    assert!(
+        requests.is_empty(),
+        "firmware apply should not be submitted when the default firmware object is unavailable"
+    );
     let machine = db::machine::find_one(
         &pool,
         &host.host_snapshot.id,
@@ -1438,7 +1378,7 @@ async fn test_firmware_upgrade_start_transitions_to_wait_for_complete(
     )
     .await;
     let (rack_id, host) = create_single_compute_rack(&env, &pool).await?;
-    insert_default_rack_firmware(&pool, "fw-default", RackHardwareType::any(), true).await;
+    insert_default_firmware_object(&env, "fw-default", RackHardwareType::any(), true).await;
     {
         let mut txn = pool.begin().await?;
         db::machine::update_rack_fw_details(
@@ -2099,7 +2039,7 @@ async fn test_firmware_upgrade_wait_for_complete_retries_on_transient_poll_error
 
 /// test_nvos_update_start_transitions_to_wait_for_complete verifies that
 /// Maintenance::NVOSUpdate(Start) transitions to WaitForComplete when a
-/// default NVOS-capable rack_firmware entry exists.
+/// default NVOS-capable firmware object is available through RMS.
 #[crate::sqlx_test]
 async fn test_nvos_update_start_transitions_to_wait_for_complete(
     pool: sqlx::PgPool,
@@ -2122,7 +2062,7 @@ async fn test_nvos_update_start_transitions_to_wait_for_complete(
         maintenance_requested: Some(MaintenanceScope {
             switch_ids: vec![switch_id],
             activities: vec![MaintenanceActivity::NvosUpdate {
-                rack_firmware_id: Some("fw-nvos-default".to_string()),
+                firmware_object_id: Some("fw-nvos-default".to_string()),
             }],
             ..Default::default()
         }),
@@ -2132,7 +2072,6 @@ async fn test_nvos_update_start_transitions_to_wait_for_complete(
     db_rack::update(&mut txn, &rack_id, &config).await?;
     drop(txn);
 
-    create_default_nvos_rack_firmware(&pool, "fw-nvos-default").await;
     env.rms_sim
         .queue_apply_switch_system_image_response(
             librms::protos::rack_manager::ApplySwitchSystemImageResponse {
@@ -2161,7 +2100,7 @@ async fn test_nvos_update_start_transitions_to_wait_for_complete(
     let nvos_state = RackState::Maintenance {
         maintenance_state: RackMaintenanceState::NVOSUpdate {
             nvos_update: NvosUpdateState::Start {
-                rack_firmware_id: Some("fw-nvos-default".to_string()),
+                firmware_object_id: Some("fw-nvos-default".to_string()),
             },
         },
     };

@@ -19,14 +19,12 @@ use clap::Parser;
 
 #[derive(Parser, Debug)]
 pub struct Args {
-    #[clap(help = "Job ID to check status for (from apply output)")]
-    pub job_id: String,
+    #[clap(help = "ID of the configuration to retrieve")]
+    pub id: String,
 }
 
-impl From<Args> for rpc::forge::RackFirmwareJobStatusRequest {
+impl From<Args> for rpc::forge::GetFirmwareObjectRequest {
     fn from(args: Args) -> Self {
-        Self {
-            job_id: args.job_id,
-        }
+        Self { id: args.id }
     }
 }

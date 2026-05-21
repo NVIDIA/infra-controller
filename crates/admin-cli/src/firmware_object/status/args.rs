@@ -19,12 +19,14 @@ use clap::Parser;
 
 #[derive(Parser, Debug)]
 pub struct Args {
-    #[clap(help = "ID of the configuration to delete")]
-    pub id: String,
+    #[clap(help = "Job ID to check status for (from apply output)")]
+    pub job_id: String,
 }
 
-impl From<Args> for rpc::forge::RackFirmwareDeleteRequest {
+impl From<Args> for rpc::forge::FirmwareObjectJobStatusRequest {
     fn from(args: Args) -> Self {
-        Self { id: args.id }
+        Self {
+            job_id: args.job_id,
+        }
     }
 }

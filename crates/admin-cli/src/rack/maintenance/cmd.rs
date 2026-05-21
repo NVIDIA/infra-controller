@@ -29,7 +29,7 @@ pub async fn on_demand_rack_maintenance(
 
     let firmware_version = args.firmware_version.unwrap_or_default();
     let components = args.components.unwrap_or_default();
-    let rack_firmware_id = args.rack_firmware_id.unwrap_or_default();
+    let firmware_object_id = args.firmware_object_id.unwrap_or_default();
 
     let activities: Vec<rpc::MaintenanceActivityConfig> = args
          .activities
@@ -45,7 +45,7 @@ pub async fn on_demand_rack_maintenance(
                  )),
                  "nvos-update" => Ok(ProtoActivity::NvosUpdate(
                      rpc::NvosUpdateActivity {
-                         rack_firmware_id: rack_firmware_id.clone(),
+                         firmware_object_id: firmware_object_id.clone(),
                      },
                  )),
                  "configure-nmx-cluster" => Ok(ProtoActivity::ConfigureNmxCluster(

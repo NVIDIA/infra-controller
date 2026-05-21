@@ -33,16 +33,16 @@ use crate::cfg::dispatch::Dispatch;
 
 #[derive(Parser, Debug, Dispatch)]
 pub enum Cmd {
-    #[clap(about = "Create a new Rack firmware configuration from JSON file")]
+    #[clap(about = "Create a new firmware object from JSON file")]
     Create(create::Args),
 
-    #[clap(about = "Get a Rack firmware configuration by ID")]
+    #[clap(about = "Get a firmware object by ID")]
     Get(get::Args),
 
-    #[clap(about = "List all Rack firmware configurations")]
+    #[clap(about = "List firmware objects")]
     List(list::Args),
 
-    #[clap(about = "Delete a Rack firmware configuration")]
+    #[clap(about = "Delete a firmware object")]
     Delete(delete::Args),
 
     #[clap(about = "Apply firmware to all devices in a rack")]
@@ -51,9 +51,9 @@ pub enum Cmd {
     #[clap(about = "Check the status of an async firmware update job")]
     Status(status::Args),
 
-    #[clap(about = "Show history of rack firmware apply operations")]
+    #[clap(about = "Show history of firmware object apply operations")]
     History(history::Args),
 
-    #[clap(about = "Set a firmware configuration as the default for its hardware type")]
+    #[clap(about = "Set a firmware object as the default for its hardware type")]
     SetDefault(set_default::Args),
 }

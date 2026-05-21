@@ -47,7 +47,7 @@ fn verify_cmd_structure() {
 // parse_list_defaults ensures list parses with default values.
 #[test]
 fn parse_list_defaults() {
-    let cmd = Cmd::try_parse_from(["rack-firmware", "list"]).expect("should parse list");
+    let cmd = Cmd::try_parse_from(["firmware-object", "list"]).expect("should parse list");
 
     match cmd {
         Cmd::List(args) => {
@@ -60,7 +60,7 @@ fn parse_list_defaults() {
 // parse_list_only_available ensures list parses with --only-available flag.
 #[test]
 fn parse_list_only_available() {
-    let cmd = Cmd::try_parse_from(["rack-firmware", "list", "--only-available"])
+    let cmd = Cmd::try_parse_from(["firmware-object", "list", "--only-available"])
         .expect("should parse list with only-available");
 
     match cmd {
@@ -75,7 +75,7 @@ fn parse_list_only_available() {
 // hardware type filter.
 #[test]
 fn parse_list_with_hardware_type_filter() {
-    let cmd = Cmd::try_parse_from(["rack-firmware", "list", "any"])
+    let cmd = Cmd::try_parse_from(["firmware-object", "list", "any"])
         .expect("should parse list with hardware type filter");
 
     match cmd {
@@ -92,7 +92,7 @@ fn parse_list_with_hardware_type_filter() {
 #[test]
 fn parse_create_with_hardware_type() {
     let cmd = Cmd::try_parse_from([
-        "rack-firmware",
+        "firmware-object",
         "create",
         "any",
         "/tmp/test.json",
@@ -113,7 +113,7 @@ fn parse_create_with_hardware_type() {
 #[test]
 fn parse_create_set_default() {
     let cmd = Cmd::try_parse_from([
-        "rack-firmware",
+        "firmware-object",
         "create",
         "any",
         "/tmp/test.json",
@@ -133,33 +133,33 @@ fn parse_create_set_default() {
 // parse_create_missing_args_fails ensures create fails without required args.
 #[test]
 fn parse_create_missing_args_fails() {
-    let result = Cmd::try_parse_from(["rack-firmware", "create"]);
+    let result = Cmd::try_parse_from(["firmware-object", "create"]);
     assert!(result.is_err(), "should fail without json_file and token");
 }
 
 // parse_get_missing_id_fails ensures get fails without ID.
 #[test]
 fn parse_get_missing_id_fails() {
-    let result = Cmd::try_parse_from(["rack-firmware", "get"]);
+    let result = Cmd::try_parse_from(["firmware-object", "get"]);
     assert!(result.is_err(), "should fail without id");
 }
 
 // parse_delete_missing_id_fails ensures delete fails without ID.
 #[test]
 fn parse_delete_missing_id_fails() {
-    let result = Cmd::try_parse_from(["rack-firmware", "delete"]);
+    let result = Cmd::try_parse_from(["firmware-object", "delete"]);
     assert!(result.is_err(), "should fail without id");
 }
 
-// parse_set_default ensures set-default parses with firmware ID.
+// parse_set_default ensures set-default parses with firmware object ID.
 #[test]
 fn parse_set_default() {
-    let cmd = Cmd::try_parse_from(["rack-firmware", "set-default", "fw-001"])
+    let cmd = Cmd::try_parse_from(["firmware-object", "set-default", "fw-001"])
         .expect("should parse set-default");
 
     match cmd {
         Cmd::SetDefault(args) => {
-            assert_eq!(args.firmware_id, "fw-001");
+            assert_eq!(args.object_id, "fw-001");
         }
         _ => panic!("expected SetDefault variant"),
     }
@@ -168,6 +168,6 @@ fn parse_set_default() {
 // parse_set_default_missing_id_fails ensures set-default fails without ID.
 #[test]
 fn parse_set_default_missing_id_fails() {
-    let result = Cmd::try_parse_from(["rack-firmware", "set-default"]);
-    assert!(result.is_err(), "should fail without firmware_id");
+    let result = Cmd::try_parse_from(["firmware-object", "set-default"]);
+    assert!(result.is_err(), "should fail without object_id");
 }

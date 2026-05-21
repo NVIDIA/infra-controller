@@ -492,7 +492,7 @@ impl Display for FirmwareUpgradeState {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NvosUpdateState {
-    Start { rack_firmware_id: Option<String> },
+    Start { firmware_object_id: Option<String> },
     WaitForComplete,
 }
 
@@ -655,9 +655,9 @@ pub enum MaintenanceActivity {
         components: Vec<String>,
     },
     NvosUpdate {
-        /// Rack firmware entry containing the switch system image to install.
-        /// `None` means the default rack firmware for the rack is used.
-        rack_firmware_id: Option<String>,
+        /// Firmware object containing the switch system image to install.
+        /// `None` means the default firmware object for the rack is used.
+        firmware_object_id: Option<String>,
     },
     ConfigureNmxCluster,
     PowerSequence,
@@ -869,7 +869,7 @@ mod tests {
             components: vec![],
         }));
         assert!(scope.should_run(&MaintenanceActivity::NvosUpdate {
-            rack_firmware_id: None,
+            firmware_object_id: None,
         }));
         assert!(scope.should_run(&MaintenanceActivity::ConfigureNmxCluster));
         assert!(scope.should_run(&MaintenanceActivity::PowerSequence));
@@ -889,7 +889,7 @@ mod tests {
             components: vec![],
         }));
         assert!(!scope.should_run(&MaintenanceActivity::NvosUpdate {
-            rack_firmware_id: None,
+            firmware_object_id: None,
         }));
         assert!(!scope.should_run(&MaintenanceActivity::ConfigureNmxCluster));
         assert!(!scope.should_run(&MaintenanceActivity::PowerSequence));
@@ -904,7 +904,7 @@ mod tests {
                     components: vec![],
                 },
                 MaintenanceActivity::NvosUpdate {
-                    rack_firmware_id: Some("fw-nvos".into()),
+                    firmware_object_id: Some("fw-nvos".into()),
                 },
                 MaintenanceActivity::PowerSequence,
             ],
@@ -916,7 +916,7 @@ mod tests {
         }));
         assert!(!scope.should_run(&MaintenanceActivity::ConfigureNmxCluster));
         assert!(scope.should_run(&MaintenanceActivity::NvosUpdate {
-            rack_firmware_id: None,
+            firmware_object_id: None,
         }));
         assert!(scope.should_run(&MaintenanceActivity::PowerSequence));
     }
@@ -936,10 +936,10 @@ mod tests {
         assert!(a.same_kind(&b));
 
         let a = MaintenanceActivity::NvosUpdate {
-            rack_firmware_id: Some("fw-a".into()),
+            firmware_object_id: Some("fw-a".into()),
         };
         let b = MaintenanceActivity::NvosUpdate {
-            rack_firmware_id: None,
+            firmware_object_id: None,
         };
         assert!(a.same_kind(&b));
     }
@@ -970,7 +970,7 @@ mod tests {
         );
         assert_eq!(
             MaintenanceActivity::NvosUpdate {
-                rack_firmware_id: None,
+                firmware_object_id: None,
             }
             .to_string(),
             "NvosUpdate"

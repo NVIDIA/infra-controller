@@ -402,22 +402,22 @@ service Forge {
   // Get the BMC credentials for all expected machines
   rpc GetAllExpectedMachines(google.protobuf.Empty) returns (ExpectedMachineList);
 
-  // Rack Firmware Management
-  // Create or update a Rack firmware configuration
-  rpc CreateRackFirmware(RackFirmwareCreateRequest) returns (RackFirmware);
-  // Get a Rack firmware configuration by ID
-  rpc GetRackFirmware(RackFirmwareGetRequest) returns (RackFirmware);
-  // List all Rack firmware configurations
-  rpc ListRackFirmware(RackFirmwareSearchFilter) returns (RackFirmwareList);
-  // Delete a Rack firmware configuration
-  rpc DeleteRackFirmware(RackFirmwareDeleteRequest) returns (google.protobuf.Empty);
-  // Apply firmware to all devices in a rack
-  rpc ApplyRackFirmware(RackFirmwareApplyRequest) returns (RackFirmwareApplyResponse);
-  // Check the status of an async firmware update job
-  rpc GetRackFirmwareJobStatus(RackFirmwareJobStatusRequest) returns (RackFirmwareJobStatusResponse);
-  // Get the history of rack firmware apply operations
-  rpc GetRackFirmwareHistory(RackFirmwareHistoryRequest) returns (RackFirmwareHistoryResponse);
-  rpc RackFirmwareSetDefault(RackFirmwareSetDefaultRequest) returns (google.protobuf.Empty);
+  // Firmware Object Management
+  // Ingest a firmware object configuration.
+  rpc CreateFirmwareObject(CreateFirmwareObjectRequest) returns (FirmwareObject);
+  // Get a firmware object by ID.
+  rpc GetFirmwareObject(GetFirmwareObjectRequest) returns (FirmwareObject);
+  // List firmware objects.
+  rpc ListFirmwareObjects(FirmwareObjectSearchFilter) returns (FirmwareObjectList);
+  // Delete a firmware object.
+  rpc DeleteFirmwareObject(DeleteFirmwareObjectRequest) returns (google.protobuf.Empty);
+  // Apply a firmware object to all devices in a rack.
+  rpc ApplyFirmwareObject(ApplyFirmwareObjectRequest) returns (ApplyFirmwareObjectResponse);
+  // Check the status of an async firmware object update job.
+  rpc GetFirmwareObjectJobStatus(FirmwareObjectJobStatusRequest) returns (FirmwareObjectJobStatusResponse);
+  // Get the history of firmware object apply operations.
+  rpc GetFirmwareObjectHistory(FirmwareObjectHistoryRequest) returns (FirmwareObjectHistoryResponse);
+  rpc SetDefaultFirmwareObject(SetDefaultFirmwareObjectRequest) returns (google.protobuf.Empty);
 
   // Replace all expected machines in site
   rpc ReplaceAllExpectedMachines(ExpectedMachineList) returns (google.protobuf.Empty);
@@ -5834,9 +5834,9 @@ message FirmwareUpgradeActivity {
 }
 
 message NvosUpdateActivity {
-  // Rack firmware entry containing the switch system image to install.
-  // When empty, the default rack firmware for the rack hardware type is used.
-  string rack_firmware_id = 1;
+  // Firmware object containing the switch system image to install.
+  // When empty, the default firmware object for the rack hardware type is used.
+  string firmware_object_id = 1;
 }
 
 message ConfigureNmxClusterActivity {
@@ -7830,21 +7830,21 @@ message MachinePositionInfo {
   optional common.PowerShelfId power_shelf_id = 7;
 }
 
-// Rack Firmware Management Messages
+// Firmware Object Management Messages
 
-message RackFirmware {
+message FirmwareObject {
   string id = 1;
   string config_json = 2;
   bool available = 3;
   string created = 4;
   string updated = 5;
-  string parsed_components = 6; // JSON string of firmware lookup table
+  string parsed_components = 6; // JSON string of firmware object metadata
   common.RackHardwareType rack_hardware_type = 7;
   bool is_default = 8;
 }
 
-message RackFirmwareSetDefaultRequest {
-  string firmware_id = 1;
+message SetDefaultFirmwareObjectRequest {
+  string object_id = 1;
 }
 
 message FirmwareComponentInfo {
@@ -7856,37 +7856,37 @@ message FirmwareComponentInfo {
   string firmware_type = 6; // "prod" or "dev"
 }
 
-message RackFirmwareCreateRequest {
+message CreateFirmwareObjectRequest {
   string config_json = 1;
   string artifactory_token = 2;
   common.RackHardwareType rack_hardware_type = 3;
   bool set_default = 4; // If true, mark this firmware object as default after create.
 }
 
-message RackFirmwareGetRequest {
+message GetFirmwareObjectRequest {
   string id = 1;
 }
 
-message RackFirmwareSearchFilter {
+message FirmwareObjectSearchFilter {
   bool only_available = 1;
   common.RackHardwareType rack_hardware_type = 2; // Optional: filter by rack hardware type. Unspecified means no filter.
 }
 
-message RackFirmwareList {
-  repeated RackFirmware configs = 1;
+message FirmwareObjectList {
+  repeated FirmwareObject objects = 1;
 }
 
-message RackFirmwareDeleteRequest {
+message DeleteFirmwareObjectRequest {
   string id = 1;
 }
 
-message RackFirmwareApplyRequest {
+message ApplyFirmwareObjectRequest {
   common.RackId rack_id = 1;
-  string firmware_id = 2;
+  string object_id = 2;
   string firmware_type = 3; // "dev" or "prod"
 }
 
-message RackFirmwareApplyResponse {
+message ApplyFirmwareObjectResponse {
   int32 total_updates = 1;
   int32 successful_updates = 2;
   int32 failed_updates = 3;
@@ -7907,11 +7907,11 @@ message NodeJobInfo {
   string job_id = 2;
 }
 
-message RackFirmwareJobStatusRequest {
+message FirmwareObjectJobStatusRequest {
   string job_id = 1;
 }
 
-message RackFirmwareJobStatusResponse {
+message FirmwareObjectJobStatusResponse {
   string job_id = 1;
   string state = 2; // QUEUED, RUNNING, COMPLETED, FAILED
   string state_description = 3; // Human-readable description
@@ -7921,21 +7921,21 @@ message RackFirmwareJobStatusResponse {
   string result_json = 7; // Detailed result data on completion
 }
 
-message RackFirmwareHistoryRequest {
-  string firmware_id = 1; // Optional: filter by firmware ID. Empty string means no filter.
+message FirmwareObjectHistoryRequest {
+  string object_id = 1; // Optional: filter by firmware object ID. Empty string means no filter.
   repeated string rack_ids = 2; // Optional: filter by rack IDs. Empty list returns all racks.
 }
 
-message RackFirmwareHistoryResponse {
-  map<string, RackFirmwareHistoryRecords> histories = 1; // Keyed by rack ID
+message FirmwareObjectHistoryResponse {
+  map<string, FirmwareObjectHistoryRecords> histories = 1; // Keyed by rack ID
 }
 
-message RackFirmwareHistoryRecords {
-  repeated RackFirmwareHistoryRecord records = 1;
+message FirmwareObjectHistoryRecords {
+  repeated FirmwareObjectHistoryRecord records = 1;
 }
 
-message RackFirmwareHistoryRecord {
-  string firmware_id = 1;
+message FirmwareObjectHistoryRecord {
+  string object_id = 1;
   string rack_id = 2;
   string firmware_type = 3;
   string applied_at = 4;

@@ -514,10 +514,10 @@ pub(crate) async fn on_demand_rack_maintenance(
                 components: fw.components.clone(),
             }),
             Some(ProtoActivity::NvosUpdate(nvos)) => Ok(MaintenanceActivity::NvosUpdate {
-                rack_firmware_id: if nvos.rack_firmware_id.is_empty() {
+                firmware_object_id: if nvos.firmware_object_id.is_empty() {
                     None
                 } else {
-                    Some(nvos.rack_firmware_id.clone())
+                    Some(nvos.firmware_object_id.clone())
                 },
             }),
             Some(ProtoActivity::ConfigureNmxCluster(_)) => {

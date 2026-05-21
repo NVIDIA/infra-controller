@@ -17,8 +17,8 @@
 
 use common::api_fixtures::create_test_env;
 use rpc::forge::{
-    RackFirmwareCreateRequest, RackFirmwareDeleteRequest, RackFirmwareGetRequest,
-    RackFirmwareSearchFilter, RackFirmwareSetDefaultRequest,
+    CreateFirmwareObjectRequest, DeleteFirmwareObjectRequest, FirmwareObjectSearchFilter,
+    GetFirmwareObjectRequest, SetDefaultFirmwareObjectRequest,
 };
 use rpc::protos::forge::forge_server::Forge;
 
@@ -33,8 +33,8 @@ fn firmware_json(id: &str) -> String {
     .to_string()
 }
 
-fn create_request(id: &str, hardware_type: &str) -> RackFirmwareCreateRequest {
-    RackFirmwareCreateRequest {
+fn create_request(id: &str, hardware_type: &str) -> CreateFirmwareObjectRequest {
+    CreateFirmwareObjectRequest {
         rack_hardware_type: Some(rpc::common::RackHardwareType {
             value: hardware_type.to_string(),
         }),
@@ -45,14 +45,14 @@ fn create_request(id: &str, hardware_type: &str) -> RackFirmwareCreateRequest {
 }
 
 #[crate::sqlx_test()]
-async fn test_create_rack_firmware_proxies_to_rms(
+async fn test_create_firmware_object_proxies_to_rms(
     pool: sqlx::PgPool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let env = create_test_env(pool).await;
 
     let response = env
         .api
-        .create_rack_firmware(tonic::Request::new(create_request("fw-001", "any")))
+        .create_firmware_object(tonic::Request::new(create_request("fw-001", "any")))
         .await?
         .into_inner();
 
@@ -65,21 +65,21 @@ async fn test_create_rack_firmware_proxies_to_rms(
 }
 
 #[crate::sqlx_test()]
-async fn test_get_and_list_rack_firmware_proxy_to_rms(
+async fn test_get_and_list_firmware_object_proxy_to_rms(
     pool: sqlx::PgPool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let env = create_test_env(pool).await;
 
     env.api
-        .create_rack_firmware(tonic::Request::new(create_request("fw-001", "any")))
+        .create_firmware_object(tonic::Request::new(create_request("fw-001", "any")))
         .await?;
     env.api
-        .create_rack_firmware(tonic::Request::new(create_request("fw-002", "gb200")))
+        .create_firmware_object(tonic::Request::new(create_request("fw-002", "gb200")))
         .await?;
 
     let got = env
         .api
-        .get_rack_firmware(tonic::Request::new(RackFirmwareGetRequest {
+        .get_firmware_object(tonic::Request::new(GetFirmwareObjectRequest {
             id: "fw-001".to_string(),
         }))
         .await?
@@ -88,7 +88,7 @@ async fn test_get_and_list_rack_firmware_proxy_to_rms(
 
     let listed = env
         .api
-        .list_rack_firmware(tonic::Request::new(RackFirmwareSearchFilter {
+        .list_firmware_objects(tonic::Request::new(FirmwareObjectSearchFilter {
             only_available: false,
             rack_hardware_type: Some(rpc::common::RackHardwareType {
                 value: "gb200".to_string(),
@@ -96,30 +96,30 @@ async fn test_get_and_list_rack_firmware_proxy_to_rms(
         }))
         .await?
         .into_inner();
-    assert_eq!(listed.configs.len(), 1);
-    assert_eq!(listed.configs[0].id, "fw-002");
+    assert_eq!(listed.objects.len(), 1);
+    assert_eq!(listed.objects[0].id, "fw-002");
 
     Ok(())
 }
 
 #[crate::sqlx_test()]
-async fn test_delete_rack_firmware_proxies_to_rms(
+async fn test_delete_firmware_object_proxies_to_rms(
     pool: sqlx::PgPool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let env = create_test_env(pool).await;
 
     env.api
-        .create_rack_firmware(tonic::Request::new(create_request("fw-delete", "any")))
+        .create_firmware_object(tonic::Request::new(create_request("fw-delete", "any")))
         .await?;
     env.api
-        .delete_rack_firmware(tonic::Request::new(RackFirmwareDeleteRequest {
+        .delete_firmware_object(tonic::Request::new(DeleteFirmwareObjectRequest {
             id: "fw-delete".to_string(),
         }))
         .await?;
 
     let err = env
         .api
-        .get_rack_firmware(tonic::Request::new(RackFirmwareGetRequest {
+        .get_firmware_object(tonic::Request::new(GetFirmwareObjectRequest {
             id: "fw-delete".to_string(),
         }))
         .await
@@ -131,26 +131,26 @@ async fn test_delete_rack_firmware_proxies_to_rms(
 }
 
 #[crate::sqlx_test()]
-async fn test_set_default_rack_firmware_proxies_to_rms(
+async fn test_set_default_firmware_object_proxies_to_rms(
     pool: sqlx::PgPool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let env = create_test_env(pool).await;
 
     env.api
-        .create_rack_firmware(tonic::Request::new(create_request("fw-a", "any")))
+        .create_firmware_object(tonic::Request::new(create_request("fw-a", "any")))
         .await?;
     env.api
-        .create_rack_firmware(tonic::Request::new(create_request("fw-b", "any")))
+        .create_firmware_object(tonic::Request::new(create_request("fw-b", "any")))
         .await?;
     env.api
-        .rack_firmware_set_default(tonic::Request::new(RackFirmwareSetDefaultRequest {
-            firmware_id: "fw-b".to_string(),
+        .set_default_firmware_object(tonic::Request::new(SetDefaultFirmwareObjectRequest {
+            object_id: "fw-b".to_string(),
         }))
         .await?;
 
     let got = env
         .api
-        .get_rack_firmware(tonic::Request::new(RackFirmwareGetRequest {
+        .get_firmware_object(tonic::Request::new(GetFirmwareObjectRequest {
             id: "fw-b".to_string(),
         }))
         .await?

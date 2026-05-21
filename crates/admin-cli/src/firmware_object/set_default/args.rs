@@ -19,12 +19,14 @@ use clap::Parser;
 
 #[derive(Parser, Debug)]
 pub struct Args {
-    #[clap(help = "ID of the configuration to retrieve")]
-    pub id: String,
+    #[clap(help = "Firmware object ID to set as default.")]
+    pub object_id: String,
 }
 
-impl From<Args> for rpc::forge::RackFirmwareGetRequest {
+impl From<Args> for rpc::forge::SetDefaultFirmwareObjectRequest {
     fn from(args: Args) -> Self {
-        Self { id: args.id }
+        Self {
+            object_id: args.object_id,
+        }
     }
 }

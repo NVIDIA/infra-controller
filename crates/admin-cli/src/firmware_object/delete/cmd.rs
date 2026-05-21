@@ -15,18 +15,25 @@
  * limitations under the License.
  */
 
-use clap::Parser;
+use super::args::Args;
+use crate::errors::CarbideCliError;
+use crate::rpc::ApiClient;
 
-#[derive(Parser, Debug)]
-pub struct Args {
-    #[clap(help = "Firmware configuration ID to set as default.")]
-    pub firmware_id: String,
-}
+pub async fn delete(opts: Args, api_client: &ApiClient) -> Result<(), CarbideCliError> {
+    let id = opts.id.clone();
 
-impl From<Args> for rpc::forge::RackFirmwareSetDefaultRequest {
-    fn from(args: Args) -> Self {
-        Self {
-            firmware_id: args.firmware_id,
+    match api_client.0.delete_firmware_object(opts).await {
+        Ok(_) => {
+            println!("Deleted firmware object: {}", id);
         }
+        Err(status) if status.code() == tonic::Code::NotFound => {
+            return Err(CarbideCliError::GenericError(format!(
+                "firmware object not found: {}",
+                id
+            )));
+        }
+        Err(err) => return Err(CarbideCliError::from(err)),
     }
+
+    Ok(())
 }

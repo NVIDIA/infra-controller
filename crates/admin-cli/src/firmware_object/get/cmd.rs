@@ -80,11 +80,11 @@ pub async fn get(
 ) -> Result<(), CarbideCliError> {
     let id = opts.id.clone();
 
-    let result = match api_client.0.get_rack_firmware(opts).await {
+    let result = match api_client.0.get_firmware_object(opts).await {
         Ok(response) => response,
         Err(status) if status.code() == tonic::Code::NotFound => {
             return Err(CarbideCliError::GenericError(format!(
-                "Rack firmware configuration not found: {}",
+                "firmware object not found: {}",
                 id
             )));
         }

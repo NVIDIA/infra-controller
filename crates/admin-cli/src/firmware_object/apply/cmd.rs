@@ -28,13 +28,13 @@ pub async fn apply(
     api_client: &ApiClient,
 ) -> Result<(), CarbideCliError> {
     println!(
-        "Applying firmware ID '{}' ({}) to rack '{}'...",
-        opts.firmware_id, opts.firmware_type, opts.rack_id
+        "Applying firmware object ID '{}' ({}) to rack '{}'...",
+        opts.object_id, opts.firmware_type, opts.rack_id
     );
 
     let response = api_client
         .0
-        .apply_rack_firmware(opts)
+        .apply_firmware_object(opts)
         .await
         .map_err(CarbideCliError::from)?;
 

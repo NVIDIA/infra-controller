@@ -27,8 +27,8 @@ pub async fn create(
     format: OutputFormat,
     api_client: &ApiClient,
 ) -> Result<(), CarbideCliError> {
-    let request: rpc::forge::RackFirmwareCreateRequest = opts.try_into()?;
-    let result = api_client.0.create_rack_firmware(request).await?;
+    let request: rpc::forge::CreateFirmwareObjectRequest = opts.try_into()?;
+    let result = api_client.0.create_firmware_object(request).await?;
 
     if format == OutputFormat::Json {
         println!("{}", serde_json::to_string_pretty(&result)?);

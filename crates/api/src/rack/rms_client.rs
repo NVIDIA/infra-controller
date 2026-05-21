@@ -212,6 +212,13 @@ pub mod test_support {
                 .push_back(response);
         }
 
+        pub async fn insert_firmware_object(&self, object: rms::FirmwareObject) {
+            self.firmware_objects
+                .lock()
+                .await
+                .insert(object.id.clone(), object);
+        }
+
         pub async fn submitted_apply_firmware_object_requests(
             &self,
         ) -> Vec<rms::ApplyFirmwareObjectRequest> {

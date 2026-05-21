@@ -20,12 +20,12 @@ use std::collections::HashMap;
 use db::ObjectColumnFilter;
 use librms::protos::rack_manager as rms;
 use rpc::forge::{
-    DeviceUpdateResult, NodeJobInfo, RackFirmware, RackFirmwareApplyRequest,
-    RackFirmwareApplyResponse, RackFirmwareCreateRequest, RackFirmwareDeleteRequest,
-    RackFirmwareGetRequest, RackFirmwareHistoryRecord, RackFirmwareHistoryRecords,
-    RackFirmwareHistoryRequest, RackFirmwareHistoryResponse, RackFirmwareJobStatusRequest,
-    RackFirmwareJobStatusResponse, RackFirmwareList, RackFirmwareSearchFilter,
-    RackFirmwareSetDefaultRequest,
+    ApplyFirmwareObjectRequest, ApplyFirmwareObjectResponse, CreateFirmwareObjectRequest,
+    DeleteFirmwareObjectRequest, DeviceUpdateResult, FirmwareObject, FirmwareObjectHistoryRecord,
+    FirmwareObjectHistoryRecords, FirmwareObjectHistoryRequest, FirmwareObjectHistoryResponse,
+    FirmwareObjectJobStatusRequest, FirmwareObjectJobStatusResponse, FirmwareObjectList,
+    FirmwareObjectSearchFilter, GetFirmwareObjectRequest, NodeJobInfo,
+    SetDefaultFirmwareObjectRequest,
 };
 use tonic::{Request, Response, Status};
 
@@ -82,14 +82,14 @@ fn timestamp_to_string(timestamp: Option<&prost_types::Timestamp>) -> String {
         .unwrap_or_default()
 }
 
-fn firmware_object_to_forge(object: rms::FirmwareObject) -> RackFirmware {
+fn firmware_object_to_forge(object: rms::FirmwareObject) -> FirmwareObject {
     let parsed_components = object
         .metadata
         .as_ref()
         .and_then(|metadata| serde_json::to_string(metadata).ok())
         .unwrap_or_else(|| "{}".to_string());
 
-    RackFirmware {
+    FirmwareObject {
         id: object.id,
         config_json: object.config_json,
         available: object.available,
@@ -114,7 +114,7 @@ fn apply_response_to_forge(
     rack_id: &str,
     object_id: &str,
     response: rms::ApplyFirmwareObjectResponse,
-) -> RackFirmwareApplyResponse {
+) -> ApplyFirmwareObjectResponse {
     let batch = response.response.as_ref();
     let success = batch
         .map(|batch| batch.status == rms::ReturnCode::Success as i32)
@@ -143,7 +143,7 @@ fn apply_response_to_forge(
         node_jobs: node_jobs_from_firmware(&response.node_jobs),
     }];
 
-    RackFirmwareApplyResponse {
+    ApplyFirmwareObjectResponse {
         total_updates: total_nodes,
         successful_updates: successful_nodes,
         failed_updates: failed_nodes,
@@ -154,8 +154,8 @@ fn apply_response_to_forge(
 /// Create a new firmware object by proxying the SOT JSON to RMS.
 pub async fn create(
     api: &Api,
-    request: Request<RackFirmwareCreateRequest>,
-) -> Result<Response<RackFirmware>, Status> {
+    request: Request<CreateFirmwareObjectRequest>,
+) -> Result<Response<FirmwareObject>, Status> {
     let req = request.into_inner();
     if req.artifactory_token.is_empty() {
         return Err(CarbideError::InvalidArgument("access token is required".to_string()).into());
@@ -178,8 +178,8 @@ pub async fn create(
 /// Get a firmware object by ID.
 pub async fn get(
     api: &Api,
-    request: Request<RackFirmwareGetRequest>,
-) -> Result<Response<RackFirmware>, Status> {
+    request: Request<GetFirmwareObjectRequest>,
+) -> Result<Response<FirmwareObject>, Status> {
     let req = request.into_inner();
     let object = rms_client(api)?
         .get_firmware_object(rms::GetFirmwareObjectRequest {
@@ -195,8 +195,8 @@ pub async fn get(
 /// List firmware objects.
 pub async fn list(
     api: &Api,
-    request: Request<RackFirmwareSearchFilter>,
-) -> Result<Response<RackFirmwareList>, Status> {
+    request: Request<FirmwareObjectSearchFilter>,
+) -> Result<Response<FirmwareObjectList>, Status> {
     let req = request.into_inner();
     let response = rms_client(api)?
         .list_firmware_objects(rms::ListFirmwareObjectsRequest {
@@ -207,8 +207,8 @@ pub async fn list(
         .await
         .map_err(|error| rms_error("ListFirmwareObjects", error))?;
 
-    Ok(Response::new(RackFirmwareList {
-        configs: response
+    Ok(Response::new(FirmwareObjectList {
+        objects: response
             .objects
             .into_iter()
             .map(firmware_object_to_forge)
@@ -219,7 +219,7 @@ pub async fn list(
 /// Delete a firmware object.
 pub async fn delete(
     api: &Api,
-    request: Request<RackFirmwareDeleteRequest>,
+    request: Request<DeleteFirmwareObjectRequest>,
 ) -> Result<Response<()>, Status> {
     let req = request.into_inner();
     let response = rms_client(api)?
@@ -241,8 +241,8 @@ pub async fn delete(
 /// and credentials; RMS resolves targets from the stored firmware object.
 pub async fn apply(
     api: &Api,
-    request: Request<RackFirmwareApplyRequest>,
-) -> Result<Response<RackFirmwareApplyResponse>, Status> {
+    request: Request<ApplyFirmwareObjectRequest>,
+) -> Result<Response<ApplyFirmwareObjectResponse>, Status> {
     let req = request.into_inner();
     let rack_id = req
         .rack_id
@@ -315,14 +315,14 @@ pub async fn apply(
             .map(|device| build_new_node_info(&rack_id, device, rms::NodeType::Switch)),
     );
 
-    let object_id = req.firmware_id;
+    let object_id = req.object_id;
     tracing::info!(
         rack_id = %rack_id,
         object_id = %object_id,
         firmware_type = %firmware_type,
         hardware_type = %rack_hardware_type,
         node_count = devices.len(),
-        "Rack firmware object apply starting"
+        "Firmware object apply starting"
     );
     let response = rms_client(api)?
         .apply_firmware_object(rms::ApplyFirmwareObjectRequest {
@@ -350,8 +350,8 @@ pub async fn apply(
 /// Get the status of an async firmware update job by proxying to RMS.
 pub async fn get_job_status(
     api: &Api,
-    request: Request<RackFirmwareJobStatusRequest>,
-) -> Result<Response<RackFirmwareJobStatusResponse>, Status> {
+    request: Request<FirmwareObjectJobStatusRequest>,
+) -> Result<Response<FirmwareObjectJobStatusResponse>, Status> {
     let req = request.into_inner();
 
     if req.job_id.is_empty() {
@@ -374,7 +374,7 @@ pub async fn get_job_status(
         _ => "UNKNOWN",
     };
 
-    Ok(Response::new(RackFirmwareJobStatusResponse {
+    Ok(Response::new(FirmwareObjectJobStatusResponse {
         job_id: rms_response.job_id,
         state: state.to_string(),
         state_description: rms_response.state_description,
@@ -388,27 +388,27 @@ pub async fn get_job_status(
 /// Get firmware object apply history from RMS.
 pub async fn get_history(
     api: &Api,
-    request: Request<RackFirmwareHistoryRequest>,
-) -> Result<Response<RackFirmwareHistoryResponse>, Status> {
+    request: Request<FirmwareObjectHistoryRequest>,
+) -> Result<Response<FirmwareObjectHistoryResponse>, Status> {
     let req = request.into_inner();
     let response = rms_client(api)?
         .get_firmware_object_history(rms::GetFirmwareObjectHistoryRequest {
             metadata: None,
-            object_id: req.firmware_id,
+            object_id: req.object_id,
             rack_ids: req.rack_ids,
         })
         .await
         .map_err(|error| rms_error("GetFirmwareObjectHistory", error))?;
 
-    let mut histories: HashMap<String, RackFirmwareHistoryRecords> = HashMap::new();
+    let mut histories: HashMap<String, FirmwareObjectHistoryRecords> = HashMap::new();
     for record in response.records {
         let rack_id = record.rack_id.clone();
         histories
             .entry(rack_id)
             .or_default()
             .records
-            .push(RackFirmwareHistoryRecord {
-                firmware_id: record.object_id,
+            .push(FirmwareObjectHistoryRecord {
+                object_id: record.object_id,
                 rack_id: record.rack_id,
                 firmware_type: record.firmware_type,
                 applied_at: timestamp_to_string(record.applied_at.as_ref()),
@@ -417,24 +417,24 @@ pub async fn get_history(
             });
     }
 
-    Ok(Response::new(RackFirmwareHistoryResponse { histories }))
+    Ok(Response::new(FirmwareObjectHistoryResponse { histories }))
 }
 
 /// Set a firmware object as default for its hardware type.
 pub async fn set_default(
     api: &Api,
-    request: Request<RackFirmwareSetDefaultRequest>,
+    request: Request<SetDefaultFirmwareObjectRequest>,
 ) -> Result<Response<()>, Status> {
     let req = request.into_inner();
 
-    if req.firmware_id.is_empty() {
-        return Err(CarbideError::InvalidArgument("firmware_id is required".to_string()).into());
+    if req.object_id.is_empty() {
+        return Err(CarbideError::InvalidArgument("object_id is required".to_string()).into());
     }
 
     rms_client(api)?
         .set_default_firmware_object(rms::SetDefaultFirmwareObjectRequest {
             metadata: None,
-            object_id: req.firmware_id,
+            object_id: req.object_id,
         })
         .await
         .map_err(|error| rms_error("SetDefaultFirmwareObject", error))?;

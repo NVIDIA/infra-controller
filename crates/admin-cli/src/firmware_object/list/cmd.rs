@@ -27,12 +27,12 @@ pub async fn list(
     format: OutputFormat,
     api_client: &ApiClient,
 ) -> Result<(), CarbideCliError> {
-    let result = api_client.0.list_rack_firmware(opts).await?;
+    let result = api_client.0.list_firmware_objects(opts).await?;
 
     if format == OutputFormat::Json {
-        println!("{}", serde_json::to_string_pretty(&result.configs)?);
-    } else if result.configs.is_empty() {
-        println!("No Rack firmware configurations found.");
+        println!("{}", serde_json::to_string_pretty(&result.objects)?);
+    } else if result.objects.is_empty() {
+        println!("No firmware objects found.");
     } else {
         let mut table = Table::new();
         table.set_titles(Row::new(vec![
@@ -44,7 +44,7 @@ pub async fn list(
             Cell::new("Updated"),
         ]));
 
-        for config in result.configs {
+        for config in result.objects {
             let hw_type = config
                 .rack_hardware_type
                 .as_ref()

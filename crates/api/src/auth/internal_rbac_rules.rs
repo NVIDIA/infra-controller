@@ -448,15 +448,15 @@ impl InternalRBACRules {
         );
         x.perm("GetIpxeTemplate", vec![ForgeAdminCLI, SiteAgent]);
         x.perm("ListIpxeTemplates", vec![ForgeAdminCLI, SiteAgent]);
-        x.perm("CreateRackFirmware", vec![ForgeAdminCLI]);
-        x.perm("DeleteRackFirmware", vec![ForgeAdminCLI]);
+        x.perm("CreateFirmwareObject", vec![ForgeAdminCLI]);
+        x.perm("DeleteFirmwareObject", vec![ForgeAdminCLI]);
         x.perm("FindRackStateHistories", vec![ForgeAdminCLI, Machineatron]);
-        x.perm("ListRackFirmware", vec![ForgeAdminCLI]);
-        x.perm("GetRackFirmware", vec![ForgeAdminCLI]);
-        x.perm("ApplyRackFirmware", vec![ForgeAdminCLI]);
-        x.perm("GetRackFirmwareJobStatus", vec![ForgeAdminCLI]);
-        x.perm("GetRackFirmwareHistory", vec![ForgeAdminCLI]);
-        x.perm("RackFirmwareSetDefault", vec![ForgeAdminCLI]);
+        x.perm("ListFirmwareObjects", vec![ForgeAdminCLI]);
+        x.perm("GetFirmwareObject", vec![ForgeAdminCLI]);
+        x.perm("ApplyFirmwareObject", vec![ForgeAdminCLI]);
+        x.perm("GetFirmwareObjectJobStatus", vec![ForgeAdminCLI]);
+        x.perm("GetFirmwareObjectHistory", vec![ForgeAdminCLI]);
+        x.perm("SetDefaultFirmwareObject", vec![ForgeAdminCLI]);
         x.perm("RebootCompleted", vec![Machineatron, Scout]);
         x.perm("PersistValidationResult", vec![Scout, SiteAgent]);
         x.perm(

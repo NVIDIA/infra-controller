@@ -15,25 +15,22 @@
  * limitations under the License.
  */
 
-use super::args::Args;
-use crate::errors::CarbideCliError;
-use crate::rpc::ApiClient;
+use clap::Parser;
 
-pub async fn delete(opts: Args, api_client: &ApiClient) -> Result<(), CarbideCliError> {
-    let id = opts.id.clone();
+#[derive(Parser, Debug)]
+pub struct Args {
+    #[clap(long, help = "Filter by firmware object ID")]
+    pub object_id: Option<String>,
 
-    match api_client.0.delete_rack_firmware(opts).await {
-        Ok(_) => {
-            println!("Deleted Rack firmware configuration: {}", id);
+    #[clap(long, help = "Filter by rack ID(s)")]
+    pub rack_id: Vec<String>,
+}
+
+impl From<Args> for rpc::forge::FirmwareObjectHistoryRequest {
+    fn from(args: Args) -> Self {
+        Self {
+            object_id: args.object_id.unwrap_or_default(),
+            rack_ids: args.rack_id,
         }
-        Err(status) if status.code() == tonic::Code::NotFound => {
-            return Err(CarbideCliError::GenericError(format!(
-                "Rack firmware configuration not found: {}",
-                id
-            )));
-        }
-        Err(err) => return Err(CarbideCliError::from(err)),
     }
-
-    Ok(())
 }

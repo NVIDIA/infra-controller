@@ -77,7 +77,7 @@ pub struct MaintenanceOptions {
 
     #[clap(
         long,
-        help = "Rack firmware ID containing the NVOS switch system image (omit for default)"
+        help = "Firmware object ID containing the NVOS switch system image (omit for default)"
     )]
-    pub rack_firmware_id: Option<String>,
+    pub firmware_object_id: Option<String>,
 }
