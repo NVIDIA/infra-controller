@@ -1322,7 +1322,9 @@ async fn test_firmware_upgrade_start_without_default_advances_to_nvos_update(
         ),
     }
 
-    assert!(env.rms_sim.submitted_firmware_requests().await.is_empty());
+    let requests = env.rms_sim.submitted_apply_firmware_object_requests().await;
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].object_id.is_empty());
     let machine = db::machine::find_one(
         &pool,
         &host.host_snapshot.id,
@@ -1406,7 +1408,9 @@ async fn test_firmware_upgrade_start_with_unavailable_default_advances_to_nvos_u
         ),
     }
 
-    assert!(env.rms_sim.submitted_firmware_requests().await.is_empty());
+    let requests = env.rms_sim.submitted_apply_firmware_object_requests().await;
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].object_id.is_empty());
     let machine = db::machine::find_one(
         &pool,
         &host.host_snapshot.id,
@@ -1451,8 +1455,8 @@ async fn test_firmware_upgrade_start_transitions_to_wait_for_complete(
         txn.commit().await?;
     }
     env.rms_sim
-        .queue_update_firmware_response(
-            librms::protos::rack_manager::UpdateFirmwareByDeviceListResponse {
+        .queue_apply_firmware_object_response(
+            librms::protos::rack_manager::ApplyFirmwareObjectResponse {
                 response: Some(librms::protos::rack_manager::NodeBatchResponse {
                     status: librms::protos::rack_manager::ReturnCode::Success as i32,
                     message: "queued".to_string(),
@@ -1466,6 +1470,7 @@ async fn test_firmware_upgrade_start_transitions_to_wait_for_complete(
                     node_id: host.host_snapshot.id.to_string(),
                     job_id: "child-job-1".to_string(),
                 }],
+                object_id: "fw-default".to_string(),
             },
         )
         .await;
@@ -1515,9 +1520,8 @@ async fn test_firmware_upgrade_start_transitions_to_wait_for_complete(
         ),
     }
 
-    let requests = env.rms_sim.submitted_firmware_requests().await;
+    let requests = env.rms_sim.submitted_apply_firmware_object_requests().await;
     assert_eq!(requests.len(), 1);
-    assert!(requests[0].activate);
     assert_eq!(requests[0].nodes.as_ref().unwrap().devices.len(), 1);
     assert_eq!(
         requests[0].nodes.as_ref().unwrap().devices[0].node_id,
@@ -2130,8 +2134,8 @@ async fn test_nvos_update_start_transitions_to_wait_for_complete(
 
     create_default_nvos_rack_firmware(&pool, "fw-nvos-default").await;
     env.rms_sim
-        .queue_update_switch_system_image_response(
-            librms::protos::rack_manager::UpdateSwitchSystemImageResponse {
+        .queue_apply_switch_system_image_response(
+            librms::protos::rack_manager::ApplySwitchSystemImageResponse {
                 response: Some(librms::protos::rack_manager::NodeBatchResponse {
                     status: librms::protos::rack_manager::ReturnCode::Success as i32,
                     job_id: "nvos-job-1".to_string(),
@@ -2171,7 +2175,7 @@ async fn test_nvos_update_start_transitions_to_wait_for_complete(
     );
     assert!(
         !env.rms_sim
-            .submitted_switch_system_image_requests()
+            .submitted_apply_switch_system_image_requests()
             .await
             .is_empty(),
         "NVOSUpdate(Start) should submit a switch system image request to RMS"

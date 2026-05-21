@@ -103,6 +103,28 @@ fn parse_create_with_hardware_type() {
     match cmd {
         Cmd::Create(args) => {
             assert_eq!(args.rack_hardware_type, "any");
+            assert!(!args.set_default);
+        }
+        _ => panic!("expected Create variant"),
+    }
+}
+
+// parse_create_set_default ensures create parses with --set-default.
+#[test]
+fn parse_create_set_default() {
+    let cmd = Cmd::try_parse_from([
+        "rack-firmware",
+        "create",
+        "any",
+        "/tmp/test.json",
+        "test-token",
+        "--set-default",
+    ])
+    .expect("should parse create with --set-default");
+
+    match cmd {
+        Cmd::Create(args) => {
+            assert!(args.set_default);
         }
         _ => panic!("expected Create variant"),
     }

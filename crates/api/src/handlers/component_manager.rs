@@ -32,6 +32,7 @@ use forge_secrets::credentials::{
     BmcCredentialType, CredentialKey, CredentialManager, Credentials,
 };
 use futures_util::FutureExt;
+use librms::protos::rack_manager as rms;
 use mac_address::MacAddress;
 use model::component_manager::{
     ComputeTrayComponent as ModelComputeTrayComponent, NvSwitchComponent, PowerAction,
@@ -43,6 +44,7 @@ use model::rack::{FirmwareUpgradeJob, MaintenanceActivity};
 use tonic::{Code, Request, Response, Status};
 
 use crate::api::{Api, log_request_data};
+use crate::rack::firmware_object::hardware_type_matches_filter;
 
 const MACHINE_POWER_OVERRIDE_SOURCE: &str = "component_power_control";
 const MACHINE_POWER_OVERRIDE_MESSAGE: &str = "Compute-Tray component power control in progress";
@@ -1878,23 +1880,19 @@ pub(crate) async fn list_component_firmware_versions(
                 .map(|rack| (rack.id.clone(), rack))
                 .collect();
 
-            let mut txn = api
-                .database_connection
-                .begin()
-                .await
-                .map_err(|e| Status::internal(format!("failed to begin transaction: {e}")))?;
-            let firmwares = db::rack_firmware::list_all(
-                &mut txn,
-                model::rack_firmware::RackFirmwareSearchFilter {
+            let rms_client = api
+                .rms_client
+                .as_ref()
+                .ok_or_else(|| Status::failed_precondition("RMS client is not configured"))?;
+            let firmwares = rms_client
+                .list_firmware_objects(rms::ListFirmwareObjectsRequest {
+                    metadata: None,
                     only_available: true,
-                    rack_hardware_type: None,
-                },
-            )
-            .await
-            .map_err(|e| Status::internal(format!("failed to list rack firmware: {e}")))?;
-            txn.commit()
+                    hardware_type: String::new(),
+                })
                 .await
-                .map_err(|e| Status::internal(format!("failed to commit transaction: {e}")))?;
+                .map_err(|e| Status::internal(format!("failed to list firmware objects: {e}")))?
+                .objects;
 
             let devices = requested_rack_ids
                 .iter()
@@ -1930,23 +1928,13 @@ pub(crate) async fn list_component_firmware_versions(
                         };
                     };
 
-                    let Some(rack_hardware_type) = profile.rack_hardware_type.as_ref() else {
-                        return rpc::DeviceFirmwareVersions {
-                            result: Some(invalid_argument_component_result(
-                                rack_id.as_ref(),
-                                format!(
-                                    "rack profile {profile_id} does not define rack_hardware_type"
-                                ),
-                            )),
-                            ..Default::default()
-                        };
-                    };
-
                     let versions = firmwares
                         .iter()
                         .filter(|firmware| {
-                            firmware.rack_hardware_type.is_any()
-                                || firmware.rack_hardware_type == *rack_hardware_type
+                            hardware_type_matches_filter(
+                                &firmware.hardware_type,
+                                profile.rack_hardware_type.as_ref(),
+                            )
                         })
                         .map(|firmware| firmware.id.clone())
                         .collect();

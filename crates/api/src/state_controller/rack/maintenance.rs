@@ -20,24 +20,21 @@
 use carbide_uuid::rack::{RackId, RackProfileId};
 use db::{
     host_machine_update as db_host_machine_update, machine as db_machine,
-    machine_topology as db_machine_topology, rack as db_rack, rack_firmware as db_rack_firmware,
-    switch as db_switch,
+    machine_topology as db_machine_topology, rack as db_rack, switch as db_switch,
 };
 use librms::protos::rack_manager as rms;
 use model::rack::{
     ConfigureNmxClusterState, FirmwareUpgradeDeviceInfo, FirmwareUpgradeDeviceStatus,
     FirmwareUpgradeState, MaintenanceActivity, MaintenanceScope, NvosUpdateJob, NvosUpdateState,
     NvosUpdateSwitchStatus, Rack, RackFirmwareUpgradeState, RackFirmwareUpgradeStatus,
-    RackMaintenanceState, RackPowerState, RackState, RackValidationState, ResolvedNvosArtifact,
-    SwitchNvosUpdateState, SwitchNvosUpdateStatus,
+    RackMaintenanceState, RackPowerState, RackState, RackValidationState, SwitchNvosUpdateState,
+    SwitchNvosUpdateStatus,
 };
-use model::rack_firmware::{RackFirmware, RackFirmwareSearchFilter};
-use model::rack_type::RackHardwareType;
 
+use crate::rack::firmware_object::profile_hardware_type_wire_value;
 use crate::rack::firmware_update::{
-    RackFirmwareInventory, RackSwitchFirmwareInventory, build_firmware_update_batches,
-    build_new_node_info, firmware_type_for_profile, load_rack_firmware_inventory,
-    load_rack_switch_firmware_inventory, submit_firmware_update_batches,
+    RackFirmwareInventory, RackSwitchFirmwareInventory, build_new_node_info,
+    firmware_type_for_profile, load_rack_firmware_inventory, load_rack_switch_firmware_inventory,
 };
 use crate::rack::rms_client::SwitchSystemImageRmsClient;
 use crate::state_controller::external_service_error::rack_manager_error;
@@ -103,166 +100,6 @@ async fn trigger_rack_firmware_reprovisioning_requests(
         .await?;
     }
     Ok(())
-}
-
-fn desired_rack_hardware_type(
-    id: &RackId,
-    rack_profile_id: Option<&RackProfileId>,
-    ctx: &StateHandlerContext<'_, RackStateHandlerContextObjects>,
-) -> RackHardwareType {
-    super::resolve_profile(id, rack_profile_id, ctx)
-        .and_then(|profile| profile.rack_hardware_type.clone())
-        .unwrap_or_else(RackHardwareType::any)
-}
-
-fn preferred_nvos_lookup_keys(
-    id: &RackId,
-    rack_profile_id: Option<&RackProfileId>,
-    ctx: &StateHandlerContext<'_, RackStateHandlerContextObjects>,
-) -> Vec<String> {
-    let mut keys = Vec::new();
-    if let Some(class) = super::resolve_profile(id, rack_profile_id, ctx)
-        .and_then(|profile| profile.rack_hardware_class)
-    {
-        keys.push(format!("NVOS_{}", class));
-    }
-    if !keys.iter().any(|key| key == "NVOS_prod") {
-        keys.push("NVOS_prod".to_string());
-    }
-    keys
-}
-
-fn resolve_nvos_artifact_from_firmware(
-    firmware: &RackFirmware,
-    lookup_keys: &[String],
-) -> Result<Option<ResolvedNvosArtifact>, StateHandlerError> {
-    let Some(parsed_components) = firmware.parsed_components.as_ref().map(|json| &json.0) else {
-        return Ok(None);
-    };
-
-    let images = parsed_components
-        .get("switch_system_images")
-        .and_then(|value| value.get("Switch Tray"));
-
-    let Some(images) = images else {
-        return Ok(None);
-    };
-
-    for lookup_key in lookup_keys {
-        let Some(entry) = images.get(lookup_key) else {
-            continue;
-        };
-
-        let image_filename = entry
-            .get("image_filename")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| {
-                StateHandlerError::GenericError(eyre::eyre!(
-                    "rack firmware {} has malformed {} lookup entry: missing image_filename",
-                    firmware.id,
-                    lookup_key
-                ))
-            })?;
-
-        let version = entry
-            .get("version")
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_string);
-
-        return Ok(Some(ResolvedNvosArtifact {
-            firmware_id: firmware.id.clone(),
-            image_filename: image_filename.to_string(),
-            local_file_path: format!(
-                "/forge-boot-artifacts/blobs/internal/fw/rack_firmware/{}/{}",
-                firmware.id, image_filename
-            ),
-            version,
-        }));
-    }
-
-    Ok(None)
-}
-
-async fn resolve_default_nvos_artifact(
-    id: &RackId,
-    rack_profile_id: Option<&RackProfileId>,
-    ctx: &mut StateHandlerContext<'_, RackStateHandlerContextObjects>,
-) -> Result<Option<ResolvedNvosArtifact>, StateHandlerError> {
-    let desired_hw_type = desired_rack_hardware_type(id, rack_profile_id, ctx);
-    let lookup_keys = preferred_nvos_lookup_keys(id, rack_profile_id, ctx);
-    let mut hardware_types = vec![desired_hw_type.clone()];
-    if !desired_hw_type.is_any() {
-        hardware_types.push(RackHardwareType::any());
-    }
-
-    let mut conn = ctx.services.db_pool.acquire().await.map_err(|e| {
-        StateHandlerError::GenericError(eyre::eyre!(
-            "failed to acquire db connection for NVOS lookup: {}",
-            e
-        ))
-    })?;
-
-    for rack_hardware_type in hardware_types {
-        let firmware_rows = db_rack_firmware::list_all(
-            &mut conn,
-            RackFirmwareSearchFilter {
-                only_available: true,
-                rack_hardware_type: Some(rack_hardware_type),
-            },
-        )
-        .await
-        .map_err(|e| StateHandlerError::GenericError(eyre::eyre!(e.to_string())))?;
-
-        for firmware in firmware_rows.into_iter().filter(|fw| fw.is_default) {
-            if let Some(artifact) = resolve_nvos_artifact_from_firmware(&firmware, &lookup_keys)? {
-                return Ok(Some(artifact));
-            }
-        }
-    }
-
-    Ok(None)
-}
-
-async fn resolve_requested_or_default_nvos_artifact(
-    id: &RackId,
-    rack_profile_id: Option<&RackProfileId>,
-    rack_firmware_id: Option<&str>,
-    ctx: &mut StateHandlerContext<'_, RackStateHandlerContextObjects>,
-) -> Result<Option<ResolvedNvosArtifact>, StateHandlerError> {
-    let Some(rack_firmware_id) = rack_firmware_id else {
-        return resolve_default_nvos_artifact(id, rack_profile_id, ctx).await;
-    };
-
-    let firmware = match db_rack_firmware::find_by_id(&ctx.services.db_pool, rack_firmware_id).await
-    {
-        Ok(firmware) => firmware,
-        Err(db::DatabaseError::NotFoundError { .. }) => {
-            return Err(StateHandlerError::GenericError(eyre::eyre!(
-                "requested NVOS rack firmware '{}' not found",
-                rack_firmware_id
-            )));
-        }
-        Err(error) => return Err(error.into()),
-    };
-
-    if !firmware.available {
-        return Err(StateHandlerError::GenericError(eyre::eyre!(
-            "requested NVOS rack firmware '{}' exists but is not available",
-            rack_firmware_id
-        )));
-    }
-
-    let lookup_keys = preferred_nvos_lookup_keys(id, rack_profile_id, ctx);
-    resolve_nvos_artifact_from_firmware(&firmware, &lookup_keys)?.map_or_else(
-        || {
-            Err(StateHandlerError::GenericError(eyre::eyre!(
-                "requested NVOS rack firmware '{}' has no switch system image for lookup keys [{}]",
-                rack_firmware_id,
-                lookup_keys.join(", ")
-            )))
-        },
-        |artifact| Ok(Some(artifact)),
-    )
 }
 
 async fn clear_rack_firmware_device_statuses(
@@ -548,107 +385,89 @@ fn build_switch_device_info_request(
 }
 
 /// Submit compute and switch firmware-update batches to RMS and persist the
-/// per-device child job IDs returned by UpdateFirmwareByDeviceList.
+/// per-device child job IDs returned by ApplyFirmwareObject.
 async fn rms_start_firmware_upgrade(
     rms_client: &dyn librms::RmsApi,
-    firmware_id: &str,
-    batches: Vec<crate::rack::firmware_update::FirmwareUpdateBatchRequest>,
-) -> model::rack::FirmwareUpgradeJob {
+    request: rms::ApplyFirmwareObjectRequest,
+    inventory: &RackFirmwareInventory,
+) -> Result<model::rack::FirmwareUpgradeJob, StateHandlerError> {
     let started_at = chrono::Utc::now();
-    let submissions = submit_firmware_update_batches(rms_client, batches).await;
+    let response = rms_client
+        .apply_firmware_object(request)
+        .await
+        .map_err(|error| {
+            StateHandlerError::GenericError(eyre::eyre!(
+                "failed to submit firmware object apply to RMS: {}",
+                rack_manager_error("apply_firmware_object", error)
+            ))
+        })?;
+
+    let batch_response = response.response.as_ref();
+    let parent_job_id = batch_response.and_then(|batch_response| {
+        (!batch_response.job_id.is_empty()).then(|| batch_response.job_id.clone())
+    });
+    let child_jobs = response
+        .node_jobs
+        .iter()
+        .map(|child| (child.node_id.clone(), child.job_id.clone()))
+        .collect::<std::collections::HashMap<_, _>>();
+    let batch_failed = batch_response
+        .map(|batch_response| batch_response.status != rms::ReturnCode::Success as i32)
+        .unwrap_or(true);
+    let batch_error = batch_response
+        .map(|batch_response| batch_response.message.clone())
+        .filter(|message| !message.is_empty());
+    if batch_failed && parent_job_id.is_none() && response.node_jobs.is_empty() {
+        let message = batch_error
+            .as_deref()
+            .unwrap_or("RMS rejected firmware object apply");
+        return Err(StateHandlerError::GenericError(eyre::eyre!("{message}")));
+    }
+
     let mut job = model::rack::FirmwareUpgradeJob {
-        firmware_id: Some(firmware_id.to_string()),
+        firmware_id: Some(response.object_id.clone()),
+        job_id: parent_job_id.clone(),
+        batch_job_ids: parent_job_id.iter().cloned().collect(),
         started_at: Some(started_at),
         ..Default::default()
     };
 
-    for submission in submissions {
-        match submission.response {
-            Ok(response) => {
-                let batch_response = response.response.as_ref();
-                if let Some(batch_response) = batch_response
-                    && !batch_response.job_id.is_empty()
-                {
-                    job.batch_job_ids.push(batch_response.job_id.clone());
-                }
+    let build_status = |device: &FirmwareUpgradeDeviceInfo| {
+        let mut status = FirmwareUpgradeDeviceStatus {
+            node_id: device.node_id.clone(),
+            mac: device.mac.clone(),
+            bmc_ip: device.bmc_ip.clone(),
+            status: "in_progress".into(),
+            job_id: None,
+            parent_job_id: parent_job_id.clone(),
+            error_message: None,
+        };
 
-                let child_jobs = response
-                    .node_jobs
-                    .iter()
-                    .map(|child| (child.node_id.clone(), child.job_id.clone()))
-                    .collect::<std::collections::HashMap<_, _>>();
-                let node_errors = batch_response
-                    .map(|batch_response| {
-                        batch_response
-                            .node_results
-                            .iter()
-                            .filter(|result| {
-                                result.status
-                                    != librms::protos::rack_manager::ReturnCode::Success as i32
-                                    || !result.error_message.is_empty()
-                            })
-                            .map(|result| (result.node_id.clone(), result.error_message.clone()))
-                            .collect::<std::collections::HashMap<_, _>>()
-                    })
-                    .unwrap_or_default();
-                let parent_job_id = batch_response.and_then(|batch_response| {
-                    (!batch_response.job_id.is_empty()).then(|| batch_response.job_id.clone())
-                });
-
-                let target_devices = match submission.display_name {
-                    "Compute Node" => &mut job.machines,
-                    "Switch" => &mut job.switches,
-                    _ => continue,
-                };
-
-                for device in submission.devices {
-                    let mut status = FirmwareUpgradeDeviceStatus {
-                        node_id: device.node_id.clone(),
-                        mac: device.mac.clone(),
-                        bmc_ip: device.bmc_ip.clone(),
-                        status: "in_progress".into(),
-                        job_id: None,
-                        parent_job_id: parent_job_id.clone(),
-                        error_message: None,
-                    };
-
-                    if let Some(error_message) = node_errors.get(&device.node_id) {
-                        status.status = "failed".into();
-                        status.error_message = Some(error_message.clone());
-                    } else if let Some(job_id) = child_jobs.get(&device.node_id) {
-                        status.job_id = Some(job_id.clone());
-                    } else {
-                        status.status = "failed".into();
-                        status.error_message =
-                            Some("RMS did not return a child firmware job for this device".into());
-                    }
-
-                    target_devices.push(status);
-                }
-            }
-            Err(error) => {
-                let target_devices = match submission.display_name {
-                    "Compute Node" => &mut job.machines,
-                    "Switch" => &mut job.switches,
-                    _ => continue,
-                };
-
-                for device in submission.devices {
-                    target_devices.push(FirmwareUpgradeDeviceStatus {
-                        node_id: device.node_id.clone(),
-                        mac: device.mac.clone(),
-                        bmc_ip: device.bmc_ip.clone(),
-                        status: "failed".into(),
-                        job_id: None,
-                        parent_job_id: None,
-                        error_message: Some(error.clone()),
-                    });
-                }
-            }
+        if let Some(job_id) = child_jobs.get(&device.node_id) {
+            status.job_id = Some(job_id.clone());
+        } else {
+            status.status = "failed".into();
+            status.error_message = Some(
+                batch_error
+                    .clone()
+                    .unwrap_or_else(|| "RMS did not return a child firmware job".into()),
+            );
         }
+
+        if batch_failed && status.job_id.is_none() {
+            status.status = "failed".into();
+        }
+
+        status
+    };
+
+    for device in &inventory.machines {
+        job.machines.push(build_status(device));
+    }
+    for device in &inventory.switches {
+        job.switches.push(build_status(device));
     }
 
-    job.job_id = job.batch_job_ids.first().cloned();
     let all_devices: Vec<_> = job.all_devices().collect();
     let failed = all_devices
         .iter()
@@ -675,7 +494,7 @@ async fn rms_start_firmware_upgrade(
         job.completed_at = Some(chrono::Utc::now());
     }
 
-    job
+    Ok(job)
 }
 
 /// Poll RMS GetFirmwareJobStatus for each tracked child job and update the
@@ -810,21 +629,25 @@ async fn rms_get_firmware_upgrade_status(
 async fn rms_start_nvos_update(
     rms_client: &dyn SwitchSystemImageRmsClient,
     rack_id: &RackId,
-    artifact: &ResolvedNvosArtifact,
+    object_id: Option<&str>,
+    software_type: &str,
+    hardware_type: &str,
     switches: Vec<FirmwareUpgradeDeviceInfo>,
 ) -> Result<NvosUpdateJob, StateHandlerError> {
     let started_at = chrono::Utc::now();
     let response = rms_client
-        .update_switch_system_image(rms::UpdateSwitchSystemImageRequest {
+        .apply_switch_system_image(rms::ApplySwitchSystemImageRequest {
+            metadata: None,
+            rack_id: rack_id.to_string(),
+            object_id: object_id.unwrap_or_default().to_string(),
+            software_type: software_type.to_string(),
+            hardware_type: hardware_type.to_string(),
             nodes: Some(rms::NodeSet {
                 devices: switches
                     .iter()
                     .map(|switch| build_new_node_info(rack_id, switch, rms::NodeType::Switch))
                     .collect(),
             }),
-            image_filename: artifact.image_filename.clone(),
-            local_file_path: artifact.local_file_path.clone(),
-            ..Default::default()
         })
         .await
         .map_err(|error| {
@@ -849,7 +672,7 @@ async fn rms_start_nvos_update(
             .map(|batch_response| batch_response.message.as_str())
             .unwrap_or_default();
         let message = if message.is_empty() {
-            "RMS returned failure for UpdateSwitchSystemImage".to_string()
+            "RMS returned failure for ApplySwitchSystemImage".to_string()
         } else {
             message.to_string()
         };
@@ -862,20 +685,6 @@ async fn rms_start_nvos_update(
         .iter()
         .map(|child| (child.node_id.clone(), child.job_id.clone()))
         .collect::<std::collections::HashMap<_, _>>();
-    let node_errors = batch_response
-        .map(|batch_response| {
-            batch_response
-                .node_results
-                .iter()
-                .filter(|result| {
-                    result.status != rms::ReturnCode::Success as i32
-                        || !result.error_message.is_empty()
-                })
-                .map(|result| (result.node_id.clone(), result.error_message.clone()))
-                .collect::<std::collections::HashMap<_, _>>()
-        })
-        .unwrap_or_default();
-
     let switches: Vec<_> = switches
         .into_iter()
         .map(|switch| {
@@ -892,10 +701,7 @@ async fn rms_start_nvos_update(
                 error_message: None,
             };
 
-            if let Some(error_message) = node_errors.get(&switch.node_id) {
-                status.status = "failed".into();
-                status.error_message = Some(error_message.clone());
-            } else if status.job_id.is_none() {
+            if status.job_id.is_none() {
                 status.status = "failed".into();
                 status.error_message =
                     Some("RMS did not return a switch system image job for this switch".into());
@@ -918,10 +724,10 @@ async fn rms_start_nvos_update(
 
     Ok(NvosUpdateJob {
         job_id: parent_job_id,
-        firmware_id: artifact.firmware_id.clone(),
-        image_filename: artifact.image_filename.clone(),
-        local_file_path: artifact.local_file_path.clone(),
-        version: artifact.version.clone(),
+        firmware_id: response.object_id,
+        image_filename: response.image_filename,
+        local_file_path: String::new(),
+        version: None,
         status: Some(
             if total > 0 && terminal < total {
                 "in_progress"
@@ -1100,13 +906,7 @@ pub async fn handle_maintenance(
                         scope,
                     ));
                 };
-                let Some(rack_hardware_type) = profile.rack_hardware_type.as_ref() else {
-                    return Ok(skip_firmware_upgrade_outcome(
-                        id,
-                        "rack capabilities do not define rack_hardware_type",
-                        scope,
-                    ));
-                };
+                let rack_hardware_type = profile_hardware_type_wire_value(profile);
                 let (requested_fw_version, requested_components) = scope
                     .activities
                     .iter()
@@ -1118,67 +918,6 @@ pub async fn handle_maintenance(
                         _ => None,
                     })
                     .unwrap_or((None, &[]));
-
-                let firmware = if let Some(fw_version) = requested_fw_version {
-                    match db_rack_firmware::find_by_id(&ctx.services.db_pool, fw_version).await {
-                        Ok(fw) => fw,
-                        Err(db::DatabaseError::NotFoundError { .. }) => {
-                            return transition_to_rack_error_with_firmware_job(
-                                id,
-                                state,
-                                fw_version,
-                                format!("requested rack firmware '{}' not found", fw_version),
-                                ctx,
-                            )
-                            .await;
-                        }
-                        Err(error) => return Err(error.into()),
-                    }
-                } else {
-                    match db_rack_firmware::find_default_by_rack_hardware_type(
-                        &ctx.services.db_pool,
-                        rack_hardware_type,
-                    )
-                    .await
-                    {
-                        Ok(fw) => fw,
-                        Err(db::DatabaseError::NotFoundError { .. }) => {
-                            return Ok(skip_firmware_upgrade_outcome(
-                                id,
-                                format!(
-                                    "no default rack firmware configured for hardware type '{}'",
-                                    rack_hardware_type
-                                ),
-                                scope,
-                            ));
-                        }
-                        Err(error) => return Err(error.into()),
-                    }
-                };
-
-                if !firmware.available {
-                    if let Some(fw_version) = requested_fw_version {
-                        return transition_to_rack_error_with_firmware_job(
-                            id,
-                            state,
-                            fw_version,
-                            format!(
-                                "requested rack firmware '{}' exists but is not available",
-                                firmware.id
-                            ),
-                            ctx,
-                        )
-                        .await;
-                    }
-                    return Ok(skip_firmware_upgrade_outcome(
-                        id,
-                        format!(
-                            "rack firmware '{}' exists but is not available",
-                            firmware.id
-                        ),
-                        scope,
-                    ));
-                }
 
                 let inventory = load_rack_firmware_inventory(
                     &ctx.services.db_pool,
@@ -1194,57 +933,81 @@ pub async fn handle_maintenance(
                 })?;
                 let inventory = filter_inventory_by_scope(inventory, scope);
                 let firmware_type = firmware_type_for_profile(profile);
-                let batches = match build_firmware_update_batches(
-                    id,
-                    &firmware,
-                    firmware_type,
-                    &inventory,
-                    requested_components,
-                ) {
-                    Ok(batches) if batches.is_empty() => {
-                        return Ok(skip_firmware_upgrade_outcome(
-                            id,
-                            "no compute or switch devices require rack firmware updates",
-                            scope,
-                        ));
-                    }
-                    Ok(batches) => batches,
-                    Err(error) => {
-                        return transition_to_rack_error_with_firmware_job(
-                            id,
-                            state,
-                            firmware.id.clone(),
-                            format!(
-                                "failed to build firmware update requests for firmware '{}': {}",
-                                firmware.id, error
-                            ),
-                            ctx,
-                        )
-                        .await;
-                    }
-                };
+                if inventory.machines.is_empty() && inventory.switches.is_empty() {
+                    return Ok(skip_firmware_upgrade_outcome(
+                        id,
+                        "no compute or switch devices require rack firmware updates",
+                        scope,
+                    ));
+                }
                 let Some(rms_client) = ctx.services.rms_client.as_ref() else {
                     return transition_to_rack_error_with_firmware_job(
                         id,
                         state,
-                        firmware.id.clone(),
+                        requested_fw_version.unwrap_or_default(),
                         "RMS client not configured",
                         ctx,
                     )
                     .await;
                 };
 
+                let mut devices =
+                    Vec::with_capacity(inventory.machines.len() + inventory.switches.len());
+                devices.extend(
+                    inventory
+                        .machines
+                        .iter()
+                        .map(|device| build_new_node_info(id, device, rms::NodeType::Compute)),
+                );
+                devices.extend(
+                    inventory
+                        .switches
+                        .iter()
+                        .map(|device| build_new_node_info(id, device, rms::NodeType::Switch)),
+                );
+                let request = rms::ApplyFirmwareObjectRequest {
+                    metadata: None,
+                    rack_id: id.to_string(),
+                    object_id: requested_fw_version.unwrap_or_default().to_string(),
+                    firmware_type: firmware_type.to_string(),
+                    hardware_type: rack_hardware_type.clone(),
+                    components: requested_components.to_vec(),
+                    nodes: Some(rms::NodeSet { devices }),
+                    force_update: false,
+                    component_filters: std::collections::HashMap::new(),
+                };
+
                 tracing::info!(
                     rack_id = %id,
                     rack_hardware_type = %rack_hardware_type,
-                    firmware_id = %firmware.id,
+                    firmware_id = %request.object_id,
                     firmware_type,
                     machine_count = inventory.machines.len(),
                     switch_count = inventory.switches.len(),
                     "Rack firmware upgrade starting"
                 );
-                let mut job =
-                    rms_start_firmware_upgrade(rms_client.as_ref(), &firmware.id, batches).await;
+                let mut job = match rms_start_firmware_upgrade(
+                    rms_client.as_ref(),
+                    request,
+                    &inventory,
+                )
+                .await
+                {
+                    Ok(job) => job,
+                    Err(error) if requested_fw_version.is_none() => {
+                        return Ok(skip_firmware_upgrade_outcome(id, error.to_string(), scope));
+                    }
+                    Err(error) => {
+                        return transition_to_rack_error_with_firmware_job(
+                            id,
+                            state,
+                            requested_fw_version.unwrap_or_default(),
+                            error.to_string(),
+                            ctx,
+                        )
+                        .await;
+                    }
+                };
 
                 let mut txn = ctx.services.db_pool.begin().await?;
                 let continue_after_firmware_upgrade =
@@ -1295,12 +1058,8 @@ pub async fn handle_maintenance(
                 let completed = all.iter().filter(|d| d.status == "completed").count();
                 let failed = all.iter().filter(|d| d.status == "failed").count();
                 let terminal = completed + failed;
-                let default_nvos_artifact =
-                    if terminal == total && failed == 0 && implicit_nvos_update_requested(scope) {
-                        resolve_default_nvos_artifact(id, rack_profile_id, ctx).await?
-                    } else {
-                        None
-                    };
+                let run_implicit_nvos_update =
+                    terminal == total && failed == 0 && implicit_nvos_update_requested(scope);
 
                 let mut txn = ctx.services.db_pool.begin().await?;
 
@@ -1438,16 +1197,14 @@ pub async fn handle_maintenance(
                         "Rack firmware upgrade complete; advancing to explicitly requested next activity"
                     );
                     next
-                } else if let Some(artifact) = default_nvos_artifact {
+                } else if run_implicit_nvos_update {
                     tracing::info!(
-                        "Rack {} has a default NVOS artifact available; advancing to NVOSUpdate(Start) with firmware {} ({})",
+                        "Rack {} firmware upgrade complete; advancing to NVOSUpdate(Start) and letting RMS resolve the default switch system image",
                         id,
-                        artifact.firmware_id,
-                        artifact.image_filename,
                     );
                     RackMaintenanceState::NVOSUpdate {
                         nvos_update: NvosUpdateState::Start {
-                            rack_firmware_id: Some(artifact.firmware_id),
+                            rack_firmware_id: None,
                         },
                     }
                 } else {
@@ -1470,44 +1227,22 @@ pub async fn handle_maintenance(
         },
         RackMaintenanceState::NVOSUpdate { nvos_update } => match nvos_update {
             NvosUpdateState::Start { rack_firmware_id } => {
-                let artifact = match resolve_requested_or_default_nvos_artifact(
-                    id,
-                    rack_profile_id,
-                    rack_firmware_id.as_deref(),
-                    ctx,
-                )
-                .await?
-                {
-                    Some(artifact) => artifact,
-                    None if nvos_update_requested(scope) => {
-                        return transition_to_rack_error(
-                            id,
-                            state,
-                            "requested NVOS update could not find a default switch system image",
-                            ctx,
-                        )
-                        .await;
-                    }
-                    None => {
-                        // A missing rack_firmware_id already falls back to the default rack
-                        // firmware. None here means no default switch system image was found.
-                        let next = next_state_after_nvos(scope);
-                        tracing::info!(
-                            rack_id = %id,
-                            next_state = %next,
-                            "No default NVOS artifact available, advancing"
-                        );
-                        return Ok(StateHandlerOutcome::transition(RackState::Maintenance {
-                            maintenance_state: next,
-                        }));
-                    }
-                };
-
                 let Some(rms_client) = ctx.services.switch_system_image_rms_client.as_deref()
                 else {
                     return transition_to_rack_error(id, state, "RMS client not configured", ctx)
                         .await;
                 };
+                let Some(profile) = super::resolve_profile(id, rack_profile_id, ctx) else {
+                    return transition_to_rack_error(
+                        id,
+                        state,
+                        "rack profile is missing or unknown; cannot resolve switch system image type",
+                        ctx,
+                    )
+                    .await;
+                };
+                let rack_hardware_type = profile_hardware_type_wire_value(profile);
+                let software_type = firmware_type_for_profile(profile);
 
                 let inventory = load_rack_firmware_inventory(
                     &ctx.services.db_pool,
@@ -1536,10 +1271,9 @@ pub async fn handle_maintenance(
                 }
 
                 tracing::info!(
-                    "Rack {} NVOS update starting with firmware {} ({})",
+                    "Rack {} switch system image update starting with firmware object '{}'",
                     id,
-                    artifact.firmware_id,
-                    artifact.image_filename,
+                    rack_firmware_id.as_deref().unwrap_or("<default>"),
                 );
 
                 for switch in &inventory.switches {
@@ -1563,8 +1297,31 @@ pub async fn handle_maintenance(
                     })?;
                 }
 
-                let job =
-                    rms_start_nvos_update(rms_client, id, &artifact, inventory.switches).await?;
+                let job = match rms_start_nvos_update(
+                    rms_client,
+                    id,
+                    rack_firmware_id.as_deref(),
+                    software_type,
+                    &rack_hardware_type,
+                    inventory.switches,
+                )
+                .await
+                {
+                    Ok(job) => job,
+                    Err(error) if !nvos_update_requested(scope) => {
+                        let next = next_state_after_nvos(scope);
+                        tracing::info!(
+                            rack_id = %id,
+                            error = %error,
+                            next_state = %next,
+                            "Implicit switch system image update could not be started, advancing"
+                        );
+                        return Ok(StateHandlerOutcome::transition(RackState::Maintenance {
+                            maintenance_state: next,
+                        }));
+                    }
+                    Err(error) => return Err(error),
+                };
 
                 let mut txn = ctx.services.db_pool.begin().await?;
                 clear_nvos_update_statuses(txn.as_mut(), &inventory.switch_ids).await?;

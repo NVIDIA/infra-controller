@@ -15,8 +15,6 @@
  * limitations under the License.
  */
 
-use std::collections::HashMap;
-
 use carbide_uuid::machine::MachineId;
 use carbide_uuid::rack::RackId;
 use carbide_uuid::switch::SwitchId;
@@ -25,14 +23,10 @@ use eyre::{Result, eyre};
 use forge_secrets::credentials::{
     BmcCredentialType, CredentialKey, CredentialManager, Credentials,
 };
-use librms::RmsApi;
 use librms::protos::rack_manager as rms;
 use model::machine::machine_search_config::MachineSearchConfig;
 use model::rack::FirmwareUpgradeDeviceInfo;
-use model::rack_firmware::RackFirmware;
 use model::rack_type::{RackHardwareClass, RackProfile};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use sqlx::PgPool;
 
 #[derive(Debug, Clone)]
@@ -47,35 +41,6 @@ pub struct RackFirmwareInventory {
 pub struct RackSwitchFirmwareInventory {
     pub switch_ids: Vec<SwitchId>,
     pub switches: Vec<FirmwareUpgradeDeviceInfo>,
-}
-
-#[derive(Debug, Clone)]
-pub struct FirmwareUpdateBatchRequest {
-    pub display_name: &'static str,
-    pub devices: Vec<FirmwareUpgradeDeviceInfo>,
-    pub request: rms::UpdateFirmwareByDeviceListRequest,
-}
-
-#[derive(Debug, Clone)]
-pub struct SubmittedFirmwareBatch {
-    pub display_name: &'static str,
-    pub devices: Vec<FirmwareUpgradeDeviceInfo>,
-    pub response: Result<rms::UpdateFirmwareByDeviceListResponse, String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct FirmwareLookupTable {
-    devices: HashMap<String, HashMap<String, FirmwareLookupEntry>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct FirmwareLookupEntry {
-    filename: String,
-    target: String,
-    component: String,
-    bundle: String,
-    firmware_type: String,
-    version: Option<String>,
 }
 
 pub fn firmware_type_for_profile(profile: &RackProfile) -> &'static str {
@@ -199,98 +164,6 @@ pub async fn load_rack_switch_firmware_inventory(
     })
 }
 
-pub fn build_firmware_update_batches(
-    rack_id: &RackId,
-    firmware: &RackFirmware,
-    firmware_type: &str,
-    inventory: &RackFirmwareInventory,
-    components: &[String],
-) -> Result<Vec<FirmwareUpdateBatchRequest>> {
-    let parsed_components = firmware
-        .parsed_components
-        .as_ref()
-        .map(|parsed| parsed.0.clone())
-        .ok_or_else(|| eyre!("firmware '{}' has no parsed components", firmware.id))?;
-
-    let batch_definitions = [
-        (
-            "Compute Node",
-            rms::NodeType::Compute,
-            "Compute Node",
-            &inventory.machines,
-            true,
-        ),
-        (
-            "Switch Tray",
-            rms::NodeType::Switch,
-            "Switch",
-            &inventory.switches,
-            false,
-        ),
-    ];
-
-    let mut batches = Vec::new();
-    for (lookup_key, node_type, display_name, devices, activate) in batch_definitions {
-        if devices.is_empty() {
-            continue;
-        }
-
-        let firmware_targets = build_firmware_targets(
-            &parsed_components,
-            lookup_key,
-            firmware_type,
-            &firmware.id,
-            components,
-        )?;
-        let node_infos = devices
-            .iter()
-            .map(|device| build_new_node_info(rack_id, device, node_type))
-            .collect();
-        let mut target_map = HashMap::new();
-        target_map.insert(
-            node_type as i32,
-            rms::FirmwareTargetList {
-                targets: firmware_targets,
-            },
-        );
-
-        batches.push(FirmwareUpdateBatchRequest {
-            display_name,
-            devices: devices.clone(),
-            request: rms::UpdateFirmwareByDeviceListRequest {
-                nodes: Some(rms::NodeSet {
-                    devices: node_infos,
-                }),
-                firmware_targets: target_map,
-                activate,
-                force_update: false,
-                ..Default::default()
-            },
-        });
-    }
-
-    Ok(batches)
-}
-
-pub async fn submit_firmware_update_batches(
-    rms_client: &dyn RmsApi,
-    batches: Vec<FirmwareUpdateBatchRequest>,
-) -> Vec<SubmittedFirmwareBatch> {
-    let mut submissions = Vec::with_capacity(batches.len());
-    for batch in batches {
-        let response = rms_client
-            .update_firmware_by_device_list(batch.request)
-            .await
-            .map_err(|err| err.to_string());
-        submissions.push(SubmittedFirmwareBatch {
-            display_name: batch.display_name,
-            devices: batch.devices,
-            response,
-        });
-    }
-    submissions
-}
-
 async fn fetch_bmc_credentials(
     credential_manager: &dyn CredentialManager,
     bmc_mac: mac_address::MacAddress,
@@ -332,47 +205,6 @@ async fn fetch_nvos_credentials(
         }
         _ => None,
     }
-}
-
-fn build_firmware_targets(
-    parsed_components: &Value,
-    lookup_key: &str,
-    firmware_type: &str,
-    firmware_id: &str,
-    components: &[String],
-) -> Result<Vec<rms::FirmwareTarget>> {
-    let mut firmware_components = find_firmware_components_for_device(
-        parsed_components,
-        lookup_key,
-        firmware_type,
-        components,
-    )?;
-    let flash_order = get_firmware_flash_order(lookup_key);
-    firmware_components.sort_by_key(|(_, _, target)| {
-        flash_order
-            .iter()
-            .position(|candidate| candidate == &target.as_str())
-            .unwrap_or(usize::MAX)
-    });
-
-    if firmware_components.is_empty() {
-        return Err(eyre!(
-            "no matching firmware found in config for {} ({})",
-            lookup_key,
-            firmware_type
-        ));
-    }
-
-    Ok(firmware_components
-        .into_iter()
-        .map(|(_, filename, target)| rms::FirmwareTarget {
-            target,
-            filename: format!(
-                "/forge-boot-artifacts/blobs/internal/fw/rack_firmware/{}/{}",
-                firmware_id, filename
-            ),
-        })
-        .collect())
 }
 
 pub(crate) fn build_new_node_info(
@@ -437,51 +269,4 @@ fn user_pass_credentials(username: &str, password: &str) -> Option<rms::Credenti
             password: password.to_string(),
         })),
     })
-}
-
-fn get_firmware_flash_order(device_type_key: &str) -> &'static [&'static str] {
-    match device_type_key {
-        "Switch Tray" => &["bmc", "fpga", "erot", "bios"],
-        "Compute Node" => &["/redfish/v1/Chassis/HGX_Chassis_0", "FW_BMC_0"],
-        _ => &[],
-    }
-}
-
-fn find_firmware_components_for_device(
-    parsed_components: &Value,
-    hardware_type: &str,
-    firmware_type: &str,
-    components: &[String],
-) -> Result<Vec<(String, String, String)>> {
-    let lookup_table: FirmwareLookupTable = serde_json::from_value(parsed_components.clone())
-        .map_err(|err| {
-            eyre!(
-                "failed to parse firmware lookup table for '{}': {}",
-                hardware_type,
-                err
-            )
-        })?;
-
-    let wanted_type = firmware_type.to_lowercase();
-    let wanted_components: Vec<String> = components.iter().map(|c| c.to_lowercase()).collect();
-    let mut results = Vec::new();
-    if let Some(device_components) = lookup_table.devices.get(hardware_type) {
-        for (component_key, entry) in device_components {
-            if entry.firmware_type.to_lowercase() != wanted_type {
-                continue;
-            }
-            if !wanted_components.is_empty()
-                && !wanted_components.contains(&entry.component.to_lowercase())
-            {
-                continue;
-            }
-            results.push((
-                component_key.clone(),
-                entry.filename.clone(),
-                entry.target.clone(),
-            ));
-        }
-    }
-
-    Ok(results)
 }

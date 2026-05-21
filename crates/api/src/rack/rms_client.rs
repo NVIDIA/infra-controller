@@ -19,10 +19,10 @@ use librms::protos::rack_manager as rms;
 
 #[async_trait::async_trait]
 pub trait SwitchSystemImageRmsClient: Send + Sync {
-    async fn update_switch_system_image(
+    async fn apply_switch_system_image(
         &self,
-        cmd: rms::UpdateSwitchSystemImageRequest,
-    ) -> Result<rms::UpdateSwitchSystemImageResponse, tonic::Status>;
+        cmd: rms::ApplySwitchSystemImageRequest,
+    ) -> Result<rms::ApplySwitchSystemImageResponse, tonic::Status>;
 
     async fn get_switch_system_image_job_status(
         &self,
@@ -32,11 +32,11 @@ pub trait SwitchSystemImageRmsClient: Send + Sync {
 
 #[async_trait::async_trait]
 impl SwitchSystemImageRmsClient for librms::RackManagerApi {
-    async fn update_switch_system_image(
+    async fn apply_switch_system_image(
         &self,
-        cmd: rms::UpdateSwitchSystemImageRequest,
-    ) -> Result<rms::UpdateSwitchSystemImageResponse, tonic::Status> {
-        self.client.update_switch_system_image(cmd).await
+        cmd: rms::ApplySwitchSystemImageRequest,
+    ) -> Result<rms::ApplySwitchSystemImageResponse, tonic::Status> {
+        self.client.apply_switch_system_image(cmd).await
     }
 
     async fn get_switch_system_image_job_status(
@@ -63,14 +63,18 @@ pub mod test_support {
         fail_add_node: Arc<AtomicBool>,
         fail_inventory_get: Arc<AtomicBool>,
         registered_nodes: Arc<Mutex<Vec<rms::NodeInventoryInfo>>>,
+        firmware_objects: Arc<Mutex<HashMap<String, rms::FirmwareObject>>>,
         submitted_firmware_requests: Arc<Mutex<Vec<rms::UpdateFirmwareByDeviceListRequest>>>,
         queued_firmware_responses: Arc<Mutex<VecDeque<rms::UpdateFirmwareByDeviceListResponse>>>,
+        submitted_firmware_object_apply_requests: Arc<Mutex<Vec<rms::ApplyFirmwareObjectRequest>>>,
+        queued_firmware_object_apply_responses:
+            Arc<Mutex<VecDeque<rms::ApplyFirmwareObjectResponse>>>,
         firmware_job_statuses: Arc<Mutex<HashMap<String, rms::GetFirmwareJobStatusResponse>>>,
         firmware_job_errors: Arc<Mutex<HashMap<String, String>>>,
-        submitted_switch_system_image_requests:
-            Arc<Mutex<Vec<rms::UpdateSwitchSystemImageRequest>>>,
-        queued_switch_system_image_responses:
-            Arc<Mutex<VecDeque<rms::UpdateSwitchSystemImageResponse>>>,
+        submitted_apply_switch_system_image_requests:
+            Arc<Mutex<Vec<rms::ApplySwitchSystemImageRequest>>>,
+        queued_apply_switch_system_image_responses:
+            Arc<Mutex<VecDeque<rms::ApplySwitchSystemImageResponse>>>,
         switch_system_image_job_statuses:
             Arc<Mutex<HashMap<String, rms::GetSwitchSystemImageJobStatusResponse>>>,
         switch_system_image_job_errors: Arc<Mutex<HashMap<String, String>>>,
@@ -86,12 +90,15 @@ pub mod test_support {
                 fail_add_node: Arc::new(AtomicBool::new(false)),
                 fail_inventory_get: Arc::new(AtomicBool::new(false)),
                 registered_nodes: Arc::new(Mutex::new(Vec::new())),
+                firmware_objects: Arc::new(Mutex::new(HashMap::new())),
                 submitted_firmware_requests: Arc::new(Mutex::new(Vec::new())),
                 queued_firmware_responses: Arc::new(Mutex::new(VecDeque::new())),
+                submitted_firmware_object_apply_requests: Arc::new(Mutex::new(Vec::new())),
+                queued_firmware_object_apply_responses: Arc::new(Mutex::new(VecDeque::new())),
                 firmware_job_statuses: Arc::new(Mutex::new(HashMap::new())),
                 firmware_job_errors: Arc::new(Mutex::new(HashMap::new())),
-                submitted_switch_system_image_requests: Arc::new(Mutex::new(Vec::new())),
-                queued_switch_system_image_responses: Arc::new(Mutex::new(VecDeque::new())),
+                submitted_apply_switch_system_image_requests: Arc::new(Mutex::new(Vec::new())),
+                queued_apply_switch_system_image_responses: Arc::new(Mutex::new(VecDeque::new())),
                 switch_system_image_job_statuses: Arc::new(Mutex::new(HashMap::new())),
                 switch_system_image_job_errors: Arc::new(Mutex::new(HashMap::new())),
                 submitted_set_power_state_by_device_list_requests: Arc::new(Mutex::new(Vec::new())),
@@ -119,15 +126,22 @@ pub mod test_support {
                 fail_add_node: self.fail_add_node.clone(),
                 fail_inventory_get: self.fail_inventory_get.clone(),
                 registered_nodes: self.registered_nodes.clone(),
+                firmware_objects: self.firmware_objects.clone(),
                 submitted_firmware_requests: self.submitted_firmware_requests.clone(),
                 queued_firmware_responses: self.queued_firmware_responses.clone(),
+                submitted_firmware_object_apply_requests: self
+                    .submitted_firmware_object_apply_requests
+                    .clone(),
+                queued_firmware_object_apply_responses: self
+                    .queued_firmware_object_apply_responses
+                    .clone(),
                 firmware_job_statuses: self.firmware_job_statuses.clone(),
                 firmware_job_errors: self.firmware_job_errors.clone(),
-                submitted_switch_system_image_requests: self
-                    .submitted_switch_system_image_requests
+                submitted_apply_switch_system_image_requests: self
+                    .submitted_apply_switch_system_image_requests
                     .clone(),
-                queued_switch_system_image_responses: self
-                    .queued_switch_system_image_responses
+                queued_apply_switch_system_image_responses: self
+                    .queued_apply_switch_system_image_responses
                     .clone(),
                 switch_system_image_job_statuses: self.switch_system_image_job_statuses.clone(),
                 switch_system_image_job_errors: self.switch_system_image_job_errors.clone(),
@@ -188,14 +202,23 @@ pub mod test_support {
             self.submitted_firmware_requests.lock().await.clone()
         }
 
-        pub async fn queue_update_switch_system_image_response(
+        pub async fn queue_apply_firmware_object_response(
             &self,
-            response: rms::UpdateSwitchSystemImageResponse,
+            response: rms::ApplyFirmwareObjectResponse,
         ) {
-            self.queued_switch_system_image_responses
+            self.queued_firmware_object_apply_responses
                 .lock()
                 .await
                 .push_back(response);
+        }
+
+        pub async fn submitted_apply_firmware_object_requests(
+            &self,
+        ) -> Vec<rms::ApplyFirmwareObjectRequest> {
+            self.submitted_firmware_object_apply_requests
+                .lock()
+                .await
+                .clone()
         }
 
         pub async fn set_switch_system_image_job_status(
@@ -219,10 +242,20 @@ pub mod test_support {
                 .insert(job_id.into(), message.into());
         }
 
-        pub async fn submitted_switch_system_image_requests(
+        pub async fn queue_apply_switch_system_image_response(
             &self,
-        ) -> Vec<rms::UpdateSwitchSystemImageRequest> {
-            self.submitted_switch_system_image_requests
+            response: rms::ApplySwitchSystemImageResponse,
+        ) {
+            self.queued_apply_switch_system_image_responses
+                .lock()
+                .await
+                .push_back(response);
+        }
+
+        pub async fn submitted_apply_switch_system_image_requests(
+            &self,
+        ) -> Vec<rms::ApplySwitchSystemImageRequest> {
+            self.submitted_apply_switch_system_image_requests
                 .lock()
                 .await
                 .clone()
@@ -259,14 +292,18 @@ pub mod test_support {
         fail_add_node: Arc<AtomicBool>,
         fail_inventory_get: Arc<AtomicBool>,
         registered_nodes: Arc<Mutex<Vec<rms::NodeInventoryInfo>>>,
+        firmware_objects: Arc<Mutex<HashMap<String, rms::FirmwareObject>>>,
         submitted_firmware_requests: Arc<Mutex<Vec<rms::UpdateFirmwareByDeviceListRequest>>>,
         queued_firmware_responses: Arc<Mutex<VecDeque<rms::UpdateFirmwareByDeviceListResponse>>>,
+        submitted_firmware_object_apply_requests: Arc<Mutex<Vec<rms::ApplyFirmwareObjectRequest>>>,
+        queued_firmware_object_apply_responses:
+            Arc<Mutex<VecDeque<rms::ApplyFirmwareObjectResponse>>>,
         firmware_job_statuses: Arc<Mutex<HashMap<String, rms::GetFirmwareJobStatusResponse>>>,
         firmware_job_errors: Arc<Mutex<HashMap<String, String>>>,
-        submitted_switch_system_image_requests:
-            Arc<Mutex<Vec<rms::UpdateSwitchSystemImageRequest>>>,
-        queued_switch_system_image_responses:
-            Arc<Mutex<VecDeque<rms::UpdateSwitchSystemImageResponse>>>,
+        submitted_apply_switch_system_image_requests:
+            Arc<Mutex<Vec<rms::ApplySwitchSystemImageRequest>>>,
+        queued_apply_switch_system_image_responses:
+            Arc<Mutex<VecDeque<rms::ApplySwitchSystemImageResponse>>>,
         switch_system_image_job_statuses:
             Arc<Mutex<HashMap<String, rms::GetSwitchSystemImageJobStatusResponse>>>,
         switch_system_image_job_errors: Arc<Mutex<HashMap<String, String>>>,
@@ -425,6 +462,164 @@ pub mod test_support {
         ) -> Result<rms::GetRackFirmwareInventoryResponse, RackManagerError> {
             Ok(rms::GetRackFirmwareInventoryResponse::default())
         }
+        async fn add_firmware_object(
+            &self,
+            cmd: rms::AddFirmwareObjectRequest,
+        ) -> Result<rms::FirmwareObject, RackManagerError> {
+            let value =
+                serde_json::from_str::<serde_json::Value>(&cmd.config_json).map_err(|e| {
+                    RackManagerError::ApiInvocationError(tonic::Status::invalid_argument(format!(
+                        "invalid config_json: {e}"
+                    )))
+                })?;
+            let id = value
+                .get("Id")
+                .and_then(serde_json::Value::as_str)
+                .filter(|id| !id.is_empty())
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    RackManagerError::ApiInvocationError(tonic::Status::invalid_argument(
+                        "config_json must contain non-empty Id",
+                    ))
+                })?;
+            let mut objects = self.firmware_objects.lock().await;
+            let is_default = cmd.set_default
+                || !objects.values().any(|existing| {
+                    existing.hardware_type == cmd.hardware_type && existing.is_default
+                });
+            let object = rms::FirmwareObject {
+                id: id.clone(),
+                config_json: cmd.config_json,
+                available: false,
+                hardware_type: cmd.hardware_type,
+                is_default,
+                ..Default::default()
+            };
+            if is_default {
+                for existing in objects.values_mut() {
+                    if existing.hardware_type == object.hardware_type {
+                        existing.is_default = false;
+                    }
+                }
+            }
+            objects.insert(id, object.clone());
+            Ok(object)
+        }
+        async fn get_firmware_object(
+            &self,
+            cmd: rms::GetFirmwareObjectRequest,
+        ) -> Result<rms::FirmwareObject, RackManagerError> {
+            self.firmware_objects
+                .lock()
+                .await
+                .get(&cmd.id)
+                .cloned()
+                .ok_or_else(|| {
+                    RackManagerError::ApiInvocationError(tonic::Status::not_found(format!(
+                        "firmware object {} not found",
+                        cmd.id
+                    )))
+                })
+        }
+        async fn list_firmware_objects(
+            &self,
+            cmd: rms::ListFirmwareObjectsRequest,
+        ) -> Result<rms::ListFirmwareObjectsResponse, RackManagerError> {
+            let objects = self
+                .firmware_objects
+                .lock()
+                .await
+                .values()
+                .filter(|object| !cmd.only_available || object.available)
+                .filter(|object| {
+                    cmd.hardware_type.is_empty() || object.hardware_type == cmd.hardware_type
+                })
+                .cloned()
+                .collect();
+            Ok(rms::ListFirmwareObjectsResponse { objects })
+        }
+        async fn delete_firmware_object(
+            &self,
+            cmd: rms::DeleteFirmwareObjectRequest,
+        ) -> Result<rms::OperationResponse, RackManagerError> {
+            self.firmware_objects.lock().await.remove(&cmd.id);
+            Ok(rms::OperationResponse {
+                status: rms::ReturnCode::Success as i32,
+                ..Default::default()
+            })
+        }
+        async fn set_default_firmware_object(
+            &self,
+            cmd: rms::SetDefaultFirmwareObjectRequest,
+        ) -> Result<rms::FirmwareObject, RackManagerError> {
+            let mut objects = self.firmware_objects.lock().await;
+            let hardware_type = objects
+                .get(&cmd.object_id)
+                .map(|object| object.hardware_type.clone())
+                .ok_or_else(|| {
+                    RackManagerError::ApiInvocationError(tonic::Status::not_found(format!(
+                        "firmware object {} not found",
+                        cmd.object_id
+                    )))
+                })?;
+            for object in objects.values_mut() {
+                if object.hardware_type == hardware_type {
+                    object.is_default = object.id == cmd.object_id;
+                }
+            }
+            Ok(objects
+                .get(&cmd.object_id)
+                .cloned()
+                .expect("firmware object existence validated above"))
+        }
+        async fn apply_firmware_object(
+            &self,
+            cmd: rms::ApplyFirmwareObjectRequest,
+        ) -> Result<rms::ApplyFirmwareObjectResponse, RackManagerError> {
+            self.submitted_firmware_object_apply_requests
+                .lock()
+                .await
+                .push(cmd);
+            Ok(self
+                .queued_firmware_object_apply_responses
+                .lock()
+                .await
+                .pop_front()
+                .unwrap_or_default())
+        }
+        async fn apply_firmware_object_from_json(
+            &self,
+            _cmd: rms::ApplyFirmwareObjectFromJsonRequest,
+        ) -> Result<rms::ApplyFirmwareObjectResponse, RackManagerError> {
+            Ok(rms::ApplyFirmwareObjectResponse::default())
+        }
+        async fn apply_switch_system_image_from_json(
+            &self,
+            _cmd: rms::ApplySwitchSystemImageFromJsonRequest,
+        ) -> Result<rms::ApplySwitchSystemImageResponse, RackManagerError> {
+            Ok(rms::ApplySwitchSystemImageResponse::default())
+        }
+        async fn apply_switch_system_image(
+            &self,
+            cmd: rms::ApplySwitchSystemImageRequest,
+        ) -> Result<rms::ApplySwitchSystemImageResponse, RackManagerError> {
+            self.submitted_apply_switch_system_image_requests
+                .lock()
+                .await
+                .push(cmd);
+            Ok(self
+                .queued_apply_switch_system_image_responses
+                .lock()
+                .await
+                .pop_front()
+                .unwrap_or_default())
+        }
+        async fn get_firmware_object_history(
+            &self,
+            _cmd: rms::GetFirmwareObjectHistoryRequest,
+        ) -> Result<rms::GetFirmwareObjectHistoryResponse, RackManagerError> {
+            Ok(rms::GetFirmwareObjectHistoryResponse::default())
+        }
         async fn list_firmware_on_switch(
             &self,
             _cmd: rms::ListFirmwareOnSwitchCommand,
@@ -448,6 +643,12 @@ pub mod test_support {
             _cmd: rms::ConfigureScaleUpFabricManagerRequest,
         ) -> Result<rms::ConfigureScaleUpFabricManagerResponse, RackManagerError> {
             Ok(rms::ConfigureScaleUpFabricManagerResponse::default())
+        }
+        async fn set_scale_up_fabric_state(
+            &self,
+            _cmd: rms::SetScaleUpFabricStateRequest,
+        ) -> Result<rms::SetScaleUpFabricStateResponse, RackManagerError> {
+            Ok(rms::SetScaleUpFabricStateResponse::default())
         }
         async fn fetch_switch_system_image(
             &self,
@@ -527,16 +728,16 @@ pub mod test_support {
 
     #[async_trait::async_trait]
     impl SwitchSystemImageRmsClient for MockRmsClient {
-        async fn update_switch_system_image(
+        async fn apply_switch_system_image(
             &self,
-            cmd: rms::UpdateSwitchSystemImageRequest,
-        ) -> Result<rms::UpdateSwitchSystemImageResponse, tonic::Status> {
-            self.submitted_switch_system_image_requests
+            cmd: rms::ApplySwitchSystemImageRequest,
+        ) -> Result<rms::ApplySwitchSystemImageResponse, tonic::Status> {
+            self.submitted_apply_switch_system_image_requests
                 .lock()
                 .await
                 .push(cmd);
             Ok(self
-                .queued_switch_system_image_responses
+                .queued_apply_switch_system_image_responses
                 .lock()
                 .await
                 .pop_front()

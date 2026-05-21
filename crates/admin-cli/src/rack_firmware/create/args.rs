@@ -29,6 +29,8 @@ pub struct Args {
     pub json_file: PathBuf,
     #[clap(help = "Artifactory token for downloading firmware files.")]
     pub artifactory_token: String,
+    #[clap(long, help = "Mark this firmware object as the default after create.")]
+    pub set_default: bool,
 }
 
 impl TryFrom<Args> for rpc::forge::RackFirmwareCreateRequest {
@@ -53,6 +55,7 @@ impl TryFrom<Args> for rpc::forge::RackFirmwareCreateRequest {
             }),
             config_json,
             artifactory_token: args.artifactory_token,
+            set_default: args.set_default,
         })
     }
 }

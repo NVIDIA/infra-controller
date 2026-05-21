@@ -7860,6 +7860,7 @@ message RackFirmwareCreateRequest {
   string config_json = 1;
   string artifactory_token = 2;
   common.RackHardwareType rack_hardware_type = 3;
+  bool set_default = 4; // If true, mark this firmware object as default after create.
 }
 
 message RackFirmwareGetRequest {
