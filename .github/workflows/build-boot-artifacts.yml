@@ -472,13 +472,13 @@ jobs:
         run: |
           set -euo pipefail
 
-          SCOUT_IMAGE="pxe/static/blobs/internal/${{ inputs.arch }}/scout.cpio.zst"
+          SCOUT_IMAGE="pxe/static/blobs/internal/${{ inputs.arch }}/scout.squashfs"
           if [ ! -f "${SCOUT_IMAGE}" ]; then
             echo "ERROR: Missing scout image artifact: ${SCOUT_IMAGE}"
             exit 1
           fi
 
-          if zstd -dc "${SCOUT_IMAGE}" | cpio -it --quiet 2>/dev/null | grep -Eq '(^|\\./)opt/forge/bin/mnv_cli$'; then
+          if unsquashfs -l "${SCOUT_IMAGE}" 2>/dev/null | grep -Eq '^squashfs-root/opt/forge/bin/mnv_cli$'; then
             echo "OK: /opt/forge/bin/mnv_cli is present in ${SCOUT_IMAGE}"
           else
             echo "ERROR: /opt/forge/bin/mnv_cli missing from ${SCOUT_IMAGE}"
