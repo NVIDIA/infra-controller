@@ -1,7 +1,7 @@
 # Tenant Lifecycle Cleanup
 
-This page covers what NICo does after a tenant releases an instance, how to
-track cleanup progress, and how to verify that a host is ready for reuse.
+Use this workflow to release an instance, track NICo cleanup progress, and
+verify that the host is ready for reuse.
 
 When an instance is released, NICo removes the host from tenant service, returns
 networking to the admin side, runs cleanup and sanitization workflows, performs
@@ -17,7 +17,7 @@ For reference, see:
 
 ## Release an Instance
 
-Use `nicocli` for the tenant-facing release path:
+Release the instance:
 
 ```bash
 nicocli instance delete <instance-id>
