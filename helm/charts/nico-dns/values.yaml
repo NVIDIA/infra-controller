@@ -29,6 +29,10 @@ replicas: 2
 annotations:
   configmap.reloader.stakater.com/reload: "nico-dns, nico-dns-config"
 
+## DNS server bind address. Default keeps the existing dual-stack/IPv6
+## listener; set to "0.0.0.0:53" for IPv4-only Kubernetes clusters.
+listenAddress: "[::]:53"
+
 service:
   ports:
     - port: 53
