@@ -37,6 +37,7 @@ env:
 
 jobs:
   changes:
+    name: Detect Carbide CI Gate
     runs-on: ubuntu-latest
     outputs:
       run_core_ci: ${{ steps.gate.outputs.run_core_ci }}
@@ -154,11 +155,13 @@ jobs:
 
           set -euo pipefail
 
+          # Fetch tags for accurate git describe
           git fetch --tags --force
           SHORT_SHA=$(git rev-parse --short=7 HEAD)
           echo "short_sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
           echo "Using Git describe to extract version as VERSION and HELM_VERSION"
           VERSION=$(git describe --tags --first-parent --always --long)
+          # HELM_VERSION strips leading 'v' for strict SemVer and replaces the last '-' with '.'
           HELM_VERSION_BASE="${VERSION#v}"
           HELM_VERSION=$(echo "$HELM_VERSION_BASE" | sed 's/\(.*\)-/\1./')
 
@@ -1436,10 +1439,9 @@ jobs:
   # Fails iff any leaf job's result is `failure` or `cancelled`.
   # `skipped` counts as pass — that's how rest-only PRs unblock when the
   # `changes` gate intentionally skips the core pipeline.
-  # Scope: 1:1 with the existing ruleset's required checks. Wrapping them in
-  # a single context lets us require ONE name in branch protection and avoid
-  # the "Expected — Waiting for status" failure mode if any of those jobs is
-  # ever renamed or workflow-level-filtered away.
+  # `changes` + `prepare` are in needs so a gate or prepare failure doesn't
+  # silently pass (downstream leaves become SKIPPED in those cases).
+  # Branch protection ruleset should require ONLY this aggregator + rest-ci-pass.
   carbide-ci-pass:
     name: carbide-ci-pass
     runs-on: ubuntu-latest
