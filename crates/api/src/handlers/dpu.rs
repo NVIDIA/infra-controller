@@ -25,6 +25,7 @@ use ::rpc::{common as rpc_common, forge as rpc};
 use carbide_network::virtualization::VpcVirtualizationType;
 use carbide_utils::arch::CpuArchitecture;
 use carbide_uuid::machine::MachineId;
+use db::vpc_prefix::VpcId;
 use db::{
     DatabaseError, ObjectColumnFilter, dpu_agent_upgrade_policy, network_security_group,
     network_segment,
@@ -337,24 +338,7 @@ pub(crate) async fn get_managed_host_network_config_inner(
             ).await?;
 
             let segment_details = segment_details.iter().map(|x|(x.id, x)).collect::<HashMap<_,_>>();
-
-            // TODO: VPC loopbacks are currently blocked from being advertised out on the DPU.
-            // This must become per-interface/per-VPC before VPC loopbacks can be allowed out.
-            let tenant_loopback_ip = if VpcVirtualizationType::Fnn == network_virtualization_type
-                && use_vpc_vrf_loopback
-            {
-                let tenant_loopback_ip = db::vpc_dpu_loopback::get_or_allocate_loopback_ip_for_vpc(
-                    &api.common_pools,
-                    &mut txn,
-                    &dpu_machine_id,
-                    &vpc.id,
-                )
-                .await?;
-
-                Some(tenant_loopback_ip.to_string())
-            } else {
-                None
-            };
+            let mut tenant_loopback_ips: HashMap<VpcId, String> = HashMap::new();
 
             // if there is no device then this is a legacy config and only the primary dpu is allowed.
             // all other DPUs don't get interfaces
@@ -372,6 +356,36 @@ pub(crate) async fn get_managed_host_network_config_inner(
                     return Err(CarbideError::Internal { message: format!(
                         "Tenant segment id {iface_segment} is not found in db. Can not fetch the details."
                     ) }.into());
+                };
+
+                let tenant_loopback_ip = if VpcVirtualizationType::Fnn == network_virtualization_type
+                    && use_vpc_vrf_loopback
+                {
+                    match segment.config.vpc_id {
+                        Some(vpc_id) => {
+                            if let Some(loopback_ip) = tenant_loopback_ips.get(&vpc_id) {
+                                Some(loopback_ip.clone())
+                            } else {
+                                // Resolve loopbacks after the interface segment is known so each VPC
+                                // receives its own DPU loopback allocation.
+                                let loopback_ip =
+                                    db::vpc_dpu_loopback::get_or_allocate_loopback_ip_for_vpc(
+                                        &api.common_pools,
+                                        &mut txn,
+                                        &dpu_machine_id,
+                                        &vpc_id,
+                                    )
+                                    .await?
+                                    .to_string();
+
+                                tenant_loopback_ips.insert(vpc_id, loopback_ip.clone());
+                                Some(loopback_ip)
+                            }
+                        }
+                        None => None,
+                    }
+                } else {
+                    None
                 };
 
                 // Build the FQDN from this interface's segment domain.
@@ -404,9 +418,7 @@ pub(crate) async fn get_managed_host_network_config_inner(
                     instance.id,
                     iface,
                     fqdn,
-                    // DPU agent reads loopback ip only from 0th interface.
-                    // function build in nvue.rs
-                    tenant_loopback_ip.clone(),
+                    tenant_loopback_ip,
                     network_virtualization_type,
                     suppress_tenant_security_groups,
                     network_security_group_details.clone(),
