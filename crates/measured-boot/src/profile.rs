@@ -20,17 +20,13 @@
  *  tables in the database, leveraging the profile-specific record types.
  */
 
-use std::convert::{Into, TryFrom};
-
 use carbide_uuid::measured_boot::MeasurementSystemProfileId;
 use chrono::{DateTime, Utc};
-#[cfg(feature = "cli")]
-use rpc::admin_cli::ToTable;
-use rpc::protos::measured_boot::MeasurementSystemProfilePb;
 use serde::Serialize;
 
 use super::records::MeasurementSystemProfileAttrRecord;
-use crate::{FromGrpc, FromGrpcOpt};
+#[cfg(feature = "cli")]
+use crate::ToTable;
 
 /// MeasurementSystemProfile is a composition of a MeasurementSystemProfileRecord,
 /// whose attributes are essentially copied directly it, as well as
@@ -43,57 +39,13 @@ use crate::{FromGrpc, FromGrpcOpt};
 pub struct MeasurementSystemProfile {
     pub profile_id: MeasurementSystemProfileId,
     pub name: String,
-    pub ts: chrono::DateTime<Utc>,
+    pub ts: DateTime<Utc>,
     pub attrs: Vec<MeasurementSystemProfileAttrRecord>,
 }
 
 impl crate::DisplayName for MeasurementSystemProfile {
     fn display_name() -> &'static str {
         "profile"
-    }
-}
-
-impl FromGrpc<MeasurementSystemProfilePb> for MeasurementSystemProfile {}
-
-impl FromGrpcOpt<MeasurementSystemProfilePb> for MeasurementSystemProfile {}
-
-impl From<MeasurementSystemProfile> for MeasurementSystemProfilePb {
-    fn from(val: MeasurementSystemProfile) -> Self {
-        Self {
-            profile_id: Some(val.profile_id),
-            name: val.name,
-            ts: Some(val.ts.into()),
-            attrs: val.attrs.iter().map(|attr| attr.clone().into()).collect(),
-        }
-    }
-}
-
-impl TryFrom<MeasurementSystemProfilePb> for MeasurementSystemProfile {
-    type Error = super::Error;
-
-    fn try_from(msg: MeasurementSystemProfilePb) -> super::Result<Self> {
-        let attrs: super::Result<Vec<MeasurementSystemProfileAttrRecord>> = msg
-            .attrs
-            .iter()
-            .map(
-                |attr| match MeasurementSystemProfileAttrRecord::try_from(attr.clone()) {
-                    Ok(worked) => Ok(worked),
-                    Err(failed) => Err(super::Error::RpcConversion(format!(
-                        "attr conversion failed: {failed}"
-                    ))),
-                },
-            )
-            .collect();
-
-        Ok(Self {
-            profile_id: msg.profile_id.ok_or(super::Error::RpcConversion(
-                "missing profile_id".to_string(),
-            ))?,
-            name: msg.name.clone(),
-            attrs: attrs?,
-            ts: DateTime::<Utc>::try_from(msg.ts.unwrap())
-                .map_err(|e| super::Error::RpcConversion(e.to_string()))?,
-        })
     }
 }
 

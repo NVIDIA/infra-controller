@@ -38,7 +38,6 @@ carbide-uuid = { path = "../uuid", features = ["sqlx"] }
 carbide-measured-boot = { path = "../measured-boot", features = ["sqlx"] }
 dns-record = { path = "../dns-record" }
 carbide-api-model = { path = "../api-model", default-features = false }
-carbide-rpc = { path = "../rpc", features = ["sqlx"] }
 carbide-ipxe-renderer = { path = "../ipxe-renderer" }
 # DO NOT PUT DEPENDENCIES OTHER THAN LOCAL DEPS HERE, THEY SHOULD ALL HAVE 'path =' IN THEM.
 
@@ -74,7 +73,6 @@ thiserror = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
-toml = { workspace = true }
 tonic = { workspace = true }
 tracing = { workspace = true }
 uuid = { features = ["v4", "serde"], workspace = true }

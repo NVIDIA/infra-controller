@@ -44,7 +44,7 @@ rules:
     resourceNames: ["site-root"]
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["patch"]
+    verbs: ["get", "patch"]
     resourceNames: ["nico-vault-approle-tokens"]
   - apiGroups: ["cert-manager.io"]
     resources: ["certificates"]
@@ -284,7 +284,7 @@ spec:
 
               {{- range .Values.vault.kvSeeds }}
               echo "Seeding {{ $.Values.vault.kvMount }}/{{ .path }}..."
-              vault kv put {{ $.Values.vault.kvMount }}/{{ .path }} @- <<'KVSEED'
+              vault kv put {{ $.Values.vault.kvMount }}/{{ .path }} - <<'KVSEED'
               {{ .data | toJson }}
               KVSEED
               {{- end }}

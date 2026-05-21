@@ -22,19 +22,11 @@
  * This also provides code for importing/exporting (and working with) SiteModels.
  */
 
-use std::convert::{From, Into};
-use std::str::FromStr;
 use std::vec::Vec;
 
 use carbide_uuid::machine::MachineId;
 use carbide_uuid::measured_boot::MeasurementBundleId;
 use chrono::Utc;
-#[cfg(feature = "cli")]
-use rpc::admin_cli::ToTable;
-use rpc::protos::measured_boot::{
-    ImportSiteMeasurementsResponse, ListAttestationSummaryResponse, MachineAttestationSummaryPb,
-    SiteModelPb,
-};
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "sqlx")]
 use sqlx::FromRow;
@@ -43,19 +35,12 @@ use super::records::{
     MeasurementBundleRecord, MeasurementBundleValueRecord, MeasurementSystemProfileAttrRecord,
     MeasurementSystemProfileRecord,
 };
-use crate::{FromGrpc, FromGrpcOpt, FromPbVec};
+#[cfg(feature = "cli")]
+use crate::ToTable;
 
 #[derive(Serialize)]
 pub struct ImportResult {
     pub status: String,
-}
-
-impl From<&ImportSiteMeasurementsResponse> for ImportResult {
-    fn from(msg: &ImportSiteMeasurementsResponse) -> Self {
-        Self {
-            status: msg.result().as_str_name().to_string(),
-        }
-    }
 }
 
 #[cfg(feature = "cli")]
@@ -90,64 +75,6 @@ impl crate::DisplayName for SiteModel {
     }
 }
 
-impl FromGrpc<SiteModelPb> for SiteModel {}
-
-impl FromGrpcOpt<SiteModelPb> for SiteModel {}
-
-impl TryFrom<SiteModelPb> for SiteModel {
-    type Error = super::Error;
-
-    fn try_from(model: SiteModelPb) -> Result<Self, Self::Error> {
-        Ok(Self {
-            measurement_system_profiles: MeasurementSystemProfileRecord::from_pb_vec(
-                &model.measurement_system_profiles,
-            )?,
-            measurement_system_profiles_attrs: MeasurementSystemProfileAttrRecord::from_pb_vec(
-                &model.measurement_system_profiles_attrs,
-            )?,
-            measurement_bundles: MeasurementBundleRecord::from_pb_vec(&model.measurement_bundles)?,
-            measurement_bundles_values: MeasurementBundleValueRecord::from_pb_vec(
-                &model.measurement_bundles_values,
-            )?,
-        })
-    }
-}
-
-impl From<SiteModel> for SiteModelPb {
-    fn from(model: SiteModel) -> Self {
-        let measurement_system_profiles = model
-            .measurement_system_profiles
-            .into_iter()
-            .map(|record| record.into())
-            .collect();
-
-        let measurement_system_profiles_attrs = model
-            .measurement_system_profiles_attrs
-            .into_iter()
-            .map(|record| record.into())
-            .collect();
-
-        let measurement_bundles = model
-            .measurement_bundles
-            .into_iter()
-            .map(|record| record.into())
-            .collect();
-
-        let measurement_bundles_values = model
-            .measurement_bundles_values
-            .into_iter()
-            .map(|record| record.into())
-            .collect();
-
-        Self {
-            measurement_system_profiles,
-            measurement_system_profiles_attrs,
-            measurement_bundles,
-            measurement_bundles_values,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "sqlx", derive(FromRow))]
 pub struct MachineAttestationSummary {
@@ -159,50 +86,3 @@ pub struct MachineAttestationSummary {
 }
 
 pub struct MachineAttestationSummaryList(pub Vec<MachineAttestationSummary>);
-
-// we need methods to convert this to gRPC messages and back
-impl From<MachineAttestationSummaryList> for ListAttestationSummaryResponse {
-    fn from(val: MachineAttestationSummaryList) -> Self {
-        Self {
-            attestation_outcomes: val
-                .0
-                .into_iter()
-                .map(|e| MachineAttestationSummaryPb {
-                    machine_id: e.machine_id.to_string(),
-                    bundle_id: e.bundle_id,
-                    profile_name: e.profile_name,
-                    ts: Some(e.ts.into()),
-                })
-                .collect(),
-        }
-    }
-}
-
-impl TryFrom<ListAttestationSummaryResponse> for MachineAttestationSummaryList {
-    type Error = super::Error;
-    fn try_from(val: ListAttestationSummaryResponse) -> Result<Self, Self::Error> {
-        let mut attestation_summary_list = Vec::<MachineAttestationSummary>::new();
-
-        for pb in val.attestation_outcomes {
-            attestation_summary_list.push(MachineAttestationSummary {
-                machine_id: MachineId::from_str(&pb.machine_id).map_err(|err| {
-                    super::Error::RpcConversion(format!(
-                        "Could not deserialize ListAttestationSummaryResponse(machine_id): {err}"
-                    ))
-                })?,
-                bundle_id: pb.bundle_id,
-                profile_name: pb.profile_name,
-                ts: match pb.ts {
-                    Some(ts) => chrono::DateTime::<Utc>::try_from(ts).map_err(|err| {
-                        super::Error::RpcConversion(format!(
-                            "Could not deserialize ListAttestationSummaryResponse(timestamp): {err}"
-                        ))
-                    })?,
-                    None => chrono::DateTime::<Utc>::default(),
-                },
-            });
-        }
-
-        Ok(Self(attestation_summary_list))
-    }
-}

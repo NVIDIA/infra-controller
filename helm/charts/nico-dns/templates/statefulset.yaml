@@ -32,9 +32,9 @@ spec:
             - -c
             - |
               if [ -x /opt/nico/nico-dns ]; then
-                exec /opt/nico/nico-dns run --nico-url="${NICO_API}" --listen="[::]:53"
+                exec /opt/nico/nico-dns run --nico-url="${NICO_API}" --listen={{ .Values.listenAddress | default "[::]:53" | quote }}
               else
-                exec /opt/carbide/carbide-dns run --carbide-url="${NICO_API}" --listen="[::]:53"
+                exec /opt/carbide/carbide-dns run --carbide-url="${NICO_API}" --listen={{ .Values.listenAddress | default "[::]:53" | quote }}
               fi
           env:
             - name: NICO_API
