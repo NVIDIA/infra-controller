@@ -385,9 +385,6 @@ pub enum CredentialKey {
     NmxM {
         nmxm_id: String,
     },
-    RackFirmware {
-        firmware_id: String,
-    },
     SwitchNvosAdmin {
         bmc_mac_address: MacAddress,
     },
@@ -418,7 +415,6 @@ pub enum CredentialPrefix {
     BmcCredentials,
     ExtensionService,
     NmxM,
-    RackFirmware,
     SwitchNvosAdmin,
     MqttAuth,
     MachineIdentityEncryptionKey,
@@ -440,7 +436,6 @@ impl CredentialPrefix {
             Self::BmcCredentials => "machines/bmc/",
             Self::ExtensionService => "machines/extension-services/",
             Self::NmxM => "nmxm/",
-            Self::RackFirmware => "rack_firmware/",
             Self::SwitchNvosAdmin => "switch_nvos/",
             Self::MqttAuth => "mqtt/",
             Self::MachineIdentityEncryptionKey => "machine_identity/",
@@ -461,7 +456,6 @@ impl CredentialPrefix {
             Self::BmcCredentials,
             Self::ExtensionService,
             Self::NmxM,
-            Self::RackFirmware,
             Self::SwitchNvosAdmin,
             Self::MqttAuth,
             Self::MachineIdentityEncryptionKey,
@@ -485,7 +479,6 @@ impl CredentialKey {
             Self::BmcCredentials { .. } => CredentialPrefix::BmcCredentials,
             Self::ExtensionService { .. } => CredentialPrefix::ExtensionService,
             Self::NmxM { .. } => CredentialPrefix::NmxM,
-            Self::RackFirmware { .. } => CredentialPrefix::RackFirmware,
             Self::SwitchNvosAdmin { .. } => CredentialPrefix::SwitchNvosAdmin,
             Self::MqttAuth { .. } => CredentialPrefix::MqttAuth,
             Self::MachineIdentityEncryptionKey { .. } => {
@@ -564,9 +557,6 @@ impl CredentialKey {
                 "machines/extension-services/{service_id}/versions/{version}/credential"
             )),
             CredentialKey::NmxM { nmxm_id } => Cow::from(format!("nmxm/{nmxm_id}/auth")),
-            CredentialKey::RackFirmware { firmware_id } => {
-                Cow::from(format!("rack_firmware/{firmware_id}/token"))
-            }
             CredentialKey::SwitchNvosAdmin { bmc_mac_address } => {
                 Cow::from(format!("switch_nvos/{bmc_mac_address}/admin"))
             }
@@ -780,12 +770,6 @@ mod tests {
                 "nmxm/",
             ),
             (
-                CredentialKey::RackFirmware {
-                    firmware_id: "fw1".to_string(),
-                },
-                "rack_firmware/",
-            ),
-            (
                 CredentialKey::SwitchNvosAdmin {
                     bmc_mac_address: mac,
                 },
@@ -868,9 +852,6 @@ mod tests {
             CredentialKey::NmxM {
                 nmxm_id: "n".to_string(),
             },
-            CredentialKey::RackFirmware {
-                firmware_id: "f".to_string(),
-            },
             CredentialKey::SwitchNvosAdmin {
                 bmc_mac_address: mac,
             },
@@ -899,6 +880,6 @@ mod tests {
     #[test]
     fn prefix_all_is_complete() {
         let all = CredentialPrefix::all();
-        assert_eq!(all.len(), 15);
+        assert_eq!(all.len(), 14);
     }
 }
