@@ -880,6 +880,12 @@ impl forge_agent_control_response::Action {
     }
 }
 
+impl From<MacAddress> for forge::find_bmc_ips_request::LookupBy {
+    fn from(addr: MacAddress) -> Self {
+        Self::MacAddress(addr.to_string())
+    }
+}
+
 #[cfg(feature = "cli")]
 // This impl allows us to use the RPC RouteServerSourceType type
 // as a first class enum with clap, for the purpose of allowing

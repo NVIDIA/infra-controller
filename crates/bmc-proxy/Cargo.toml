@@ -54,6 +54,7 @@ hyper-timeout = { workspace = true }
 hyper-util = { workspace = true }
 hyper = { workspace = true, features = ["full"] }
 lazy_static = { workspace = true }
+mac_address = { workspace = true }
 opentelemetry = { workspace = true, features = ["logs"] }
 opentelemetry-otlp = { workspace = true, features = ["grpc-tonic"] }
 opentelemetry-prometheus.workspace = true
@@ -74,6 +75,7 @@ tokio-rustls = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-util = { workspace = true }
 tokio = { workspace = true }
+tonic = { workspace = true }
 tower = { workspace = true }
 tower-http = { features = [
     "add-extension",

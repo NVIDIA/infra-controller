@@ -39,9 +39,11 @@ use http::{HeaderMap, Method, Request, Response, StatusCode, Uri};
 use hyper::server::conn::http2;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::service::TowerToHyperService;
+use mac_address::{MacAddress, MacParseError};
 use opentelemetry::KeyValue;
 use opentelemetry::metrics::Meter;
 use rpc::forge;
+use rpc::forge::find_bmc_ips_request::LookupBy;
 use rpc::forge_api_client::ForgeApiClient;
 use rpc::forge_tls_client::{ApiConfig, ForgeClientConfig};
 use tokio::net::TcpListener;
@@ -60,8 +62,8 @@ const MAX_BODY_SIZE: usize = 8 * 1024 * 1024; // 8MiB body size limit (matches n
 
 #[derive(thiserror::Error, Debug)]
 pub enum BmcProxyError {
-    #[error("Error resolving BMC credentials through Carbide API: {0}")]
-    ApiCredentials(String),
+    #[error("Error resolving BMC information through Carbide API: {0}")]
+    Api(String),
     #[error("Invalid configuration: {0}")]
     InvalidConfiguration(String),
     #[error("Internal error proxying request: {0}")]
@@ -86,10 +88,27 @@ struct BmcProxyState {
     api_client: ForgeApiClient,
     credential_cache: CredentialCache,
     client_cache: HttpClientCache,
+    ip_cache: LookupToIpCache,
 }
 
 type CredentialCache = Arc<Mutex<HashMap<IpAddr, BmcCredentials>>>;
 type HttpClientCache = Arc<Mutex<HashMap<IpAddr, reqwest::Client>>>;
+type LookupToIpCache = Arc<Mutex<HashMap<LookupBy, IpAddr>>>;
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum ForwardedTarget<'a> {
+    Ip(IpAddr),
+    Mac(MacAddress),
+    Serial(&'a str),
+}
+
+#[derive(thiserror::Error, Debug)]
+enum ForwardedHeaderParseError {
+    #[error("Invalid IP in Forwarded host header: {0}")]
+    Ip(#[from] AddrParseError),
+    #[error("Invalid MAC address in Forwarded host header: {0}")]
+    Mac(#[from] MacParseError),
+}
 
 impl BmcProxyState {
     fn allows(&self, request: &Request<Body>) -> bool {
@@ -141,8 +160,9 @@ pub async fn start(
     let state = BmcProxyState {
         config,
         api_client,
-        credential_cache: Arc::new(Mutex::new(HashMap::new())),
-        client_cache: Arc::new(Mutex::new(HashMap::new())),
+        credential_cache: Default::default(),
+        client_cache: Default::default(),
+        ip_cache: Default::default(),
         meter,
     };
 
@@ -459,17 +479,39 @@ async fn proxy_request(
         return Ok(error_response((StatusCode::FORBIDDEN, "Forbidden").into()));
     }
     let (parts, body) = request.into_parts();
-    let target_ip = forwarded_host_ip(&parts.headers)
+    let forwarded_target = forwarded_header_value(&parts.headers)
+        .map_err(|e| error_response((StatusCode::BAD_REQUEST, e.to_string()).into()))?
         .ok_or_else(|| {
             error_response(
                 (
                     StatusCode::BAD_REQUEST,
-                    "missing Forwarded host in request header",
+                    "missing Forwarded host/mac/serial in request header",
                 )
                     .into(),
             )
-        })?
-        .map_err(|e| error_response((StatusCode::BAD_REQUEST, e.to_string()).into()))?;
+        })?;
+
+    let target_ip = match ip_for_forwarded_target(&forwarded_target, &state).await {
+        Ok(Some(ip)) => ip,
+        Ok(None) => {
+            return Err(error_response(
+                (
+                    StatusCode::BAD_REQUEST,
+                    "Could not find BMC from forwarded header",
+                )
+                    .into(),
+            ));
+        }
+        Err(e) => {
+            return Err(error_response(
+                (
+                    StatusCode::BAD_GATEWAY,
+                    format!("Failure looking up BMC IP from target: {e}"),
+                )
+                    .into(),
+            ));
+        }
+    };
 
     let path_and_query = parts
         .uri
@@ -530,6 +572,88 @@ async fn proxy_request(
     }
 
     Ok(build_response(status, &headers, body))
+}
+
+async fn ip_for_forwarded_target(
+    forwarded_target: &ForwardedTarget<'_>,
+    state: &BmcProxyState,
+) -> Result<Option<IpAddr>, tonic::Status> {
+    let lookup_by = match forwarded_target {
+        ForwardedTarget::Ip(ip) => {
+            // No need to look up
+            return Ok(Some(*ip));
+        }
+        ForwardedTarget::Mac(mac) => LookupBy::MacAddress(mac.to_string()),
+        ForwardedTarget::Serial(serial) => LookupBy::Serial(serial.to_string()),
+    };
+
+    if let Some(ip) = state.ip_cache.lock().await.get(&lookup_by) {
+        return Ok(Some(*ip));
+    }
+
+    let lookup_by_str = match &lookup_by {
+        LookupBy::Serial(serial) => format!("Serial number {serial}"),
+        LookupBy::MacAddress(mac) => format!("MAC address {mac}"),
+    };
+
+    let ips = state
+        .api_client
+        .find_bmc_ips(forge::FindBmcIpsRequest {
+            lookup_by: Some(lookup_by.clone()),
+        })
+        .await?
+        .bmc_ips
+        .iter()
+        .filter_map(|s| {
+            IpAddr::from_str(s)
+                .inspect_err(|e| tracing::error!("Invalid IP address returned by API: {e}"))
+                .ok()
+        })
+        .collect::<Vec<_>>();
+
+    if ips.is_empty() {
+        return Ok(None);
+    }
+
+    let (v4_ips, v6_ips): (Vec<IpAddr>, Vec<IpAddr>) = ips.into_iter().partition(|ip| ip.is_ipv4());
+
+    let ip = match (v4_ips.len(), v6_ips.len()) {
+        (0, 1..) => {
+            if v6_ips.len() > 1 {
+                tracing::warn!(
+                    "Multiple IPv6 BMC IP's found for {} ({}), using first one",
+                    lookup_by_str,
+                    v6_ips
+                        .iter()
+                        .map(|ip| ip.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                );
+            }
+            v6_ips.into_iter().next()
+        }
+        _ => {
+            // TODO: We may want to be smart about when to pick IPv6 vs IPv4, but for now just pick IPv4
+            // first, in case of broken dual-stack setups.
+            if v4_ips.len() > 1 {
+                tracing::warn!(
+                    "Multiple IPv4 BMC IP's found for {} ({}), using first one",
+                    lookup_by_str,
+                    v4_ips
+                        .iter()
+                        .map(|ip| ip.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                );
+            }
+            v4_ips.into_iter().next()
+        }
+    };
+
+    if let Some(ip) = ip {
+        state.ip_cache.lock().await.insert(lookup_by, ip);
+    }
+    Ok(ip)
 }
 
 async fn authorize_proxy_request(
@@ -618,7 +742,9 @@ fn is_hop_by_hop_header(name: &str) -> bool {
     )
 }
 
-fn forwarded_host_ip(headers: &HeaderMap) -> Option<Result<IpAddr, AddrParseError>> {
+fn forwarded_header_value(
+    headers: &HeaderMap,
+) -> Result<Option<ForwardedTarget<'_>>, ForwardedHeaderParseError> {
     let values = headers.get_all("forwarded");
     for raw_value in values {
         let Ok(raw_value) = raw_value.to_str() else {
@@ -629,36 +755,41 @@ fn forwarded_host_ip(headers: &HeaderMap) -> Option<Result<IpAddr, AddrParseErro
                 let Some((key, value)) = pair.trim().split_once('=') else {
                     continue;
                 };
-                if !key.trim().eq_ignore_ascii_case("host") {
-                    continue;
+                let key = key.trim();
+                if key.eq_ignore_ascii_case("host") {
+                    return Ok(Some(ForwardedTarget::Ip(parse_forwarded_host_value(
+                        value.trim(),
+                    )?)));
+                } else if key.eq_ignore_ascii_case("mac") {
+                    return Ok(Some(ForwardedTarget::Mac(MacAddress::from_str(
+                        value.trim(),
+                    )?)));
+                } else if key.eq_ignore_ascii_case("serial") {
+                    return Ok(Some(ForwardedTarget::Serial(value.trim())));
                 }
-                return parse_forwarded_host_value(value.trim());
             }
         }
     }
-    None
+    Ok(None)
 }
 
-fn parse_forwarded_host_value(value: &str) -> Option<Result<IpAddr, AddrParseError>> {
+fn parse_forwarded_host_value(value: &str) -> Result<IpAddr, AddrParseError> {
     let value = value.trim_matches('"');
 
-    if let Ok(ip) = IpAddr::from_str(value) {
-        return Some(Ok(ip));
+    let result = IpAddr::from_str(value);
+    if let Ok(ip) = result {
+        return Ok(ip);
     }
 
+    // If it failed to parse, maybe it's a bracked ipv6 address, support that
     if let Some(rest) = value.strip_prefix('[')
         && let Some((host, _)) = rest.split_once(']')
     {
-        return Some(IpAddr::from_str(host));
+        IpAddr::from_str(host)
+    } else {
+        // Nope, just return the failure
+        result
     }
-
-    if let Some((host, _port)) = value.rsplit_once(':')
-        && let Ok(ip) = IpAddr::from_str(host)
-    {
-        return Some(Ok(ip));
-    }
-
-    None
 }
 
 fn error_response(error: ProxyError) -> Response<Body> {
@@ -728,7 +859,7 @@ impl TryFrom<forge::BmcCredentials> for BmcCredentials {
             Some(forge::bmc_credentials::Type::SessionToken(value)) => {
                 Ok(Self::SessionToken { token: value.token })
             }
-            None => Err(BmcProxyError::ApiCredentials(
+            None => Err(BmcProxyError::Api(
                 "missing credential type in API response".to_string(),
             )),
         }
@@ -755,7 +886,7 @@ async fn create_client(
     let mut header_map = HeaderMap::new();
     if add_custom_header {
         header_map.insert("forwarded", format!("host={ip}").parse().unwrap());
-    };
+    }
     let http_client = get_http_client(ip, client_cache).await?;
 
     let credentials = get_bmc_credentials(ip, api_client, credential_cache).await?;
@@ -798,7 +929,7 @@ async fn get_bmc_credentials(
             bmc_ip: ip.to_string(),
         })
         .await
-        .map_err(|e| BmcProxyError::ApiCredentials(e.to_string()))?
+        .map_err(|e| BmcProxyError::Api(e.to_string()))?
         .mac_address;
 
     let credentials: BmcCredentials = api_client
@@ -806,7 +937,7 @@ async fn get_bmc_credentials(
             mac_addr: bmc_mac_address,
         })
         .await
-        .map_err(|e| BmcProxyError::ApiCredentials(e.to_string()))?
+        .map_err(|e| BmcProxyError::Api(e.to_string()))?
         .credentials
         .ok_or(BmcProxyError::NoCredentials(ip))?
         .try_into()?;
@@ -862,17 +993,49 @@ mod tests {
     use std::sync::Arc;
 
     use axum::http::{HeaderMap, HeaderName, HeaderValue};
+    use mac_address::MacAddress;
+    use opentelemetry::global;
+    use rpc::forge::find_bmc_ips_request::LookupBy;
+    use rpc::forge_api_client::ForgeApiClient;
+    use rpc::forge_tls_client::{ApiConfig, ForgeClientConfig};
     use tokio::sync::Mutex;
 
     use super::{
-        BmcCredentials, CredentialCache, evict_cached_credentials, forwarded_host_ip,
-        parse_forwarded_host_value,
+        BmcCredentials, BmcProxyState, CredentialCache, ForwardedTarget, evict_cached_credentials,
+        forwarded_header_value, ip_for_forwarded_target, parse_forwarded_host_value,
     };
+
+    fn test_state_with_ip_cache(ip_cache: HashMap<LookupBy, IpAddr>) -> BmcProxyState {
+        let client_config = ForgeClientConfig::default();
+        let api_config = ApiConfig::new("https://example.com", &client_config);
+
+        BmcProxyState {
+            config: Arc::new(
+                crate::Config::parse(
+                    r#"
+                        [tls]
+                        identity_pemfile_path = ""
+                        identity_keyfile_path = ""
+                        root_cafile_path = ""
+                        admin_root_cafile_path = ""
+
+                        [auth]
+                    "#,
+                )
+                .expect("test config should parse"),
+            ),
+            meter: global::meter("carbide-bmc-proxy-test"),
+            api_client: ForgeApiClient::new(&api_config),
+            credential_cache: Default::default(),
+            client_cache: Default::default(),
+            ip_cache: Arc::new(Mutex::new(ip_cache)),
+        }
+    }
 
     #[test]
     fn parses_forwarded_ipv4() {
         assert_eq!(
-            parse_forwarded_host_value("10.0.0.5").unwrap().unwrap(),
+            parse_forwarded_host_value("10.0.0.5").unwrap(),
             IpAddr::V4(Ipv4Addr::new(10, 0, 0, 5))
         );
     }
@@ -880,9 +1043,7 @@ mod tests {
     #[test]
     fn parses_forwarded_ipv6_with_port() {
         assert_eq!(
-            parse_forwarded_host_value("\"[2001:db8::1]:443\"")
-                .unwrap()
-                .unwrap(),
+            parse_forwarded_host_value("\"[2001:db8::1]:443\"").unwrap(),
             IpAddr::V6(Ipv6Addr::from_str("2001:db8::1").unwrap())
         );
     }
@@ -895,8 +1056,93 @@ mod tests {
             HeaderValue::from_static("proto=https;host=10.1.2.3;for=10.0.0.1"),
         );
         assert_eq!(
-            forwarded_host_ip(&headers).unwrap().unwrap(),
-            IpAddr::V4(Ipv4Addr::new(10, 1, 2, 3))
+            forwarded_header_value(&headers).unwrap().unwrap(),
+            ForwardedTarget::Ip(IpAddr::V4(Ipv4Addr::new(10, 1, 2, 3))),
+        );
+    }
+
+    #[test]
+    fn finds_forwarded_mac_target() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HeaderName::from_static("forwarded"),
+            HeaderValue::from_static("proto=https;mac=00:11:22:33:44:55;for=10.0.0.1"),
+        );
+
+        assert_eq!(
+            forwarded_header_value(&headers).unwrap().unwrap(),
+            ForwardedTarget::Mac(MacAddress::from_str("00:11:22:33:44:55").unwrap()),
+        );
+    }
+
+    #[test]
+    fn finds_forwarded_serial_target() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HeaderName::from_static("forwarded"),
+            HeaderValue::from_static("proto=https; serial = DGX-A100-0001 ; for=10.0.0.1"),
+        );
+
+        assert_eq!(
+            forwarded_header_value(&headers).unwrap().unwrap(),
+            ForwardedTarget::Serial("DGX-A100-0001"),
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_forwarded_mac_target() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HeaderName::from_static("forwarded"),
+            HeaderValue::from_static("mac=not-a-mac-address"),
+        );
+
+        assert!(matches!(
+            forwarded_header_value(&headers),
+            Err(super::ForwardedHeaderParseError::Mac(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn forwarded_ip_target_resolves_without_lookup() {
+        let ip = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 5));
+        let state = test_state_with_ip_cache(HashMap::new());
+
+        assert_eq!(
+            ip_for_forwarded_target(&ForwardedTarget::Ip(ip), &state)
+                .await
+                .unwrap(),
+            Some(ip)
+        );
+    }
+
+    #[tokio::test]
+    async fn forwarded_mac_target_resolves_from_ip_cache() {
+        let mac = MacAddress::from_str("00:11:22:33:44:55").unwrap();
+        let ip = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 5));
+        let state =
+            test_state_with_ip_cache(HashMap::from([(LookupBy::MacAddress(mac.to_string()), ip)]));
+
+        assert_eq!(
+            ip_for_forwarded_target(&ForwardedTarget::Mac(mac), &state)
+                .await
+                .unwrap(),
+            Some(ip)
+        );
+    }
+
+    #[tokio::test]
+    async fn forwarded_serial_target_resolves_from_ip_cache() {
+        let serial = "DGX-A100-0001";
+        let ip = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 5));
+        let state =
+            test_state_with_ip_cache(HashMap::from([(LookupBy::Serial(serial.to_string()), ip)]));
+
+        assert_eq!(
+            ip_for_forwarded_target(&ForwardedTarget::Serial(serial), &state)
+                .await
+                .unwrap(),
+            Some(ip)
         );
     }
 
