@@ -315,10 +315,24 @@ carbide-admin-cli -c <core-api-url> host reprovision mark-manual-upgrade-complet
 ### OEM Platforms
 
 For OEM platforms, consult the OEM support site for the exact platform and
-firmware package before starting work. SMC/Supermicro is one example of this
-path. NICo can still schedule, track, or hand off the update when the site has
-integrated an approved script or manual workflow. Treat the OEM procedure as
-the authority for vendor-specific prerequisites, activation steps, and recovery.
+firmware package before starting work. The OEM support site is the final
+authority for vendor-specific prerequisites, package selection, activation
+steps, and recovery.
+
+SMC/Supermicro is one example of this path. NICo can use the Redfish firmware
+workflow when firmware metadata identifies the target component and package.
+The Supermicro Redfish implementation supports:
+
+| Component or action | NICo behavior |
+|---|---|
+| Lockdown state | Reads and updates the Supermicro `SysLockdown` setting before firmware work when required. |
+| BMC firmware | Uses Redfish multipart upload with the BMC target and Supermicro OEM preserve/backup settings. |
+| BIOS or UEFI firmware | Uses Redfish multipart upload with the BIOS target and Supermicro OEM preserve settings. |
+| CPLD firmware | Supports Supermicro motherboard and backplane CPLD Redfish inventory targets. |
+
+NICo can schedule, track, or hand off the update when the site has integrated
+an approved firmware package or script. Use the OEM procedure to confirm the
+exact package, update order, activation requirements, and recovery steps.
 
 ## Rack and Component Firmware
 
