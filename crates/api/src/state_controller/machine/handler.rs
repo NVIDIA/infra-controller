@@ -32,6 +32,7 @@ use carbide_redfish::libredfish::conv::{
     IntoLibredfish, IntoModel, machine_last_reboot_requested_mode,
 };
 use carbide_uuid::machine::MachineId;
+use carbide_uuid::vpc::VpcId;
 use chrono::{DateTime, Duration, Utc};
 use config_version::{ConfigVersion, Versioned};
 use db::DatabaseError;
@@ -6478,6 +6479,13 @@ async fn handle_instance_network_config_update_request(
                 .collect_vec();
 
             if !resources_to_be_released.is_empty() {
+                // Resolve VPC membership before old VPC-prefix segments are marked deleted.
+                let old_vpc_ids =
+                    vpc_ids_for_interfaces(&update_request.old_config.interfaces, &mut txn).await?;
+                let new_vpc_ids =
+                    vpc_ids_for_interfaces(&update_request.new_config.interfaces, &mut txn).await?;
+                let released_vpc_ids = old_vpc_ids.difference(&new_vpc_ids).copied().collect_vec();
+
                 let addresses = resources_to_be_released
                     .iter()
                     .flat_map(|x| x.ip_addrs.values().copied().collect_vec())
@@ -6491,14 +6499,13 @@ async fn handle_instance_network_config_update_request(
                 db::instance_address::delete_addresses(&mut txn, &addresses).await?;
                 release_network_segments_with_vpc_prefix(&resources_to_be_released, &mut txn)
                     .await?;
-
-                // TODO: This is not the best way, but will work fine. If you delete all loopback IPs
-                // associated with all DPUs, dpu_agent will assign new IPs during next managed_host_network_config
-                // iteration.
-                // The best way would be to find out the VPCs per DPU which are not used in new config
-                // and delete them only. This can be taken care once multi-dpu instance allocation is
-                // completed.
-                release_vpc_dpu_loopback(mh_snapshot, common_pools.as_deref(), &mut txn).await?;
+                release_vpc_dpu_loopback_for_vpcs(
+                    mh_snapshot,
+                    common_pools.as_deref(),
+                    &mut txn,
+                    &released_vpc_ids,
+                )
+                .await?;
             }
             db::instance::delete_update_network_config_request(&instance.id, &mut txn).await?;
             let next_state = ManagedHostState::Assigned {
@@ -6678,6 +6685,67 @@ pub async fn release_vpc_dpu_loopback(
     }
 
     Ok(())
+}
+
+/// Releases VPC DPU loopbacks for selected VPCs on every DPU in the managed host.
+async fn release_vpc_dpu_loopback_for_vpcs(
+    mh_snapshot: &ManagedHostStateSnapshot,
+    common_pools: Option<&CommonPools>,
+    txn: &mut PgConnection,
+    vpc_ids: &[VpcId],
+) -> Result<(), StateHandlerError> {
+    let Some(common_pools) = common_pools else {
+        return Ok(());
+    };
+
+    if vpc_ids.is_empty() {
+        return Ok(());
+    }
+
+    // Release the removed VPC loopbacks from every DPU that may have rendered them.
+    for dpu_snapshot in &mh_snapshot.dpu_snapshots {
+        db::vpc_dpu_loopback::delete_and_deallocate_for_vpcs(
+            common_pools,
+            &dpu_snapshot.id,
+            vpc_ids,
+            txn,
+        )
+        .await
+        .map_err(|e| StateHandlerError::ResourceCleanupError {
+            resource: "VpcLoopbackIp",
+            error: e.to_string(),
+        })?;
+    }
+
+    Ok(())
+}
+
+/// Returns the VPC IDs referenced by the assigned network segments on these interfaces.
+async fn vpc_ids_for_interfaces(
+    interfaces: &[InstanceInterfaceConfig],
+    txn: &mut PgConnection,
+) -> Result<HashSet<VpcId>, StateHandlerError> {
+    let segment_ids = interfaces
+        .iter()
+        .filter_map(|iface| iface.network_segment_id)
+        .collect_vec();
+
+    if segment_ids.is_empty() {
+        return Ok(HashSet::new());
+    }
+
+    // Load segment metadata so VPC-prefix and direct segment interfaces share one path.
+    let segments = db::network_segment::find_by(
+        txn,
+        db::ObjectColumnFilter::List(db::network_segment::IdColumn, &segment_ids),
+        model::network_segment::NetworkSegmentSearchConfig::default(),
+    )
+    .await?;
+
+    Ok(segments
+        .into_iter()
+        .filter_map(|segment| segment.config.vpc_id)
+        .collect())
 }
 
 async fn release_network_segments_with_vpc_prefix(
