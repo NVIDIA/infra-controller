@@ -127,6 +127,8 @@ pub fn build(conf: NvueConfig) -> eyre::Result<String> {
     // and make a later transition easier.
     let routing_profile = conf.ct_routing_profile.as_ref().map(|rt| {
         let (v4leaks, v6leaks) = split_prefixes_by_family(&rt.accepted_leaks_from_underlay, 1);
+        let (v4allowed_anycast, v6allowed_anycast) =
+            split_prefixes_by_family(&rt.allowed_anycast_prefixes, 1);
 
         TmplRoutingProfile {
             TenantLeakCommunitiesAccepted: rt.tenant_leak_communities_accepted,
@@ -134,6 +136,8 @@ pub fn build(conf: NvueConfig) -> eyre::Result<String> {
             LeakTenantHostRoutesToUnderlay: rt.leak_tenant_host_routes_to_underlay,
             AcceptedLeaksFromUnderlayIpv4: v4leaks,
             AcceptedLeaksFromUnderlayIpv6: v6leaks,
+            AllowedAnycastPrefixesIpv4: v4allowed_anycast,
+            AllowedAnycastPrefixesIpv6: v6allowed_anycast,
             RouteTargetImports: rt
                 .route_target_imports
                 .iter()
@@ -346,6 +350,14 @@ pub fn build(conf: NvueConfig) -> eyre::Result<String> {
                     .iter()
                     .map(|vni| TmplVni { Vni: *vni })
                     .collect(),
+                HasAllowedAnycastPrefixesIpv4: routing_profile
+                    .as_ref()
+                    .map(|p| !p.AllowedAnycastPrefixesIpv4.is_empty())
+                    .unwrap_or_default(),
+                HasAllowedAnycastPrefixesIpv6: routing_profile
+                    .as_ref()
+                    .map(|p| !p.AllowedAnycastPrefixesIpv6.is_empty())
+                    .unwrap_or_default(),
                 RoutingProfile: routing_profile.clone(),
                 PortPrefixes: port.VpcPrefixes.clone(),
                 PortPrefixesIpv6: port.VpcPrefixesIpv6.clone(),
@@ -1008,6 +1020,8 @@ pub struct RoutingProfile {
     pub route_targets_on_exports: Vec<RouteTargetConfig>,
     pub tenant_leak_communities_accepted: bool,
     pub accepted_leaks_from_underlay: Vec<String>,
+    #[serde(default)]
+    pub allowed_anycast_prefixes: Vec<String>,
 }
 
 #[derive(Clone, Deserialize, Debug)]
@@ -1297,6 +1311,8 @@ struct TmplRoutingProfile {
     TenantLeakCommunitiesAccepted: bool,
     AcceptedLeaksFromUnderlayIpv4: Vec<Prefix>,
     AcceptedLeaksFromUnderlayIpv6: Vec<Prefix>,
+    AllowedAnycastPrefixesIpv4: Vec<Prefix>,
+    AllowedAnycastPrefixesIpv6: Vec<Prefix>,
 }
 
 #[allow(non_snake_case)]
@@ -1407,6 +1423,9 @@ struct TmplVpc {
     HasVpcPeerVnis: bool,
     VpcPeerVnis: Vec<TmplVni>,
 
+    HasAllowedAnycastPrefixesIpv4: bool,
+    HasAllowedAnycastPrefixesIpv6: bool,
+
     RoutingProfile: Option<TmplRoutingProfile>,
 }
 
@@ -1418,7 +1437,7 @@ struct TmplHostInterfaces {
     /// IPv6 host address (if dual-stack).
     HostIPv6: Option<String>,
 
-    // HostRoute in the context of FNN-L3 is the /30 prefix allocation.
+    // HostRoute in the context of FNN-L3 is the /31 prefix allocation.
     // This used to be populated as the HostIP + "/32", but then with
     // the advent of interface prefix allocations (where ETV is just a /32,
     // and FNN-L3 is a /31), HostRoute became the allocation (which was
@@ -1717,6 +1736,7 @@ mod tests {
             route_target_imports: vec![],
             route_targets_on_exports: vec![],
             accepted_leaks_from_underlay: vec![],
+            allowed_anycast_prefixes: vec![],
         });
         conf.ct_port_configs = vec![PortConfig {
             interface_name: "pf0vf0_if".into(),
@@ -1798,6 +1818,7 @@ mod tests {
             route_target_imports: vec![],
             route_targets_on_exports: vec![],
             accepted_leaks_from_underlay: vec![],
+            allowed_anycast_prefixes: vec![],
         });
         conf.ct_port_configs = vec![PortConfig {
             interface_name: "pf0vf0_if".into(),
@@ -1882,6 +1903,7 @@ mod tests {
             route_target_imports: vec![],
             route_targets_on_exports: vec![],
             accepted_leaks_from_underlay: vec![],
+            allowed_anycast_prefixes: vec![],
         });
         conf.ct_port_configs = vec![
             PortConfig {
@@ -1953,6 +1975,7 @@ mod tests {
             route_target_imports: vec![],
             route_targets_on_exports: vec![],
             accepted_leaks_from_underlay: vec![],
+            allowed_anycast_prefixes: vec![],
         });
         conf.ct_port_configs = vec![PortConfig {
             interface_name: "pf0vf0_if".into(),
@@ -2115,6 +2138,7 @@ mod tests {
             route_target_imports: vec![],
             route_targets_on_exports: vec![],
             accepted_leaks_from_underlay: vec![],
+            allowed_anycast_prefixes: vec![],
         }
     }
 

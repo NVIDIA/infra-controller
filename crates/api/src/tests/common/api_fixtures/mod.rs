@@ -302,6 +302,7 @@ impl TestEnvOverrides {
                             leak_tenant_host_routes_to_underlay: false,
                             tenant_leak_communities_accepted: false,
                             accepted_leaks_from_underlay: vec![],
+                            allowed_anycast_prefixes: vec![],
                         },
                     ),
                     (
@@ -315,6 +316,7 @@ impl TestEnvOverrides {
                             leak_tenant_host_routes_to_underlay: false,
                             tenant_leak_communities_accepted: false,
                             accepted_leaks_from_underlay: vec![],
+                            allowed_anycast_prefixes: vec![],
                         },
                     ),
                 ]),
@@ -1277,6 +1279,7 @@ pub fn get_config() -> CarbideConfig {
             secondary_overlay_support: true,
             bridging: None,
             public_prefixes: vec![],
+            secondary_vtep_aggregate_prefixes: vec![],
         }),
         mlxconfig_profiles: None,
         rack_management_enabled: false,

@@ -2717,7 +2717,7 @@ async fn test_manual_firmware_upgrade_workflow(pool: sqlx::PgPool) -> CarbideRes
 }
 
 #[crate::sqlx_test]
-async fn test_forge_agent_control_waiting_for_scout_upgrade_returns_typed_and_legacy_task(
+async fn test_forge_agent_control_waiting_for_scout_upgrade_returns_task_without_cleanup_timestamp(
     pool: sqlx::PgPool,
 ) -> CarbideResult<()> {
     let env = create_test_env(pool).await;
@@ -2756,6 +2756,14 @@ async fn test_forge_agent_control_waiting_for_scout_upgrade_returns_typed_and_le
         retry_count: 0,
     };
     db::machine::advance(&host, &mut txn, &waiting_state, None).await?;
+    db::machine::clear_cleanup_time(&mh.host().id, &mut txn)
+        .await
+        .unwrap();
+    txn.commit().await.unwrap();
+
+    let mut txn = env.pool.begin().await.unwrap();
+    let host = mh.host().db_machine(&mut txn).await;
+    assert!(host.last_cleanup_time.is_none());
     txn.commit().await.unwrap();
 
     let response = env

@@ -23,6 +23,7 @@ use std::io::BufReader;
 
 use ::rpc::admin_cli::{ToTable, set_summary};
 use ::rpc::protos::measured_boot::ImportSiteMeasurementsRequest;
+use measured_boot::FromGrpcOpt;
 use measured_boot::records::{MeasurementApprovedMachineRecord, MeasurementApprovedProfileRecord};
 use measured_boot::site::{ImportResult, SiteModel};
 use serde::Serialize;
@@ -138,10 +139,7 @@ pub async fn import(grpc_conn: &ApiClient, import: Import) -> CarbideCliResult<I
 
     // Request.
     let request = ImportSiteMeasurementsRequest {
-        model: Some(
-            SiteModel::to_pb(&site_model)
-                .map_err(|e| crate::CarbideCliError::GenericError(e.to_string()))?,
-        ),
+        model: Some(site_model.into()),
     };
 
     // Response + process and return.
@@ -160,7 +158,7 @@ pub async fn export(grpc_conn: &ApiClient, _export: Export) -> CarbideCliResult<
 
     let response = grpc_conn.0.export_site_measurements().await?;
 
-    SiteModel::from_grpc(response.model.as_ref())
+    SiteModel::from_grpc_opt(response.model)
         .map_err(|e| crate::CarbideCliError::GenericError(e.to_string()))
 }
 
@@ -171,7 +169,7 @@ pub async fn approve_machine(
 ) -> CarbideCliResult<MeasurementApprovedMachineRecord> {
     let response = grpc_conn.0.add_measurement_trusted_machine(approve).await?;
 
-    MeasurementApprovedMachineRecord::from_grpc(response.approval_record.as_ref())
+    MeasurementApprovedMachineRecord::from_grpc_opt(response.approval_record)
         .map_err(|e| crate::CarbideCliError::GenericError(e.to_string()))
 }
 
@@ -186,7 +184,7 @@ pub async fn remove_machine_by_approval_id(
         .remove_measurement_trusted_machine(by_approval_id)
         .await?;
 
-    MeasurementApprovedMachineRecord::from_grpc(response.approval_record.as_ref())
+    MeasurementApprovedMachineRecord::from_grpc_opt(response.approval_record)
         .map_err(|e| crate::CarbideCliError::GenericError(e.to_string()))
 }
 
@@ -201,7 +199,7 @@ pub async fn remove_machine_by_machine_id(
         .remove_measurement_trusted_machine(by_machine_id)
         .await?;
 
-    MeasurementApprovedMachineRecord::from_grpc(response.approval_record.as_ref())
+    MeasurementApprovedMachineRecord::from_grpc_opt(response.approval_record)
         .map_err(|e| crate::CarbideCliError::GenericError(e.to_string()))
 }
 
@@ -231,7 +229,7 @@ pub async fn approve_profile(
 ) -> CarbideCliResult<MeasurementApprovedProfileRecord> {
     let response = grpc_conn.0.add_measurement_trusted_profile(approve).await?;
 
-    MeasurementApprovedProfileRecord::from_grpc(response.approval_record.as_ref())
+    MeasurementApprovedProfileRecord::from_grpc_opt(response.approval_record)
         .map_err(|e| crate::CarbideCliError::GenericError(e.to_string()))
 }
 
@@ -246,7 +244,7 @@ pub async fn remove_profile_by_approval_id(
         .remove_measurement_trusted_profile(by_approval_id)
         .await?;
 
-    MeasurementApprovedProfileRecord::from_grpc(response.approval_record.as_ref())
+    MeasurementApprovedProfileRecord::from_grpc_opt(response.approval_record)
         .map_err(|e| crate::CarbideCliError::GenericError(e.to_string()))
 }
 
@@ -261,7 +259,7 @@ pub async fn remove_profile_by_profile_id(
         .remove_measurement_trusted_profile(by_profile_id)
         .await?;
 
-    MeasurementApprovedProfileRecord::from_grpc(response.approval_record.as_ref())
+    MeasurementApprovedProfileRecord::from_grpc_opt(response.approval_record)
         .map_err(|e| crate::CarbideCliError::GenericError(e.to_string()))
 }
 

@@ -18,6 +18,7 @@
 use carbide_uuid::dpu_remediations::RemediationId;
 use carbide_uuid::instance::InstanceId;
 use carbide_uuid::machine::{MachineId, MachineIdParseError};
+use carbide_uuid::switch::{SwitchId, SwitchIdParseError};
 use rpc::forge::MachineType;
 use rpc::forge_tls_client::ForgeTlsClientError;
 
@@ -68,11 +69,14 @@ pub enum CarbideCliError {
     #[error("Error while handling csv: {0}")]
     CsvError(#[from] csv::Error),
 
-    #[error("Unexpected machine type.  expected {0:?} but found {1:?}")]
+    #[error("Unexpected machine type. Expected {0:?} but found {1:?}")]
     UnexpectedMachineType(MachineType, MachineType),
 
-    #[error("Host machine with id {0} not found")]
+    #[error("Machine with id {0} not found")]
     MachineNotFound(MachineId),
+
+    #[error("Switch with id {0} not found")]
+    SwitchNotFound(SwitchId),
 
     #[error("Remediation with id {0} not found")]
     RemediationNotFound(RemediationId),
@@ -94,8 +98,11 @@ pub enum CarbideCliError {
     #[error("Not Implemented {0}")]
     NotImplemented(String),
 
-    #[error("Invalid Machine ID: {0}")]
+    #[error("Invalid Machine id: {0}")]
     InvalidMachineId(#[from] MachineIdParseError),
+
+    #[error("Invalid Switch id: {0}")]
+    InvalidSwitchId(#[from] SwitchIdParseError),
 
     #[error("RPC data conversion error: {0}")]
     RpcDataConversionError(#[from] ::rpc::errors::RpcDataConversionError),

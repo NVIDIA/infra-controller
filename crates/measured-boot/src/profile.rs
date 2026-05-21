@@ -30,6 +30,7 @@ use rpc::protos::measured_boot::MeasurementSystemProfilePb;
 use serde::Serialize;
 
 use super::records::MeasurementSystemProfileAttrRecord;
+use crate::{FromGrpc, FromGrpcOpt};
 
 /// MeasurementSystemProfile is a composition of a MeasurementSystemProfileRecord,
 /// whose attributes are essentially copied directly it, as well as
@@ -46,24 +47,15 @@ pub struct MeasurementSystemProfile {
     pub attrs: Vec<MeasurementSystemProfileAttrRecord>,
 }
 
-impl MeasurementSystemProfile {
-    ////////////////////////////////////////////////////////////
-    /// from_grpc takes an optional protobuf (as populated in a
-    /// proto response from the API) and attempts to convert it
-    /// to the backing model.
-    ////////////////////////////////////////////////////////////
-    pub fn from_grpc(some_pb: Option<&MeasurementSystemProfilePb>) -> super::Result<Self> {
-        some_pb
-            .ok_or(super::Error::RpcConversion(
-                "profile is unexpectedly empty".to_string(),
-            ))
-            .and_then(|pb| {
-                Self::try_from(pb.clone()).map_err(|e| {
-                    super::Error::RpcConversion(format!("profile failed pb->model conversion: {e}"))
-                })
-            })
+impl crate::DisplayName for MeasurementSystemProfile {
+    fn display_name() -> &'static str {
+        "profile"
     }
 }
+
+impl FromGrpc<MeasurementSystemProfilePb> for MeasurementSystemProfile {}
+
+impl FromGrpcOpt<MeasurementSystemProfilePb> for MeasurementSystemProfile {}
 
 impl From<MeasurementSystemProfile> for MeasurementSystemProfilePb {
     fn from(val: MeasurementSystemProfile) -> Self {

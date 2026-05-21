@@ -24,7 +24,9 @@ use common::api_fixtures::{
 use db::{self};
 use futures_util::FutureExt;
 use mac_address::MacAddress;
-use model::machine::{DpuInitState, HostReprovisionState, MachineState, ManagedHostState};
+use model::machine::{
+    CleanupContext, DpuInitState, HostReprovisionState, MachineState, ManagedHostState,
+};
 use rpc::forge::CloudInitInstructionsRequest;
 use rpc::forge::forge_server::Forge;
 
@@ -362,6 +364,7 @@ async fn test_pxe_host(pool: sqlx::PgPool) {
         host_id,
         &ManagedHostState::WaitingForCleanup {
             cleanup_state: model::machine::CleanupState::Init,
+            cleanup_context: CleanupContext::Deprovision,
         },
         &env.pool,
     )

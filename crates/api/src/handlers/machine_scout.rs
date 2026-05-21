@@ -18,9 +18,9 @@ use ::rpc::forge::ForgeAgentControlResponse;
 use ::rpc::{forge as rpc, forge_agent_control_response as fac};
 use model::machine::machine_search_config::MachineSearchConfig;
 use model::machine::{
-    BomValidating, CleanupState, FailureCause, FailureDetails, FailureSource, HostReprovisionState,
-    InstanceState, MachineState, MachineValidatingState, ManagedHostState, MeasuringState,
-    ValidationState,
+    BomValidating, CleanupContext, CleanupState, FailureCause, FailureDetails, FailureSource,
+    HostReprovisionState, InstanceState, MachineState, MachineValidatingState, ManagedHostState,
+    MeasuringState, StateMachineArea, ValidationState,
 };
 use model::machine_validation::{MachineValidationState, MachineValidationStatus};
 use model::rpc_conv::machine::get_action_for_dpu_state;
@@ -32,8 +32,8 @@ use crate::api::{Api, log_request_data};
 use crate::compat::BuildAndFillLegacyFields;
 use crate::handlers::utils::convert_and_log_machine_id;
 
-// Transitions the machine to Ready state.
-// Called by 'forge-scout discovery' once cleanup succeeds.
+// Records Scout cleanup success/failure and wakes the host state controller.
+// The state controller decides whether cleanup returns to discovery or deprovision flow.
 pub(crate) async fn cleanup_machine_completed(
     api: &Api,
     request: Request<rpc::MachineCleanupInfo>,
@@ -70,13 +70,31 @@ pub(crate) async fn cleanup_machine_completed(
             error = %err,
             "Storage cleanup failed"
         );
+        let failure_source = match machine.current_state() {
+            ManagedHostState::WaitingForCleanup {
+                cleanup_context: CleanupContext::InitialDiscovery,
+                ..
+            } => FailureSource::StateMachineArea(StateMachineArea::HostInit),
+            // Preserve the original HostInit context across cleanup retries so recovery returns to
+            // HostInit/WaitingForDiscovery instead of the deprovision cleanup flow.
+            ManagedHostState::Failed {
+                details:
+                    FailureDetails {
+                        cause: FailureCause::NVMECleanFailed { .. },
+                        source: FailureSource::StateMachineArea(StateMachineArea::HostInit),
+                        ..
+                    },
+                ..
+            } => FailureSource::StateMachineArea(StateMachineArea::HostInit),
+            _ => FailureSource::Scout,
+        };
         db::machine::update_failure_details(
             &machine,
             &mut txn,
             FailureDetails {
                 cause: FailureCause::NVMECleanFailed { err },
                 failed_at: chrono::Utc::now(),
-                source: FailureSource::Scout,
+                source: failure_source,
             },
         )
         .await?;
@@ -222,8 +240,15 @@ pub(crate) async fn forge_agent_control(
             }
             ManagedHostState::HostInit {
                 machine_state: MachineState::WaitingForDiscovery,
+            } => {
+                if host_machine.last_cleanup_time.is_some() {
+                    (Action::discovery(), Some(txn))
+                } else {
+                    tracing::info!("Waiting for initial storage cleanup before host discovery");
+                    (Action::retry(), Some(txn))
+                }
             }
-            | ManagedHostState::Failed {
+            ManagedHostState::Failed {
                 details:
                     FailureDetails {
                         cause: FailureCause::Discovery { .. },
@@ -241,6 +266,7 @@ pub(crate) async fn forge_agent_control(
             } => (Action::measure(), Some(txn)),
             ManagedHostState::WaitingForCleanup {
                 cleanup_state: CleanupState::HostCleanup { .. },
+                ..
             }
             | ManagedHostState::Failed {
                 details:

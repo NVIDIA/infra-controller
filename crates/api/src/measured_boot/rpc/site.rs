@@ -62,8 +62,8 @@ pub async fn handle_import_site_measurements(
 
     // Convert the site model from the SiteModelPb (and
     // make sure its good).
-    let site_model = match &req.model {
-        Some(site_model_pb) => SiteModel::from_pb(site_model_pb).map_err(|e| {
+    let site_model = match req.model {
+        Some(site_model_pb) => SiteModel::try_from(site_model_pb).map_err(|e| {
             CarbideError::InvalidArgument(format!("input site model failed translation: {e}"))
         })?,
         None => {
@@ -100,11 +100,7 @@ pub async fn handle_export_site_measurements(
         })?;
 
     Ok(ExportSiteMeasurementsResponse {
-        model: Some(
-            SiteModel::to_pb(&site_model).map_err(|e| CarbideError::Internal {
-                message: format!("model to pb failed: {e}"),
-            })?,
-        ),
+        model: Some(site_model.into()),
     })
 }
 
@@ -295,5 +291,7 @@ pub async fn handle_list_attestation_summary(
             message: format!("failed to fetch attestation summary: {e}"),
         })?;
 
-    Ok(MachineAttestationSummaryList::to_grpc(&attestation_summary))
+    Ok(ListAttestationSummaryResponse::from(
+        MachineAttestationSummaryList(attestation_summary),
+    ))
 }

@@ -316,6 +316,12 @@ impl HardwareInfo {
             .as_ref()
             .is_some_and(|dmi| dmi.product_name.contains("GB200")) // TODO: for now just do GB200
     }
+
+    pub fn is_dgx_h100(&self) -> bool {
+        self.dmi_data
+            .as_ref()
+            .is_some_and(|dmi| dmi.sys_vendor == "NVIDIA" && dmi.product_name == "DGXH100")
+    }
 }
 
 #[derive(Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize)]

@@ -13,6 +13,7 @@
 ##     - Enable Kubernetes auth, bind cert-manager SA
 ##     - Create cert-manager-nico-policy + nico-vault-policy
 ##     - Enable KV v2 at secrets/
+##     - Seed factory-default KV entries (machines/all_dpus/...)
 ##     - Enable AppRole, create nico role
 ##
 ## Token read from vaultroottoken K8s secret (written by unseal_vault.sh).
@@ -250,6 +251,9 @@ spec:
               path "{{ .Values.vault.kvMount }}/data/nmxm/*" {
                 capabilities = ["create", "read", "patch", "list", "update", "delete"]
               }
+              path "{{ .Values.vault.kvMount }}/data/bgp/*" {
+                capabilities = ["create", "read", "patch", "list", "update", "delete"]
+              }
               POLICY
 
               # ---- K8s auth role for cert-manager ----
@@ -277,6 +281,13 @@ spec:
               # ---- KV v2 + AppRole ----
               echo "Enabling KV v2 at {{ .Values.vault.kvMount }}/..."
               vault secrets enable -path={{ .Values.vault.kvMount }} kv-v2 2>/dev/null || true
+
+              {{- range .Values.vault.kvSeeds }}
+              echo "Seeding {{ $.Values.vault.kvMount }}/{{ .path }}..."
+              vault kv put {{ $.Values.vault.kvMount }}/{{ .path }} @- <<'KVSEED'
+              {{ .data | toJson }}
+              KVSEED
+              {{- end }}
 
               echo "Enabling AppRole auth..."
               vault auth enable approle 2>/dev/null || true

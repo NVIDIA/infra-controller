@@ -35,6 +35,7 @@ struct HealthReportKey {
 
 pub struct HealthReportSink {
     queue: Arc<DedupQueue<HealthReportKey, Arc<HealthReport>>>,
+    skip_empty_reports: bool,
 }
 
 impl HealthReportSink {
@@ -83,13 +84,17 @@ impl HealthReportSink {
             });
         }
 
-        Ok(Self { queue })
+        Ok(Self {
+            queue,
+            skip_empty_reports: config.skip_empty_reports,
+        })
     }
 
     #[cfg(feature = "bench-hooks")]
     pub fn new_for_bench() -> Result<Self, HealthError> {
         Ok(Self {
             queue: Arc::new(DedupQueue::new()),
+            skip_empty_reports: true,
         })
     }
 
@@ -109,6 +114,14 @@ impl DataSink for HealthReportSink {
             return;
         };
         if report.target != Some(HealthReportTarget::Machine) {
+            return;
+        }
+
+        if self.skip_empty_reports && report.is_empty() {
+            tracing::debug!(
+                source = ?report.source,
+                "Skipping empty machine health report"
+            );
             return;
         }
 
