@@ -161,7 +161,7 @@ impl From<Args> for rpc::forge::UpdateComponentFirmwareRequest {
                 target_version: target.target_version,
                 target: Some(
                     rpc::forge::update_component_firmware_request::Target::Racks(
-                        rpc::forge::UpdateRackFirmwareTarget {
+                        rpc::forge::UpdateFirmwareObjectTarget {
                             rack_ids: Some(target.ids.into()),
                         },
                     ),

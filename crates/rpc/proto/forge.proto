@@ -8122,9 +8122,10 @@ message UpdatePowerShelfFirmwareTarget {
   repeated PowerShelfComponent components = 2;
 }
 
-// Whole-rack firmware update target. All eligible devices in each listed
-// rack are updated according to the SOT identified by `target_version`.
-message UpdateRackFirmwareTarget {
+// Whole-rack firmware-object update target. All eligible devices in each
+// listed rack are updated according to the firmware object identified by
+// `target_version`.
+message UpdateFirmwareObjectTarget {
   RackIdList rack_ids = 1;
 }
 
@@ -8133,7 +8134,7 @@ message UpdateComponentFirmwareRequest {
     UpdateComputeTrayFirmwareTarget compute_trays = 1;
     UpdateSwitchFirmwareTarget switches = 2;
     UpdatePowerShelfFirmwareTarget power_shelves = 3;
-    UpdateRackFirmwareTarget racks = 5;
+    UpdateFirmwareObjectTarget racks = 5;
   }
   string target_version = 4;
 }
