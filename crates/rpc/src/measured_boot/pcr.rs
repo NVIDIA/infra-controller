@@ -15,21 +15,31 @@
  * limitations under the License.
  */
 
-//!
-//! Carbide API module specific to measured boot/machine attestation.
+/*!
+ *  gRPC conversions between `PcrRegisterValue` and its protobuf
+ *  representation `PcrRegisterValuePb`.
+ */
 
-pub mod metrics_collector;
-pub mod rpc;
+use std::convert::From;
 
-#[cfg(test)]
-pub mod tests;
+use measured_boot::pcr::PcrRegisterValue;
 
-// So far this helper is only used by measured boot functions. Similar
-// function exist in model: try_convert_vec. Maybe at some point of
-// time we need to unify all these conversions in helpers library.
-pub fn convert_vec<T, R>(source: Vec<T>) -> Vec<R>
-where
-    R: From<T>,
-{
-    source.into_iter().map(R::from).collect()
+use crate::protos::measured_boot::PcrRegisterValuePb;
+
+impl From<PcrRegisterValue> for PcrRegisterValuePb {
+    fn from(val: PcrRegisterValue) -> Self {
+        Self {
+            pcr_register: val.pcr_register as i32,
+            sha_any: val.sha_any,
+        }
+    }
+}
+
+impl From<PcrRegisterValuePb> for PcrRegisterValue {
+    fn from(msg: PcrRegisterValuePb) -> Self {
+        Self {
+            pcr_register: msg.pcr_register as i16,
+            sha_any: msg.sha_any,
+        }
+    }
 }

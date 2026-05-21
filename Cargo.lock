@@ -2172,7 +2172,6 @@ dependencies = [
 name = "carbide-measured-boot"
 version = "0.0.0"
 dependencies = [
- "carbide-rpc",
  "carbide-uuid",
  "chrono",
  "clap",
@@ -2356,6 +2355,7 @@ dependencies = [
  "carbide-health-report",
  "carbide-http-connector",
  "carbide-libmlx-model",
+ "carbide-measured-boot",
  "carbide-network",
  "carbide-secrets",
  "carbide-tls",

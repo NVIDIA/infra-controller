@@ -110,6 +110,7 @@ use crate::dpf::DpfOperations;
 use crate::ethernet_virtualization::{EthVirtData, SiteFabricPrefixList};
 use crate::logging::level_filter::ActiveLevel;
 use crate::logging::log_limiter::LogLimiter;
+use crate::measured_boot::convert_vec;
 use crate::rack::rms_client::test_support::RmsSim;
 use crate::scout_stream;
 use crate::state_controller::common_services::CommonStateHandlerServices;
@@ -2753,7 +2754,7 @@ pub async fn inject_machine_measurements(
         .attest_candidate_machine(Request::new(
             rpc::protos::measured_boot::AttestCandidateMachineRequest {
                 machine_id: machine_id.to_string(),
-                pcr_values: PcrRegisterValue::to_pb_vec(&pcr_values),
+                pcr_values: convert_vec(pcr_values),
             },
         ))
         .await

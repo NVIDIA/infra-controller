@@ -14,6 +14,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+#[cfg(feature = "cli")]
+use std::sync::atomic::{AtomicBool, Ordering};
+
 pub mod bundle;
 pub mod journal;
 pub mod machine;
@@ -37,36 +41,36 @@ pub trait DisplayName {
     fn display_name() -> &'static str;
 }
 
-pub trait FromGrpc<M>: TryFrom<M> + DisplayName
-where
-    <Self as std::convert::TryFrom<M>>::Error: std::fmt::Display,
-{
-    fn from_grpc(msg: M) -> Result<Self> {
-        Self::try_from(msg).map_err(|e| {
-            Error::RpcConversion(format!("bad message: {}: {e}", Self::display_name()))
-        })
-    }
+/// SUMMARY is a global variable that is being used by a few structs which
+/// implement serde::Serialize with skip_serialization_if.
+///
+/// I had wanted the ability to have summarized or extended versions of
+/// serialized output, and decided I could use skip_serialization_if along with
+/// a function that looks at a global variable.
+///
+/// You set --extended on the CLI, which controls whether or not to summarized
+/// (default is summarized).
+#[cfg(feature = "cli")]
+static SUMMARY: AtomicBool = AtomicBool::new(false);
+
+#[cfg(feature = "cli")]
+pub fn serde_just_print_summary<T>(_: &T) -> bool {
+    SUMMARY.load(Ordering::SeqCst)
 }
 
-pub trait FromGrpcOpt<M>: FromGrpc<M>
-where
-    <Self as std::convert::TryFrom<M>>::Error: std::fmt::Display,
-{
-    fn from_grpc_opt(msg: Option<M>) -> Result<Self> {
-        msg.ok_or_else(|| {
-            Error::RpcConversion(format!("{} is unexpectedly empty", Self::display_name()))
-        })
-        .and_then(Self::from_grpc)
-    }
+#[cfg(feature = "cli")]
+pub fn just_print_summary() -> bool {
+    SUMMARY.load(Ordering::SeqCst)
 }
 
-pub trait FromPbVec<M: Clone>: FromGrpc<M>
-where
-    <Self as std::convert::TryFrom<M>>::Error: std::fmt::Display,
-{
-    fn from_pb_vec(pbs: &[M]) -> Result<Vec<Self>> {
-        pbs.iter()
-            .map(|record| Self::from_grpc(record.clone()))
-            .collect()
-    }
+#[cfg(feature = "cli")]
+pub fn set_summary(val: bool) {
+    SUMMARY.store(val, Ordering::SeqCst);
+}
+
+/// ToTable is a trait which is used alongside the cli_output command
+/// and being able to prettytable print results.
+#[cfg(feature = "cli")]
+pub trait ToTable {
+    fn into_table(self) -> eyre::Result<String>;
 }

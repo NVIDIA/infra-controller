@@ -27,8 +27,8 @@ pub mod profile;
 pub mod report;
 pub mod site;
 
-use ::rpc::admin_cli::{ToTable, set_summary};
 use carbide_uuid::machine::MachineId;
+use measured_boot::{ToTable, set_summary};
 use serde::Serialize;
 
 use crate::cfg::dispatch::Dispatch;

@@ -18,9 +18,9 @@
 //!
 //! `measurement mock-machine` subcommand dispatcher + backing functions.
 
-use ::rpc::admin_cli::ToTable;
+use ::rpc::measured_boot::FromGrpcOpt;
 use ::rpc::protos::measured_boot::ShowCandidateMachineRequest;
-use measured_boot::FromGrpcOpt;
+use measured_boot::ToTable;
 use measured_boot::machine::CandidateMachine;
 use measured_boot::records::CandidateMachineSummary;
 use measured_boot::report::MeasurementReport;
