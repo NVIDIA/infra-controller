@@ -18,6 +18,7 @@
 use std::net::SocketAddr;
 
 use ::rpc::forge as rpc;
+use ::rpc::model::machine::machine_id::try_parse_machine_id;
 use carbide_uuid::machine::MachineId;
 use db::WithTransaction;
 use db::machine_interface::find_by_ip;
@@ -26,7 +27,6 @@ use mac_address::MacAddress;
 use model::expected_entity::ExpectedEntity;
 use model::machine::machine_search_config::MachineSearchConfig;
 use model::machine::{LoadSnapshotOptions, MachineInterfaceSnapshot};
-use model::rpc_conv::machine::machine_id::try_parse_machine_id;
 use model::site_explorer::PreingestionState;
 use sqlx::PgConnection;
 use tokio::net::lookup_host;

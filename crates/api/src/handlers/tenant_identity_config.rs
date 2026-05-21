@@ -31,9 +31,6 @@ use ::rpc::forge::{
 use db::{WithTransaction, tenant, tenant_identity_config};
 use forge_secrets::credentials::CredentialReader;
 use forge_secrets::key_encryption;
-use model::rpc_conv::tenant::{
-    identity_config_try_from_proto, validate_identity_overlap_for_rotation,
-};
 use model::tenant::identity_config::TenantIdentityCurrentSigningKeySlot;
 use model::tenant::{
     EncryptedSigningPrivateKey, EncryptedTokenDelegationAuthConfig, IdentityConfigValidationBounds,
@@ -41,6 +38,7 @@ use model::tenant::{
     SigningPublicKeyPem, TenantIdentityConfig, TenantIdentityConfigDecrypted, TenantOrganizationId,
     TokenDelegation, TokenDelegationValidationBounds, TokenDelegationValidationError,
 };
+use rpc::model::tenant::{identity_config_try_from_proto, validate_identity_overlap_for_rotation};
 use tonic::{Request, Response, Status};
 
 use crate::CarbideError;
@@ -450,7 +448,7 @@ pub(crate) async fn set_token_delegation(
             CarbideError::InvalidArgument("TokenDelegation config is required".to_string())
         })
         .and_then(|c| {
-            model::rpc_conv::tenant::token_delegation_try_from_proto(
+            ::rpc::model::tenant::token_delegation_try_from_proto(
                 c.clone(),
                 &TokenDelegationValidationBounds::from(api.runtime_config.machine_identity.clone()),
             )
