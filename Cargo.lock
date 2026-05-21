@@ -1417,7 +1417,6 @@ dependencies = [
  "tokio",
  "toml 1.1.2+spec-1.1.0",
  "tracing",
- "tss-esapi",
  "url",
  "uuid",
  "version-compare 0.2.1",
@@ -1954,8 +1953,8 @@ dependencies = [
  "carbide-api-db",
  "carbide-api-model",
  "carbide-health-report",
- "carbide-rpc",
  "carbide-secrets",
+ "carbide-tls",
  "carbide-utils",
  "carbide-uuid",
  "chrono",
@@ -2664,6 +2663,7 @@ dependencies = [
 name = "carbide-tls"
 version = "0.0.0"
 dependencies = [
+ "rustls",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
