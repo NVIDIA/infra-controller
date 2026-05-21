@@ -17,7 +17,6 @@
 use std::collections::HashMap;
 
 use carbide_uuid::machine::MachineId;
-use casbin::error::ModelError;
 use sqlx::FromRow;
 
 use crate::machine::{ManagedHostState, ManagedHostStateSnapshot};
@@ -45,9 +44,9 @@ impl DpuMachineUpdate {
         limit: Option<i32>,
         dpu_nic_firmware_update_versions: &[String],
         snapshots: &HashMap<MachineId, ManagedHostStateSnapshot>,
-    ) -> Result<Vec<DpuMachineUpdate>, ModelError> {
+    ) -> Vec<DpuMachineUpdate> {
         if limit.is_some_and(|l| l <= 0) {
-            return Ok(vec![]);
+            return vec![];
         }
 
         let outdated_dpus = Self::find_outdated_dpus(dpu_nic_firmware_update_versions, snapshots);
@@ -71,7 +70,7 @@ impl DpuMachineUpdate {
             .flatten()
             .collect();
 
-        Ok(available_outdated_dpus)
+        available_outdated_dpus
     }
 
     pub fn find_unavailable_outdated_dpus(

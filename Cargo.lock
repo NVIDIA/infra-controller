@@ -1390,7 +1390,6 @@ dependencies = [
  "carbide-utils",
  "carbide-uuid",
  "carbide-version",
- "casbin",
  "chrono",
  "config-version",
  "dns-record",
