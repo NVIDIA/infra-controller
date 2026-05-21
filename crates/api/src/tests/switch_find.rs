@@ -254,10 +254,10 @@ async fn test_find_switches_by_ids_response_fields(
     // state_version should be populated
     assert!(!switch.state_version.is_empty());
 
-    // bmc_info is None when no machine_interface discovery data exists
+    // bmc_info should be populated from the seeded machine_interface discovery data
     assert!(
-        switch.bmc_info.is_none(),
-        "bmc_info should be None when no discovery data exists"
+        switch.bmc_info.is_some(),
+        "bmc_info should be present when discovery data exists"
     );
 
     Ok(())
