@@ -1,0 +1,704 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package model
+
+import (
+	"context"
+	"fmt"
+	"testing"
+
+	"github.com/NVIDIA/infra-controller-rest/db/pkg/db"
+	"github.com/NVIDIA/infra-controller-rest/db/pkg/db/paginator"
+	stracer "github.com/NVIDIA/infra-controller-rest/db/pkg/tracer"
+	cwssaws "github.com/NVIDIA/infra-controller-rest/workflow-schema/schema/site-agent/workflows/v1"
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
+	otrace "go.opentelemetry.io/otel/trace"
+	"google.golang.org/protobuf/proto"
+)
+
+func getIntPtrToUint32Ptr(i *int) *uint32 {
+	if i == nil {
+		return nil
+	}
+
+	i32 := uint32(*i)
+
+	return &i32
+}
+
+// reset the tables needed for NetworkSecurityGroup tests
+func testNetworkSecurityGroupSetupSchema(t *testing.T, dbSession *db.Session) {
+	// interface setup covers all tables needed
+	testInterfaceSetupSchema(t, dbSession)
+	// create Security Group table
+	err := dbSession.DB.ResetModel(context.Background(), (*NetworkSecurityGroup)(nil))
+	assert.Nil(t, err)
+}
+
+func TestNetworkSecurityGroupSQLDAO_Create(t *testing.T) {
+	ctx := context.Background()
+	dbSession := testInstanceInitDB(t)
+	defer dbSession.Close()
+	testNetworkSecurityGroupSetupSchema(t, dbSession)
+	ip := testInstanceBuildInfrastructureProvider(t, dbSession, "testIP")
+	site := testInstanceBuildSite(t, dbSession, ip, "testSite")
+	tenant := testInstanceBuildTenant(t, dbSession, "testTenant")
+	user := testInstanceBuildUser(t, dbSession, "testUser")
+
+	sgsd := NewNetworkSecurityGroupDAO(dbSession)
+
+	// OTEL Spanner configuration
+	_, _, ctx = testCommonTraceProviderSetup(t, ctx)
+
+	labels := map[string]string{}
+
+	labels["key"] = "value"
+
+	rule := &NetworkSecurityGroupRule{
+		&cwssaws.NetworkSecurityGroupRuleAttributes{
+			Id:             db.GetStrPtr(uuid.NewString()),
+			Direction:      cwssaws.NetworkSecurityGroupRuleDirection_NSG_RULE_DIRECTION_EGRESS,
+			Protocol:       cwssaws.NetworkSecurityGroupRuleProtocol_NSG_RULE_PROTO_ANY,
+			Action:         cwssaws.NetworkSecurityGroupRuleAction_NSG_RULE_ACTION_DENY,
+			Priority:       55,
+			Ipv6:           false, // We have support for it in ACLs but pretty much nowhere else, so we hide this for now.
+			SrcPortStart:   getIntPtrToUint32Ptr(db.GetIntPtr(55)),
+			SrcPortEnd:     getIntPtrToUint32Ptr(db.GetIntPtr(56)),
+			DstPortStart:   getIntPtrToUint32Ptr(db.GetIntPtr(57)),
+			DstPortEnd:     getIntPtrToUint32Ptr(db.GetIntPtr(58)),
+			SourceNet:      &cwssaws.NetworkSecurityGroupRuleAttributes_SrcPrefix{SrcPrefix: "0.0.0.0/0"},
+			DestinationNet: &cwssaws.NetworkSecurityGroupRuleAttributes_DstPrefix{DstPrefix: "1.1.1.1/0"},
+		},
+	}
+
+	rules := []*NetworkSecurityGroupRule{
+		rule,
+	}
+
+	badRules := []*NetworkSecurityGroupRule{
+		rule,
+		nil,
+	}
+
+	tests := []struct {
+		desc               string
+		sg                 NetworkSecurityGroup
+		expectError        bool
+		verifyChildSpanner bool
+	}{
+		{
+			desc: "success - create one with all fields set",
+			sg: NetworkSecurityGroup{
+				Version:        "anything",
+				ID:             uuid.NewString(),
+				Name:           "test",
+				Description:    db.GetStrPtr("test"),
+				SiteID:         site.ID,
+				TenantOrg:      tenant.Org,
+				TenantID:       tenant.ID,
+				Status:         NetworkSecurityGroupStatusPending,
+				CreatedBy:      user.ID,
+				Labels:         labels,
+				StatefulEgress: true,
+				Rules:          rules,
+			},
+			expectError:        false,
+			verifyChildSpanner: true,
+		},
+		{
+			desc: "success - with nullable fields not set",
+			sg: NetworkSecurityGroup{
+				Version: "anything", ID: uuid.NewString(), Name: "test", Description: db.GetStrPtr("test"), SiteID: site.ID, TenantOrg: tenant.Org, TenantID: tenant.ID, Status: NetworkSecurityGroupStatusPending, CreatedBy: user.ID,
+			},
+			expectError: false,
+		},
+		{
+			desc: "failure - rule list with nil rule",
+			sg: NetworkSecurityGroup{
+				ID: uuid.NewString(), Name: "test", Description: db.GetStrPtr("test"), SiteID: site.ID, TenantOrg: tenant.Org, TenantID: tenant.ID, Status: NetworkSecurityGroupStatusPending, CreatedBy: user.ID,
+				Rules: badRules,
+			},
+			expectError: true,
+		},
+
+		{
+			desc: "error - when foreign key fails on non-null tenant ID",
+			sg: NetworkSecurityGroup{
+				ID: uuid.NewString(), Name: "test", Description: db.GetStrPtr("test"), SiteID: site.ID, TenantID: uuid.New(), Status: NetworkSecurityGroupStatusPending, CreatedBy: user.ID,
+			},
+			expectError: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.desc, func(t *testing.T) {
+			got, err := sgsd.Create(
+				ctx, nil,
+				NetworkSecurityGroupCreateInput{
+					NetworkSecurityGroupID: db.GetStrPtr(tc.sg.ID),
+					Name:                   tc.sg.Name,
+					Description:            tc.sg.Description,
+					SiteID:                 tc.sg.SiteID,
+					TenantOrg:              tc.sg.TenantOrg,
+					TenantID:               tc.sg.TenantID,
+					Status:                 tc.sg.Status,
+					CreatedByID:            tc.sg.CreatedBy,
+					Rules:                  tc.sg.Rules,
+					Labels:                 tc.sg.Labels,
+					Version:                &tc.sg.Version,
+				},
+			)
+			assert.Equal(t, tc.expectError, err != nil)
+			if !tc.expectError {
+				if !assert.NotNil(t, got) {
+					t.Errorf("Error: %s", err)
+				}
+			}
+
+			if err != nil {
+				return
+			}
+
+			assert.Equal(t, tc.sg.ID, got.ID)
+			assert.Equal(t, tc.sg.Version, got.Version)
+			assert.Equal(t, tc.sg.Name, got.Name)
+			assert.True(t, tc.sg.Description == nil || *tc.sg.Description == *got.Description)
+			assert.Equal(t, tc.sg.SiteID, got.SiteID)
+			assert.Equal(t, tc.sg.TenantOrg, got.TenantOrg)
+			assert.Equal(t, tc.sg.TenantID, got.TenantID)
+			assert.Equal(t, tc.sg.CreatedBy, got.CreatedBy)
+			assert.Equal(t, tc.sg.CreatedBy, got.UpdatedBy) // It's not a typo
+			assert.Equal(t, tc.sg.Labels, got.Labels)
+			assert.Equal(t, tc.sg.Rules, got.Rules)
+
+			if tc.verifyChildSpanner {
+				span := otrace.SpanFromContext(ctx)
+				assert.True(t, span.SpanContext().IsValid())
+				_, ok := ctx.Value(stracer.TracerKey).(otrace.Tracer)
+				assert.True(t, ok)
+			}
+		})
+	}
+}
+
+func TestNetworkSecurityGroupSQLDAO_GetByID(t *testing.T) {
+	ctx := context.Background()
+	dbSession := testInstanceInitDB(t)
+	defer dbSession.Close()
+	testNetworkSecurityGroupSetupSchema(t, dbSession)
+	ip := testInstanceBuildInfrastructureProvider(t, dbSession, "testIP")
+	site := testInstanceBuildSite(t, dbSession, ip, "testSite")
+	tenant := testInstanceBuildTenant(t, dbSession, "testTenant")
+	user := testInstanceBuildUser(t, dbSession, "testUser")
+
+	sgsd := NewNetworkSecurityGroupDAO(dbSession)
+	sg1, err := sgsd.Create(ctx, nil, NetworkSecurityGroupCreateInput{Name: "test", Description: db.GetStrPtr("test"), SiteID: site.ID, TenantOrg: tenant.Org, TenantID: tenant.ID, Status: NetworkSecurityGroupStatusPending, CreatedByID: user.ID})
+	assert.Nil(t, err)
+	assert.NotNil(t, sg1)
+
+	sg2, err := sgsd.Create(ctx, nil, NetworkSecurityGroupCreateInput{Name: "test", Description: db.GetStrPtr("test"), SiteID: site.ID, TenantOrg: tenant.Org, TenantID: tenant.ID, Status: NetworkSecurityGroupStatusPending, CreatedByID: user.ID})
+	assert.Nil(t, err)
+	assert.NotNil(t, sg1)
+
+	// OTEL Spanner configuration
+	_, _, ctx = testCommonTraceProviderSetup(t, ctx)
+
+	tests := []struct {
+		desc               string
+		sgID               string
+		includeRelations   []string
+		expectNotNilSite   bool
+		expectNotNilTenant bool
+		expectError        bool
+		verifyChildSpanner bool
+	}{
+		{
+			desc:               "success without relations",
+			sgID:               sg1.ID,
+			includeRelations:   []string{},
+			expectError:        false,
+			verifyChildSpanner: true,
+		},
+		{
+			desc:               "success with relations",
+			sgID:               sg1.ID,
+			includeRelations:   []string{"Site", "Tenant"},
+			expectError:        false,
+			expectNotNilSite:   true,
+			expectNotNilTenant: true,
+		},
+		{
+			desc:             "error when not found",
+			sgID:             uuid.NewString(),
+			includeRelations: []string{},
+			expectError:      true,
+		},
+		{
+			desc:               "success with relations when nullable",
+			sgID:               sg2.ID,
+			includeRelations:   []string{"Site", "Tenant"},
+			expectError:        false,
+			expectNotNilSite:   true,
+			expectNotNilTenant: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.desc, func(t *testing.T) {
+			got, err := sgsd.GetByID(ctx, nil, tc.sgID, tc.includeRelations)
+			assert.Equal(t, tc.expectError, err != nil)
+			if !tc.expectError {
+				assert.NotNil(t, got)
+				if tc.expectNotNilSite {
+					assert.NotNil(t, got.Site)
+				}
+				if tc.expectNotNilTenant {
+					assert.NotNil(t, got.Tenant)
+				}
+				if tc.verifyChildSpanner {
+					span := otrace.SpanFromContext(ctx)
+					assert.True(t, span.SpanContext().IsValid())
+					_, ok := ctx.Value(stracer.TracerKey).(otrace.Tracer)
+					assert.True(t, ok)
+				}
+			}
+		})
+	}
+}
+
+func TestNetworkSecurityGroupSQLDAO_GetAll(t *testing.T) {
+	ctx := context.Background()
+	dbSession := testInstanceInitDB(t)
+	defer dbSession.Close()
+	testNetworkSecurityGroupSetupSchema(t, dbSession)
+	ip := testInstanceBuildInfrastructureProvider(t, dbSession, "testIP")
+	site := testInstanceBuildSite(t, dbSession, ip, "testSite")
+	tenant := testInstanceBuildTenant(t, dbSession, "testTenant")
+	user := testInstanceBuildUser(t, dbSession, "testUser")
+
+	sgsd := NewNetworkSecurityGroupDAO(dbSession)
+
+	nsgIDs := []string{}
+
+	for i := 1; i < 26; i++ {
+		sg1, err := sgsd.Create(ctx, nil, NetworkSecurityGroupCreateInput{Name: fmt.Sprintf("test%d", i), Description: db.GetStrPtr("test"), SiteID: site.ID, TenantOrg: tenant.Org, TenantID: tenant.ID, Status: NetworkSecurityGroupStatusPending, CreatedByID: user.ID})
+		assert.Nil(t, err)
+		assert.NotNil(t, sg1)
+
+		nsgIDs = append(nsgIDs, sg1.ID)
+	}
+
+	// OTEL Spanner configuration
+	_, _, ctx = testCommonTraceProviderSetup(t, ctx)
+
+	tests := []struct {
+		desc             string
+		includeRelations []string
+
+		paramOffset    *int
+		paramLimit     *int
+		paramID        []string
+		paramSiteID    []uuid.UUID
+		paramTenantID  []uuid.UUID
+		paramTenantOrg []string
+		paramName      *string
+		paramStatus    []string
+		searchQuery    *string
+		paramOrderBy   *paginator.OrderBy
+
+		expectCnt             int
+		expectTotal           int
+		expectFirstObjectName string
+		expectNotNilSite      bool
+		expectNotNilTenant    bool
+		expectError           bool
+		verifyChildSpanner    bool
+	}{
+		{
+			desc:                  "getall with filters on nsgs",
+			paramID:               []string{nsgIDs[1], nsgIDs[2]},
+			includeRelations:      []string{},
+			expectFirstObjectName: "test2",
+			expectError:           false,
+			expectTotal:           2,
+			expectCnt:             2,
+			verifyChildSpanner:    true,
+		},
+		{
+			desc:                  "getall with filters but no relations returns objects",
+			paramSiteID:           []uuid.UUID{site.ID},
+			paramTenantOrg:        []string{tenant.Org},
+			paramTenantID:         []uuid.UUID{tenant.ID},
+			paramStatus:           []string{NetworkSecurityGroupStatusPending},
+			includeRelations:      []string{},
+			expectFirstObjectName: "test1",
+			expectError:           false,
+			expectTotal:           25,
+			expectCnt:             20,
+			verifyChildSpanner:    true,
+		},
+		{
+			desc:           "getall with site, tenant, and name returns objects",
+			paramSiteID:    []uuid.UUID{site.ID},
+			paramTenantOrg: []string{tenant.Org},
+			paramOrderBy: &paginator.OrderBy{
+				Field: "updated",
+				Order: paginator.OrderAscending,
+			},
+			includeRelations:      []string{},
+			expectFirstObjectName: "test1",
+			expectError:           false,
+			expectTotal:           25,
+			expectCnt:             20,
+		},
+		{
+			desc:           "getall name filter",
+			paramSiteID:    []uuid.UUID{site.ID},
+			paramTenantOrg: []string{tenant.Org},
+			paramName:      db.GetStrPtr("test1"),
+			paramOrderBy: &paginator.OrderBy{
+				Field: "updated",
+				Order: paginator.OrderAscending,
+			},
+			includeRelations:      []string{},
+			expectFirstObjectName: "test1",
+			expectError:           false,
+			expectTotal:           1,
+			expectCnt:             1,
+		},
+		{
+			desc:             "getall with filters and relations returns objects",
+			includeRelations: []string{"Site", "Tenant"},
+			paramSiteID:      []uuid.UUID{site.ID},
+			paramTenantOrg:   []string{tenant.Org},
+			paramStatus:      []string{NetworkSecurityGroupStatusPending},
+			paramOrderBy: &paginator.OrderBy{
+				Field: "updated",
+				Order: paginator.OrderAscending,
+			},
+			expectFirstObjectName: "test1",
+			expectError:           false,
+			expectTotal:           25,
+			expectCnt:             20,
+			expectNotNilSite:      true,
+			expectNotNilTenant:    true,
+		},
+		{
+			desc:             "getall with offset, limit returns objects",
+			includeRelations: []string{},
+
+			paramOffset: db.GetIntPtr(10),
+			paramLimit:  db.GetIntPtr(10),
+			paramOrderBy: &paginator.OrderBy{
+				Field: "updated",
+				Order: paginator.OrderAscending,
+			},
+			paramSiteID:           []uuid.UUID{site.ID},
+			paramTenantOrg:        []string{tenant.Org},
+			paramStatus:           []string{NetworkSecurityGroupStatusPending},
+			expectFirstObjectName: "test11",
+			expectError:           false,
+			expectTotal:           25,
+			expectCnt:             10,
+		},
+		{
+			desc:                  "getall with name search query returns objects",
+			paramSiteID:           nil,
+			paramTenantOrg:        nil,
+			paramStatus:           nil,
+			searchQuery:           db.GetStrPtr("test"),
+			includeRelations:      []string{},
+			expectFirstObjectName: "test1",
+			expectError:           false,
+			expectTotal:           25,
+			expectCnt:             20,
+		},
+		{
+			desc:                  "getall with description search query returns objects",
+			paramSiteID:           nil,
+			paramTenantOrg:        nil,
+			paramStatus:           nil,
+			searchQuery:           db.GetStrPtr("test"),
+			includeRelations:      []string{},
+			expectFirstObjectName: "test1",
+			expectError:           false,
+			expectTotal:           25,
+			expectCnt:             20,
+		},
+		{
+			desc:                  "getall with status search query returns objects",
+			paramSiteID:           nil,
+			paramTenantOrg:        nil,
+			paramStatus:           nil,
+			searchQuery:           db.GetStrPtr(NetworkSecurityGroupStatusPending),
+			includeRelations:      []string{},
+			expectFirstObjectName: "test1",
+			expectError:           false,
+			expectTotal:           25,
+			expectCnt:             20,
+		},
+		{
+			desc:                  "getall with empty search query returns objects",
+			paramSiteID:           nil,
+			paramTenantOrg:        nil,
+			paramStatus:           nil,
+			searchQuery:           db.GetStrPtr("test"),
+			includeRelations:      []string{},
+			expectFirstObjectName: "test1",
+			expectError:           false,
+			expectTotal:           25,
+			expectCnt:             20,
+		},
+	}
+
+	for _, tc := range tests {
+
+		t.Run(tc.desc, func(t *testing.T) {
+			objs, tot, err := sgsd.GetAll(ctx, nil, NetworkSecurityGroupFilterInput{NetworkSecurityGroupIDs: tc.paramID,
+				SiteIDs: tc.paramSiteID, TenantOrgs: tc.paramTenantOrg, TenantIDs: tc.paramTenantID, Name: tc.paramName, Statuses: tc.paramStatus, SearchQuery: tc.searchQuery,
+			}, paginator.PageInput{Offset: tc.paramOffset, Limit: tc.paramLimit, OrderBy: tc.paramOrderBy}, tc.includeRelations)
+
+			if err != nil && !tc.expectError {
+				fmt.Printf("\n%s\n", err)
+			}
+
+			assert.Equal(t, tc.expectError, err != nil)
+
+			assert.Equal(t, tc.expectCnt, len(objs))
+			assert.Equal(t, tc.expectTotal, tot)
+			if len(objs) > 0 {
+				assert.Equal(t, tc.expectFirstObjectName, objs[0].Name)
+				if tc.expectNotNilSite {
+					assert.NotNil(t, objs[0].Site)
+				}
+				if tc.expectNotNilTenant {
+					assert.NotNil(t, objs[0].Tenant)
+				}
+			}
+			if tc.verifyChildSpanner {
+				span := otrace.SpanFromContext(ctx)
+				assert.True(t, span.SpanContext().IsValid())
+				_, ok := ctx.Value(stracer.TracerKey).(otrace.Tracer)
+				assert.True(t, ok)
+			}
+		})
+	}
+}
+
+func TestNetworkSecurityGroupSQLDAO_Update(t *testing.T) {
+	ctx := context.Background()
+	dbSession := testInstanceInitDB(t)
+	defer dbSession.Close()
+	testNetworkSecurityGroupSetupSchema(t, dbSession)
+	ip := testInstanceBuildInfrastructureProvider(t, dbSession, "testIP")
+	site := testInstanceBuildSite(t, dbSession, ip, "testSite")
+	tenant := testInstanceBuildTenant(t, dbSession, "testTenant")
+	user := testInstanceBuildUser(t, dbSession, "testUser")
+	user2 := testInstanceBuildUser(t, dbSession, "testUser2")
+
+	labels := map[string]string{}
+	labels["key"] = "value"
+
+	rules := []*NetworkSecurityGroupRule{
+		&NetworkSecurityGroupRule{&cwssaws.NetworkSecurityGroupRuleAttributes{}},
+	}
+
+	badRules := []*NetworkSecurityGroupRule{
+		&NetworkSecurityGroupRule{&cwssaws.NetworkSecurityGroupRuleAttributes{}},
+		nil,
+	}
+
+	sgsd := NewNetworkSecurityGroupDAO(dbSession)
+	sg1, err := sgsd.Create(ctx, nil, NetworkSecurityGroupCreateInput{Version: db.GetStrPtr("12345"), Name: "test", Description: db.GetStrPtr("test"), SiteID: site.ID, TenantOrg: tenant.Org, TenantID: tenant.ID, Status: NetworkSecurityGroupStatusPending, CreatedByID: user.ID})
+	assert.Nil(t, err)
+	assert.NotNil(t, sg1)
+
+	// OTEL Spanner configuration
+	_, _, ctx = testCommonTraceProviderSetup(t, ctx)
+
+	ptrTrue := true
+	tests := []struct {
+		desc string
+		id   string
+
+		paramVersion        *string
+		paramName           *string
+		paramDescription    *string
+		paramStatus         *string
+		paramStatefulEgress *bool
+		paramRules          []*NetworkSecurityGroupRule
+		paramLabels         map[string]string
+		paramUpdatedByID    uuid.UUID
+
+		expectedUpdatedByID    *uuid.UUID
+		expectedTenantID       *uuid.UUID
+		expectedTenantOrg      *string
+		expectedSiteID         *uuid.UUID
+		expectedVersion        *string
+		expectedName           *string
+		expectedDescription    *string
+		expectedStatus         *string
+		expectedStatefulEgress *bool
+		expectedRules          []*NetworkSecurityGroupRule
+		expectedLabels         map[string]string
+
+		expectError        bool
+		verifyChildSpanner bool
+	}{
+		{
+			desc: "can update all fields",
+			id:   sg1.ID,
+
+			paramName:           db.GetStrPtr("updatedName"),
+			paramDescription:    db.GetStrPtr("updatedDesc"),
+			paramStatus:         db.GetStrPtr(NetworkSecurityGroupStatusReady),
+			paramVersion:        db.GetStrPtr("555555"),
+			paramStatefulEgress: &ptrTrue,
+			paramRules:          rules,
+			paramLabels:         map[string]string{"key": "value"},
+			paramUpdatedByID:    user2.ID,
+
+			expectedName:           db.GetStrPtr("updatedName"),
+			expectedDescription:    db.GetStrPtr("updatedDesc"),
+			expectedStatus:         db.GetStrPtr(NetworkSecurityGroupStatusReady),
+			expectedVersion:        db.GetStrPtr("555555"),
+			expectedLabels:         map[string]string{"key": "value"},
+			expectedUpdatedByID:    &user2.ID,
+			expectedTenantID:       &sg1.TenantID,
+			expectedTenantOrg:      &sg1.TenantOrg,
+			expectedSiteID:         &sg1.SiteID,
+			expectedStatefulEgress: &ptrTrue,
+			expectedRules:          rules,
+
+			expectError:        false,
+			verifyChildSpanner: true,
+		},
+		{
+			desc:               "reject bad rule list",
+			id:                 sg1.ID,
+			paramRules:         badRules,
+			expectError:        true,
+			verifyChildSpanner: true,
+		},
+		{
+			desc:        "error when ID not found",
+			id:          uuid.NewString(),
+			expectError: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.desc, func(t *testing.T) {
+			got, err := sgsd.Update(ctx, nil, NetworkSecurityGroupUpdateInput{
+				Version:                tc.paramVersion,
+				NetworkSecurityGroupID: tc.id,
+				Name:                   tc.paramName,
+				Description:            tc.paramDescription,
+				Status:                 tc.paramStatus,
+				Labels:                 labels,
+				StatefulEgress:         tc.paramStatefulEgress,
+				Rules:                  tc.paramRules,
+				UpdatedByID:            tc.paramUpdatedByID,
+			})
+
+			assert.Equal(t, tc.expectError, err != nil)
+			if err == nil {
+				assert.NotEqual(t, got.Updated.String(), sg1.Updated.String())
+
+				assert.True(t, tc.expectedName == nil || *tc.expectedName == got.Name)
+				assert.True(t, tc.expectedDescription == nil || *tc.expectedDescription == *got.Description)
+				assert.True(t, tc.expectedStatus == nil || *tc.expectedStatus == got.Status)
+				assert.True(t, tc.expectedTenantID == nil || *tc.expectedTenantID == got.TenantID)
+				assert.True(t, tc.expectedTenantOrg == nil || *tc.expectedTenantOrg == got.TenantOrg)
+				assert.True(t, tc.expectedSiteID == nil || *tc.expectedSiteID == got.SiteID)
+				assert.True(t, tc.expectedStatefulEgress == nil || *tc.expectedStatefulEgress == got.StatefulEgress)
+
+				assert.Equal(t, tc.paramUpdatedByID, got.UpdatedBy)
+
+				assert.Equal(t, tc.expectedLabels, got.Labels)
+
+				if tc.expectedRules != nil {
+					assert.Equal(t, len(tc.expectedRules), len(got.Rules))
+
+					for i, _ := range tc.expectedRules {
+						assert.True(t, proto.Equal(got.Rules[i], tc.expectedRules[i]))
+					}
+				}
+			}
+			if tc.verifyChildSpanner {
+				span := otrace.SpanFromContext(ctx)
+				assert.True(t, span.SpanContext().IsValid())
+				_, ok := ctx.Value(stracer.TracerKey).(otrace.Tracer)
+				assert.True(t, ok)
+			}
+		})
+	}
+}
+
+func TestNetworkSecurityGroupSQLDAO_DeleteByID(t *testing.T) {
+	ctx := context.Background()
+	dbSession := testInstanceInitDB(t)
+	defer dbSession.Close()
+	testNetworkSecurityGroupSetupSchema(t, dbSession)
+	ip := testInstanceBuildInfrastructureProvider(t, dbSession, "testIP")
+	site := testInstanceBuildSite(t, dbSession, ip, "testSite")
+	tenant := testInstanceBuildTenant(t, dbSession, "testTenant")
+	user := testInstanceBuildUser(t, dbSession, "testUser")
+
+	sgsd := NewNetworkSecurityGroupDAO(dbSession)
+	sg1, err := sgsd.Create(ctx, nil, NetworkSecurityGroupCreateInput{Name: "test", Description: db.GetStrPtr("test"), SiteID: site.ID, TenantOrg: tenant.Org, TenantID: tenant.ID, Status: NetworkSecurityGroupStatusPending, CreatedByID: user.ID})
+	assert.Nil(t, err)
+	assert.NotNil(t, sg1)
+
+	// OTEL Spanner configuration
+	_, _, ctx = testCommonTraceProviderSetup(t, ctx)
+
+	tests := []struct {
+		desc               string
+		id                 string
+		expectedError      bool
+		verifyChildSpanner bool
+	}{
+		{
+			desc:               "can delete existing object",
+			id:                 sg1.ID,
+			expectedError:      false,
+			verifyChildSpanner: true,
+		},
+		{
+			desc:          "delete non-existing object",
+			id:            uuid.NewString(),
+			expectedError: false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.desc, func(t *testing.T) {
+			err := sgsd.Delete(ctx, nil, NetworkSecurityGroupDeleteInput{NetworkSecurityGroupID: tc.id, UpdatedByID: user.ID})
+			assert.Equal(t, tc.expectedError, err != nil)
+			if !tc.expectedError {
+				tmp, err := sgsd.GetByID(ctx, nil, tc.id, nil)
+				assert.NotNil(t, err)
+				assert.Nil(t, tmp)
+			}
+			if tc.verifyChildSpanner {
+				span := otrace.SpanFromContext(ctx)
+				assert.True(t, span.SpanContext().IsValid())
+				_, ok := ctx.Value(stracer.TracerKey).(otrace.Tracer)
+				assert.True(t, ok)
+			}
+		})
+	}
+}

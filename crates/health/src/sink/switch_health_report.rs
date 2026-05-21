@@ -35,6 +35,7 @@ struct SwitchHealthReportKey {
 
 pub struct SwitchHealthReportSink {
     queue: Arc<DedupQueue<SwitchHealthReportKey, Arc<HealthReport>>>,
+    skip_empty_reports: bool,
 }
 
 impl SwitchHealthReportSink {
@@ -89,7 +90,10 @@ impl SwitchHealthReportSink {
             });
         }
 
-        Ok(Self { queue })
+        Ok(Self {
+            queue,
+            skip_empty_reports: config.skip_empty_reports,
+        })
     }
 }
 
@@ -104,6 +108,14 @@ impl DataSink for SwitchHealthReportSink {
         };
 
         if report.target != Some(HealthReportTarget::Switch) {
+            return;
+        }
+
+        if self.skip_empty_reports && report.is_empty() {
+            tracing::debug!(
+                source = ?report.source,
+                "Skipping empty switch health report"
+            );
             return;
         }
 

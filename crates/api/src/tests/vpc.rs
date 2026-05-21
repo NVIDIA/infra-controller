@@ -121,6 +121,7 @@ async fn create_vpc(pool: sqlx::PgPool) -> Result<(), Box<dyn std::error::Error>
                         tenant_leak_communities_accepted: false,
                         access_tier: 1,
                         accepted_leaks_from_underlay: vec![],
+                        allowed_anycast_prefixes: vec![],
                     },
                 ),
                 (
@@ -134,6 +135,7 @@ async fn create_vpc(pool: sqlx::PgPool) -> Result<(), Box<dyn std::error::Error>
                         tenant_leak_communities_accepted: false,
                         access_tier: 0,
                         accepted_leaks_from_underlay: vec![],
+                        allowed_anycast_prefixes: vec![],
                     },
                 ),
             ]),
@@ -857,7 +859,7 @@ async fn create_admin_vpc(pool: sqlx::PgPool) -> Result<(), eyre::Report> {
     let admin_segments = db::network_segment::admin(&mut txn).await?;
 
     for admin_segment in admin_segments {
-        assert_eq!(admin_vpc.id, admin_segment.vpc_id.unwrap());
+        assert_eq!(admin_vpc.id, admin_segment.config.vpc_id.unwrap());
     }
 
     Ok(())

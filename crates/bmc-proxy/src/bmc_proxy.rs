@@ -16,6 +16,7 @@
  */
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::net::{AddrParseError, IpAddr};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -33,19 +34,18 @@ use carbide_authn::middleware::{
     AuthContext, Authorization, CertDescriptionMiddleware, ConnectionAttributes, Principal,
 };
 use carbide_utils::HostPortPair;
-use forge_secrets::credentials::{
-    BmcCredentialType, CredentialKey, CredentialManager, CredentialReader, Credentials,
-};
-use forge_secrets::{CredentialConfig, create_credential_manager};
+use forge_tls::client_config::ClientCert;
 use http::{HeaderMap, Method, Request, Response, StatusCode, Uri};
 use hyper::server::conn::http2;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::service::TowerToHyperService;
 use opentelemetry::KeyValue;
 use opentelemetry::metrics::Meter;
-use sqlx::PgPool;
-use sqlx::types::mac_address::MacAddress;
+use rpc::forge;
+use rpc::forge_api_client::ForgeApiClient;
+use rpc::forge_tls_client::{ApiConfig, ForgeClientConfig};
 use tokio::net::TcpListener;
+use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 use tokio_rustls::rustls::server::WebPkiClientVerifier;
 use tokio_rustls::rustls::{RootCertStore, ServerConfig};
@@ -60,8 +60,8 @@ const MAX_BODY_SIZE: usize = 8 * 1024 * 1024; // 8MiB body size limit (matches n
 
 #[derive(thiserror::Error, Debug)]
 pub enum BmcProxyError {
-    #[error("Error creating credential manager: {0}")]
-    CredentialManager(String),
+    #[error("Error resolving BMC credentials through Carbide API: {0}")]
+    ApiCredentials(String),
     #[error("Invalid configuration: {0}")]
     InvalidConfiguration(String),
     #[error("Internal error proxying request: {0}")]
@@ -76,18 +76,20 @@ pub enum BmcProxyError {
 
 pub struct BmcProxyParams {
     pub config: Arc<crate::Config>,
-    pub credential_config: CredentialConfig,
     pub meter: Meter,
-    pub pg_pool: PgPool,
 }
 
 #[derive(Clone)]
 struct BmcProxyState {
     config: Arc<crate::Config>,
     meter: Meter,
-    pg_pool: PgPool,
-    credential_manager: Arc<dyn CredentialManager>,
+    api_client: ForgeApiClient,
+    credential_cache: CredentialCache,
+    client_cache: HttpClientCache,
 }
+
+type CredentialCache = Arc<Mutex<HashMap<IpAddr, BmcCredentials>>>;
+type HttpClientCache = Arc<Mutex<HashMap<IpAddr, reqwest::Client>>>;
 
 impl BmcProxyState {
     fn allows(&self, request: &Request<Body>) -> bool {
@@ -112,12 +114,7 @@ pub async fn start(
     join_set: &mut JoinSet<()>,
 ) -> Result<(), BmcProxyError> {
     // Destructure params to save typing
-    let BmcProxyParams {
-        config,
-        credential_config,
-        meter,
-        pg_pool,
-    } = params;
+    let BmcProxyParams { config, meter } = params;
 
     tracing::info!(
         address = config.listen.to_string(),
@@ -127,18 +124,25 @@ pub async fn start(
         "Start carbide BMC proxy",
     );
 
-    let credential_manager = create_credential_manager(&credential_config, meter.clone())
-        .await
-        .map_err(|e| BmcProxyError::CredentialManager(e.to_string()))?;
-
     let listener = TcpListener::bind(config.listen)
         .await
         .map_err(BmcProxyError::Listen)?;
 
+    let client_config = ForgeClientConfig::new(
+        config.carbide_api.root_ca.clone(),
+        Some(ClientCert {
+            cert_path: config.carbide_api.client_cert.clone(),
+            key_path: config.carbide_api.client_key.clone(),
+        }),
+    );
+    let api_config = ApiConfig::new(config.carbide_api.api_url.as_str(), &client_config);
+    let api_client = ForgeApiClient::new(&api_config);
+
     let state = BmcProxyState {
         config,
-        pg_pool,
-        credential_manager,
+        api_client,
+        credential_cache: Arc::new(Mutex::new(HashMap::new())),
+        client_cache: Arc::new(Mutex::new(HashMap::new())),
         meter,
     };
 
@@ -467,20 +471,6 @@ async fn proxy_request(
         })?
         .map_err(|e| error_response((StatusCode::BAD_REQUEST, e.to_string()).into()))?;
 
-    let bmc_mac_address = db::machine_interface::find_by_ip(&state.pg_pool, target_ip)
-        .await
-        .map_err(|e| error_response((StatusCode::BAD_GATEWAY, e.to_string()).into()))?
-        .ok_or_else(|| {
-            error_response(
-                (
-                    StatusCode::BAD_REQUEST,
-                    format!("Unknown BMC IP address: {target_ip}"),
-                )
-                    .into(),
-            )
-        })?
-        .mac_address;
-
     let path_and_query = parts
         .uri
         .into_parts()
@@ -489,8 +479,9 @@ async fn proxy_request(
 
     let mut bmc_client_info = create_client(
         target_ip,
-        bmc_mac_address,
-        state.credential_manager.as_ref(),
+        &state.api_client,
+        &state.credential_cache,
+        &state.client_cache,
         &state.config.bmc_proxy,
     )
     .await
@@ -502,18 +493,21 @@ async fn proxy_request(
         .await
         .map_err(|e| error_response((StatusCode::BAD_REQUEST, e.to_string()).into()))?;
 
-    let Credentials::UsernamePassword { username, password } = bmc_client_info.credentials;
-
     let mut upstream_uri_parts = bmc_client_info.base_upstream_uri.into_parts();
     upstream_uri_parts.path_and_query = Some(path_and_query);
     let upstream_uri = Uri::from_parts(upstream_uri_parts)
         .map_err(|e| error_response((StatusCode::BAD_REQUEST, e.to_string()).into()))?;
 
-    let mut upstream_request = bmc_client_info
+    let upstream_request = bmc_client_info
         .http_client
         .request(parts.method.clone(), upstream_uri.to_string())
-        .basic_auth(username, Some(password))
         .headers(bmc_client_info.header_map);
+    let mut upstream_request = bmc_client_info
+        .credentials
+        .apply_to_request(upstream_request)
+        .map_err(|e| {
+            error_response((StatusCode::BAD_GATEWAY, format!("invalid credentials: {e}")).into())
+        })?;
 
     if method_supports_body(&parts.method) {
         upstream_request = upstream_request.body(body);
@@ -530,6 +524,10 @@ async fn proxy_request(
         .bytes()
         .await
         .map_err(|e| error_response((StatusCode::BAD_GATEWAY, e.to_string()).into()))?;
+
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        evict_cached_credentials(target_ip, &state.credential_cache).await;
+    }
 
     Ok(build_response(status, &headers, body))
 }
@@ -690,14 +688,58 @@ impl From<(StatusCode, &'static str)> for ProxyError {
 struct BmcClientInfo {
     pub http_client: reqwest::Client,
     pub header_map: HeaderMap,
-    pub credentials: Credentials,
+    pub credentials: BmcCredentials,
     pub base_upstream_uri: Uri,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+enum BmcCredentials {
+    UsernamePassword { username: String, password: String },
+    SessionToken { token: String },
+}
+
+impl BmcCredentials {
+    fn apply_to_request(
+        self,
+        request: reqwest::RequestBuilder,
+    ) -> Result<reqwest::RequestBuilder, http::header::InvalidHeaderValue> {
+        match self {
+            Self::UsernamePassword { username, password } => {
+                Ok(request.basic_auth(username, Some(password)))
+            }
+            Self::SessionToken { token } => {
+                Ok(request.header("X-Auth-Token", http::HeaderValue::from_str(&token)?))
+            }
+        }
+    }
+}
+
+impl TryFrom<forge::BmcCredentials> for BmcCredentials {
+    type Error = BmcProxyError;
+
+    fn try_from(value: forge::BmcCredentials) -> Result<Self, Self::Error> {
+        match value.r#type {
+            Some(forge::bmc_credentials::Type::UsernamePassword(value)) => {
+                Ok(Self::UsernamePassword {
+                    username: value.username,
+                    password: value.password,
+                })
+            }
+            Some(forge::bmc_credentials::Type::SessionToken(value)) => {
+                Ok(Self::SessionToken { token: value.token })
+            }
+            None => Err(BmcProxyError::ApiCredentials(
+                "missing credential type in API response".to_string(),
+            )),
+        }
+    }
 }
 
 async fn create_client(
     ip: IpAddr,
-    bmc_mac_address: MacAddress,
-    credential_reader: &dyn CredentialReader,
+    api_client: &ForgeApiClient,
+    credential_cache: &CredentialCache,
+    client_cache: &HttpClientCache,
     bmc_proxy: &Option<HostPortPair>,
 ) -> Result<BmcClientInfo, BmcProxyError> {
     let (host, port, add_custom_header) = match bmc_proxy {
@@ -714,32 +756,9 @@ async fn create_client(
     if add_custom_header {
         header_map.insert("forwarded", format!("host={ip}").parse().unwrap());
     };
-    let http_client = {
-        let builder = reqwest::Client::builder();
-        let builder = builder
-            .danger_accept_invalid_certs(true)
-            .redirect(reqwest::redirect::Policy::limited(5))
-            .connect_timeout(std::time::Duration::from_secs(5)) // Limit connections to 5 seconds
-            .timeout(std::time::Duration::from_secs(60)); // Limit the overall request to 60 seconds
+    let http_client = get_http_client(ip, client_cache).await?;
 
-        match builder.build() {
-            Ok(client) => client,
-            Err(err) => {
-                tracing::error!(%err, "build_http_client");
-                return Err(BmcProxyError::InternalProxying(format!(
-                    "Http building failed: {err}"
-                )));
-            }
-        }
-    };
-
-    let credentials = credential_reader
-        .get_credentials(&CredentialKey::BmcCredentials {
-            credential_type: BmcCredentialType::BmcRoot { bmc_mac_address },
-        })
-        .await
-        .map_err(|e| BmcProxyError::InternalProxying(format!("Error fetching credentials: {e}")))?
-        .ok_or(BmcProxyError::NoCredentials(ip))?;
+    let credentials = get_bmc_credentials(ip, api_client, credential_cache).await?;
 
     let base_authority = match (host, port) {
         (host, Some(port)) => Cow::Owned(format!("{}:{}", host, port)),
@@ -763,14 +782,92 @@ async fn create_client(
     })
 }
 
+async fn get_bmc_credentials(
+    ip: IpAddr,
+    api_client: &ForgeApiClient,
+    credential_cache: &CredentialCache,
+) -> Result<BmcCredentials, BmcProxyError> {
+    if let Some(credentials) = credential_cache.lock().await.get(&ip).cloned() {
+        tracing::debug!(%ip, "Using cached BMC credentials");
+        return Ok(credentials);
+    }
+
+    tracing::debug!(%ip, "Fetching BMC credentials from Carbide API");
+    let bmc_mac_address = api_client
+        .find_mac_address_by_bmc_ip(forge::BmcIp {
+            bmc_ip: ip.to_string(),
+        })
+        .await
+        .map_err(|e| BmcProxyError::ApiCredentials(e.to_string()))?
+        .mac_address;
+
+    let credentials: BmcCredentials = api_client
+        .get_bmc_credentials(forge::GetBmcCredentialsRequest {
+            mac_addr: bmc_mac_address,
+        })
+        .await
+        .map_err(|e| BmcProxyError::ApiCredentials(e.to_string()))?
+        .credentials
+        .ok_or(BmcProxyError::NoCredentials(ip))?
+        .try_into()?;
+
+    credential_cache
+        .lock()
+        .await
+        .insert(ip, credentials.clone());
+    Ok(credentials)
+}
+
+fn build_http_client() -> Result<reqwest::Client, BmcProxyError> {
+    reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .connect_timeout(std::time::Duration::from_secs(5)) // Limit connections to 5 seconds
+        .timeout(std::time::Duration::from_secs(60)) // Limit the overall request to 60 seconds
+        .pool_max_idle_per_host(4)
+        .build()
+        .map_err(|err| {
+            tracing::error!(%err, "build_http_client");
+            BmcProxyError::InternalProxying(format!("Http building failed: {err}"))
+        })
+}
+
+async fn get_http_client(
+    ip: IpAddr,
+    client_cache: &HttpClientCache,
+) -> Result<reqwest::Client, BmcProxyError> {
+    let mut client_cache = client_cache.lock().await;
+    if let Some(client) = client_cache.get(&ip) {
+        tracing::debug!(%ip, "Using cached BMC HTTP client");
+        return Ok(client.clone());
+    }
+
+    tracing::debug!(%ip, "Creating cached BMC HTTP client");
+    let client = build_http_client()?;
+    client_cache.insert(ip, client.clone());
+    Ok(client)
+}
+
+async fn evict_cached_credentials(ip: IpAddr, credential_cache: &CredentialCache) {
+    if credential_cache.lock().await.remove(&ip).is_some() {
+        tracing::info!(%ip, "Evicted cached BMC credentials after upstream auth failure");
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
     use std::str::FromStr;
+    use std::sync::Arc;
 
     use axum::http::{HeaderMap, HeaderName, HeaderValue};
+    use tokio::sync::Mutex;
 
-    use super::{forwarded_host_ip, parse_forwarded_host_value};
+    use super::{
+        BmcCredentials, CredentialCache, evict_cached_credentials, forwarded_host_ip,
+        parse_forwarded_host_value,
+    };
 
     #[test]
     fn parses_forwarded_ipv4() {
@@ -801,5 +898,55 @@ mod tests {
             forwarded_host_ip(&headers).unwrap().unwrap(),
             IpAddr::V4(Ipv4Addr::new(10, 1, 2, 3))
         );
+    }
+
+    #[test]
+    fn bmc_username_password_credentials_use_basic_auth() {
+        let request = reqwest::Client::new().get("https://example.com/redfish/v1");
+        let request = BmcCredentials::UsernamePassword {
+            username: "admin".to_string(),
+            password: "secret".to_string(),
+        }
+        .apply_to_request(request)
+        .expect("credentials should apply")
+        .build()
+        .expect("request should build");
+
+        let auth = request
+            .headers()
+            .get(http::header::AUTHORIZATION)
+            .expect("authorization header should be present");
+        assert!(auth.to_str().unwrap().starts_with("Basic "));
+    }
+
+    #[test]
+    fn bmc_session_token_credentials_use_redfish_token_header() {
+        let request = reqwest::Client::new().get("https://example.com/redfish/v1");
+        let request = BmcCredentials::SessionToken {
+            token: "token-123".to_string(),
+        }
+        .apply_to_request(request)
+        .expect("credentials should apply")
+        .build()
+        .expect("request should build");
+
+        assert_eq!(request.headers().get("X-Auth-Token").unwrap(), "token-123");
+    }
+
+    #[tokio::test]
+    async fn evict_cached_credentials_removes_entry_for_ip() {
+        let ip = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 5));
+        let credential_cache: CredentialCache = Arc::new(Mutex::new(HashMap::new()));
+        credential_cache.lock().await.insert(
+            ip,
+            BmcCredentials::UsernamePassword {
+                username: "admin".to_string(),
+                password: "secret".to_string(),
+            },
+        );
+
+        evict_cached_credentials(ip, &credential_cache).await;
+
+        assert!(!credential_cache.lock().await.contains_key(&ip));
     }
 }

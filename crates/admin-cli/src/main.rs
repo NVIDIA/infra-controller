@@ -18,22 +18,29 @@
 // CLI enums variants can be rather large, we are ok with that.
 #![allow(clippy::large_enum_variant)]
 
-use ::rpc::admin_cli::CarbideCliError;
+use std::fs::File;
+use std::io::Write;
+
+use ::rpc::admin_cli::OutputFormat;
 use ::rpc::forge_api_client::ForgeApiClient;
 use ::rpc::forge_tls_client::{ApiConfig, ForgeClientConfig};
 use cfg::cli_options::{CliCommand, CliOptions};
 use clap::CommandFactory;
+use errors::CarbideCliResult;
 use eyre::eyre;
 use forge_tls::client_config::{
     get_carbide_api_url, get_client_cert_info, get_config_from_file, get_forge_root_ca_path,
     get_proxy_info,
 };
+use measured_boot::ToTable;
+use serde::Serialize;
 use tracing_subscriber::filter::{EnvFilter, LevelFilter};
 use tracing_subscriber::fmt;
 use tracing_subscriber::prelude::*;
 
 use crate::cfg::dispatch::Dispatch;
 use crate::cfg::runtime::{RuntimeConfig, RuntimeContext};
+use crate::errors::CarbideCliError;
 use crate::rpc::ApiClient;
 
 mod async_write;
@@ -51,6 +58,7 @@ mod dpa;
 mod dpf;
 mod dpu;
 mod dpu_remediation;
+mod errors;
 mod expected_machines;
 mod expected_power_shelf;
 mod expected_rack;
@@ -79,6 +87,7 @@ mod network_security_group;
 mod network_segment;
 mod nvl_logical_partition;
 mod nvl_partition;
+mod nvlink_nmxc_endpoints;
 mod operating_system;
 mod os_image;
 mod ping;
@@ -239,6 +248,7 @@ async fn main() -> color_eyre::Result<()> {
         CliCommand::NetworkDevice(cmd) => cmd.dispatch(ctx).await?,
         CliCommand::NetworkSecurityGroup(cmd) => cmd.dispatch(ctx).await?,
         CliCommand::NetworkSegment(cmd) => cmd.dispatch(ctx).await?,
+        CliCommand::NvlinkNmxcEndpoints(cmd) => cmd.dispatch(ctx).await?,
         CliCommand::NvlPartition(cmd) => cmd.dispatch(ctx).await?,
         CliCommand::IpxeTemplate(cmd) => cmd.dispatch(ctx).await?,
         CliCommand::OsImage(cmd) => cmd.dispatch(ctx).await?,
@@ -308,4 +318,43 @@ impl<T> IntoOnlyOne<T> for Vec<T> {
         };
         Ok(first)
     }
+}
+
+/// Destination is an enum used to determine whether CLI output is going
+/// to a file path or stdout.
+pub enum Destination {
+    Path(String),
+    Stdout(),
+}
+
+/// cli_output is the generic function implementation used by the OutputResult
+/// trait, allowing callers to pass a Serialize-derived struct and have it
+/// print in either JSON or YAML.
+pub fn cli_output<T: Serialize + ToTable>(
+    input: T,
+    format: &OutputFormat,
+    destination: Destination,
+) -> CarbideCliResult<()> {
+    let output = match format {
+        OutputFormat::Json => serde_json::to_string_pretty(&input)?,
+        OutputFormat::Yaml => serde_yaml::to_string(&input)?,
+        OutputFormat::AsciiTable => input
+            .into_table()
+            .map_err(|e| CarbideCliError::GenericError(e.to_string()))?,
+        OutputFormat::Csv => {
+            return Err(CarbideCliError::GenericError(String::from(
+                "CSV not supported for measurement commands (yet)",
+            )));
+        }
+    };
+
+    match destination {
+        Destination::Path(path) => {
+            let mut file = File::create(path)?;
+            file.write_all(output.as_bytes())?
+        }
+        Destination::Stdout() => println!("{output}"),
+    }
+
+    Ok(())
 }

@@ -27,16 +27,16 @@ use std::fs::File;
 use std::io::Write;
 use std::str::FromStr;
 
-use ::rpc::admin_cli::{CarbideCliError, CarbideCliResult};
 use ::rpc::forge::BmcEndpointRequest;
 use carbide_uuid::machine::MachineId;
 use chrono::{DateTime, Local, NaiveDateTime, NaiveTime, Utc};
-use rpc::admin_cli::CarbideCliError::InvalidDateTimeFromUserInput;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use zip::CompressionMethod;
 use zip::write::{FileOptions, ZipWriter};
 
+use crate::errors::CarbideCliError::InvalidDateTimeFromUserInput;
+use crate::errors::{CarbideCliError, CarbideCliResult};
 use crate::managed_host::DebugBundle;
 use crate::rpc::ApiClient;
 

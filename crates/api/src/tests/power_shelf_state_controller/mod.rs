@@ -29,6 +29,7 @@ use crate::state_controller::power_shelf::handler::PowerShelfStateHandler;
 use crate::state_controller::power_shelf::io::PowerShelfStateControllerIO;
 use crate::tests::common;
 use crate::tests::common::api_fixtures::create_test_env;
+mod error_state;
 mod fixtures;
 mod maintenance;
 use fixtures::power_shelf::{mark_power_shelf_as_deleted, set_power_shelf_controller_state};

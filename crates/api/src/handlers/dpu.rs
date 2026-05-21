@@ -402,7 +402,7 @@ pub(crate) async fn get_managed_host_network_config_inner(
                 };
 
                 // Build the FQDN from this interface's segment domain.
-                let domain = match segment.subdomain_id {
+                let domain = match segment.config.subdomain_id {
                     Some(domain_id) => {
                         db::dns::domain::find_by_uuid(txn.as_pgconn(), domain_id)
                             .await
@@ -682,6 +682,13 @@ pub(crate) async fn get_managed_host_network_config_inner(
                     prefix: l.prefix.to_string(),
                 })
                 .collect(),
+            allowed_anycast_prefixes: p
+                .allowed_anycast_prefixes
+                .iter()
+                .map(|l| rpc::PrefixFilterPolicyEntry {
+                    prefix: l.prefix.to_string(),
+                })
+                .collect(),
             route_target_imports: p
                 .route_target_imports
                 .iter()
@@ -710,6 +717,11 @@ pub(crate) async fn get_managed_host_network_config_inner(
                     vf_intercept_bridge_sf: b.vf_intercept_bridge_sf.clone(),
                 }),
                 public_prefixes: c.public_prefixes.iter().map(|p| p.to_string()).collect(),
+                secondary_vtep_aggregate_prefixes: c
+                    .secondary_vtep_aggregate_prefixes
+                    .iter()
+                    .map(|p| p.to_string())
+                    .collect(),
                 additional_overlay_vtep_ip: dpu_snapshot
                     .network_config
                     .secondary_overlay_vtep_ip

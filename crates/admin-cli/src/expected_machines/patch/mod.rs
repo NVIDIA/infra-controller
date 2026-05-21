@@ -18,11 +18,11 @@
 pub mod args;
 pub mod cmd;
 
-use ::rpc::admin_cli::CarbideCliResult;
 pub use args::Args;
 
 use crate::cfg::run::Run;
 use crate::cfg::runtime::RuntimeContext;
+use crate::errors::CarbideCliResult;
 
 /// `expected-machine patch`: forwards CLI flags to `ApiClient::patch_expected_machine` (partial
 /// update; unset flags keep existing values). `--bmc-ip-address` uses the same server-side

@@ -253,9 +253,10 @@ mod network_device;
 mod network_security_group;
 mod network_segment;
 mod network_status;
-mod nmxm_browser;
+mod nmxc_browser;
 mod nvlink;
 mod operating_system;
+pub(crate) mod pagination;
 mod power_shelf;
 mod rack;
 mod redfish_actions;
@@ -447,6 +448,10 @@ pub fn routes(api: Arc<Api>) -> eyre::Result<NormalizePath<Router>> {
             .route(
                 "/explored-endpoint/{endpoint_ip}/reexplore",
                 post(explored_endpoint::re_explore),
+            )
+            .route(
+                "/explored-endpoint/{endpoint_ip}/refresh",
+                post(explored_endpoint::refresh_endpoint),
             )
             .route(
                 "/explored-endpoint/{endpoint_ip}/power-control",
@@ -712,7 +717,7 @@ pub fn routes(api: Arc<Api>) -> eyre::Result<NormalizePath<Router>> {
                 get(operating_system::show_all_json),
             )
             .route("/operating-system/{os_id}", get(operating_system::detail))
-            .route("/nmxm-browser", get(nmxm_browser::query))
+            .route("/nmxc-browser", get(nmxc_browser::query))
             .route(
                 "/nvlink-partition",
                 get(nvlink::show_nvlink_logical_partitions_html),

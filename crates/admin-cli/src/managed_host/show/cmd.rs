@@ -19,7 +19,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 
 use ::rpc::Machine;
-use ::rpc::admin_cli::{CarbideCliError, CarbideCliResult, OutputFormat};
+use ::rpc::admin_cli::OutputFormat;
 use carbide_uuid::machine::MachineId;
 use health_report::HealthProbeAlert;
 use prettytable::{Cell, Row, Table};
@@ -28,6 +28,7 @@ use tracing::warn;
 
 use super::args::Args;
 use crate::cfg::cli_options::SortField;
+use crate::errors::{CarbideCliError, CarbideCliResult};
 use crate::rpc::ApiClient;
 use crate::{async_write, async_write_table_as_csv};
 
@@ -313,12 +314,8 @@ fn show_managed_host_details_view(m: carbide_rpc_utils::ManagedHostOutput) -> Ca
         ("  ID", m.machine_id),
         ("  Slot Number", m.slot_number.map(|n| n.to_string())),
         ("  Tray Index", m.tray_index.map(|n| n.to_string())),
-        ("  Last reboot completed", m.host_last_reboot_time),
-        (
-            "  Last reboot requested",
-            m.host_last_reboot_requested_time_and_mode,
-        ),
         ("  Serial Number", m.host_serial_number),
+        ("  Rack ID", m.rack_id),
         ("  BIOS Version", m.host_bios_version),
         ("  GPU Count", Some(m.host_gpu_count.to_string())),
         (
@@ -328,6 +325,11 @@ fn show_managed_host_details_view(m: carbide_rpc_utils::ManagedHostOutput) -> Ca
         ("  Memory", m.host_memory),
         ("  Admin IP", m.host_admin_ip),
         ("  Admin MAC", m.host_admin_mac),
+        ("  Last reboot completed", m.host_last_reboot_time),
+        (
+            "  Last reboot requested",
+            m.host_last_reboot_requested_time_and_mode,
+        ),
         (
             "  Associated Instance Type",
             Some(m.instance_type_id.unwrap_or("Unassociated".to_string())),

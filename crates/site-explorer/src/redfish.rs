@@ -128,6 +128,10 @@ impl RedfishClient {
 
         let service_root = client.get_service_root().await.map_err(map_redfish_error)?;
 
+        if service_root.vendor.is_none() {
+            return Err(EndpointExplorationError::MissingVendor);
+        }
+
         let Some(vendor) = service_root.vendor() else {
             tracing::info!("No vendor found for BMC at {bmc_ip_address}");
             return Err(EndpointExplorationError::MissingVendor);

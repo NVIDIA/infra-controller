@@ -15,10 +15,11 @@
  * limitations under the License.
  */
 
-use ::rpc::admin_cli::{CarbideCliResult, OutputFormat};
 use carbide_uuid::machine::MachineId;
+use rpc::admin_cli::OutputFormat;
 
 use crate::dpf::common::DpfQuery;
+use crate::errors::CarbideCliResult;
 use crate::rpc::ApiClient;
 
 pub async fn modify_dpf_state(

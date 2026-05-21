@@ -24,7 +24,7 @@ applicable.
 | `enable_route_servers` | `bool` | `false` | Enables route server injection into DPU FRR configs for L2VPN. |
 | `deny_prefixes` | `Vec<Ipv4Network>` | `[]` | IPv4 CIDR prefixes that tenant instances are blocked from reaching. Generates iptables DROP rules and nvue ACL policies. |
 | `site_fabric_prefixes` | `Vec<IpNetwork>` | `[]` | IP prefixes (v4/v6) assigned for tenant use within this site. |
-| `anycast_site_prefixes` | `Vec<Ipv4Network>` | `[]` | Aggregate IPv4 prefixes containing tenant-announced prefixes (e.g., BYOIP). |
+| `anycast_site_prefixes` | `Vec<Ipv4Network>` | `[]` | Aggregate IPv4 prefixes containing tenant-announced prefixes (e.g., BYOIP). **Deprecated.** Use [`routing_profiles.allowed_anycast_prefixes`](#fnnroutingprofileconfig) instead. |
 | `common_tenant_host_asn` | `Option<u32>` | — | ASN that tenants use to peer with the DPU. If unset, any ASN is accepted. |
 | `vpc_isolation_behavior` | `VpcIsolationBehaviorType` | `MutualIsolation` | VPC isolation policy: `mutual_isolation` or `open`. |
 | `dpu_network_monitor_pinger_type` | `Option<String>` | — | Pinger implementation type (e.g., `"OobNetBind"`) for DPU link health checks. |
@@ -78,7 +78,7 @@ applicable.
 | `power_manager_options` | `PowerManagerOptions` | *(see below)* | Power management timing (see [PowerManagerOptions](#powermanageroptions)). |
 | `sitename` | `Option<String>` | — | Human-readable site name exposed to tenants via FMDS. |
 | `auto_machine_repair_plugin` | `AutoMachineRepairPluginConfig` | *(default)* | Auto-repair configuration for failed machines. |
-| `vmaas_config` | `Option<VmaasConfig>` | — | VMaaS configuration for VM system integration. |
+| `vmaas_config` | `Option<VmaasConfig>` | — | VMaaS configuration for VM system integration (see [VmaasConfig](#vmaasconfig)). |
 | `mlxconfig_profiles` | `Option<HashMap<String, MlxConfigProfile>>` | — | Named Mellanox NIC register configuration profiles for superNIC firmware flashing. TOML key: `mlx-config-profiles`. |
 | `rack_management_enabled` | `bool` | `false` | Standalone infrastructure manager mode for GB200/GB300/VR144. See doc comment for full behavioral changes. |
 | `force_dpu_nic_mode` | `bool` | `false` | Treat DPUs as regular NICs (skip managed DPU config). For dev labs with BF DPUs. |
@@ -146,7 +146,7 @@ applicable.
 | `run_interval` | `Duration` | `120s` | Interval between exploration runs. |
 | `concurrent_explorations` | `u64` | `30` | Max nodes explored in parallel. |
 | `explorations_per_run` | `u64` | `90` | Max nodes explored per run. |
-| `create_machines` | `bool` | `true` | Auto-create ManagedHost state machines. Dynamically toggleable. |
+| `create_machines` | `bool` | `true` | When false, SiteExplorer skips creating ManagedHost state machines; the DPU agent (scout) must self-register via DiscoverMachine gRPC endpoint with create_machine=true. Dynamically toggleable. |
 | `machines_created_per_run` | `u64` | `4` | Max ManagedHosts created per run. |
 | `rotate_switch_nvos_credentials` | `bool` | `false` | Auto-rotate switch NVOS admin credentials. |
 | `override_target_ip` | `Option<String>` | — | **Deprecated.** Use `bmc_proxy`. Debug BMC IP override. |
@@ -235,6 +235,18 @@ Extends `StateControllerConfig` with:
 | `next_try_duration_on_failure` | `Duration` | `2m` | Retry interval after failed power operation. |
 | `wait_duration_until_host_reboot` | `Duration` | `15m` | Wait after power-down before powering on host. |
 
+### `VmaasConfig`
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `allow_instance_vf` | `bool` | `true` | Allow VFs on instance creation. |
+| `hbn_reps` | `Option<String>` | — | HBN representors created by DPUs. |
+| `hbn_sfs` | `Option<String>` | — | HBN SF representors created by DPUs. |
+| `bridging` | `Option<TrafficInterceptBridging>` | — | Advanced traffic-intercept routing and bridging options. |
+| `public_prefixes` | `Vec<Ipv4Network>` | **required** | Publicly routable IPv4 CIDR prefixes used by traffic-intercept users. |
+| `secondary_vtep_aggregate_prefixes` | `Vec<IpNetwork>` | `[]` | IPv4 or IPv6 aggregate prefixes used only for routing and filtering. IP allocation is provided by the secondary VTEP resource pool. |
+| `secondary_overlay_support` | `bool` | `true` | Whether secondary overlay VTEP IPs are expected for DPUs. |
+
 ### `DpuConfig`
 
 | Field | Type | Default | Description |
@@ -244,6 +256,7 @@ Extends `StateControllerConfig` with:
 | `dpu_models` | `HashMap<String, Firmware>` | *(BF2+BF3 defaults)* | DPU model firmware definitions. |
 | `dpu_nic_firmware_update_versions` | `Vec<String>` | *(BF2+BF3 NIC versions)* | DPU NIC firmware version strings. |
 | `dpu_enable_secure_boot` | `bool` | `false` | Enable secure boot flow for DPU provisioning via Redfish. |
+| `num_of_vfs` | `u32` | `16` | Number of VFs configured per DPU PF during BlueField provisioning. Max `126`. |
 
 ### `NetworkSecurityGroupConfig`
 
@@ -273,6 +286,7 @@ Extends `StateControllerConfig` with:
 | `leak_tenant_host_routes_to_underlay` | `bool` | `false` | Leak tenant host routes into the underlay/default VRF. |
 | `tenant_leak_communities_accepted` | `bool` | `false` | Honor route-leak communities sent by the tenant host OS. |
 | `accepted_leaks_from_underlay` | `Vec<PrefixFilterPolicyEntry>` | `[]` | Specific underlay/default VRF prefixes allowed to leak into tenant VRFs. Routing only; does not affect ACLs. |
+| `allowed_anycast_prefixes` | `Vec<PrefixFilterPolicyEntry>` | `[]` | IPv4 or IPv6 prefixes that tenant hosts are allowed to announce to the DPU as anycast routes. |
 | `access_tier` | `u32` | `0` | Routing profile access tier. Lower values grant broader access. |
 
 ### `PrefixFilterPolicyEntry`
