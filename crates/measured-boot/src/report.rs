@@ -34,6 +34,7 @@ use serde::Serialize;
 
 use super::pcr::PcrRegisterValue;
 use super::records::MeasurementReportValueRecord;
+use crate::{FromGrpc, FromGrpcOpt};
 
 /// MeasurementReport is a composition of a MeasurementReportRecord,
 /// whose attributes are essentially copied directly it, as well as
@@ -52,24 +53,17 @@ impl MeasurementReport {
         let borrowed = &self.values;
         borrowed.iter().map(|rec| rec.clone().into()).collect()
     }
+}
 
-    ////////////////////////////////////////////////////////////
-    /// from_grpc takes an optional protobuf (as populated in a
-    /// proto response from the API) and attempts to convert it
-    /// to the backing model.
-    ////////////////////////////////////////////////////////////
-    pub fn from_grpc(some_pb: Option<&MeasurementReportPb>) -> super::Result<Self> {
-        some_pb
-            .ok_or(super::Error::RpcConversion(
-                "report is unexpectedly empty".to_string(),
-            ))
-            .and_then(|pb| {
-                Self::try_from(pb.clone()).map_err(|e| {
-                    super::Error::RpcConversion(format!("report failed pb->model conversion: {e}"))
-                })
-            })
+impl crate::DisplayName for MeasurementReport {
+    fn display_name() -> &'static str {
+        "report"
     }
 }
+
+impl FromGrpc<MeasurementReportPb> for MeasurementReport {}
+
+impl FromGrpcOpt<MeasurementReportPb> for MeasurementReport {}
 
 impl From<MeasurementReport> for MeasurementReportPb {
     fn from(val: MeasurementReport) -> Self {

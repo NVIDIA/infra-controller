@@ -61,7 +61,7 @@ use model::instance::status::network::{
     InstanceInterfaceStatusObservation, InstanceNetworkStatusObservation,
 };
 use model::machine::{
-    AttestationMode, CleanupState, FailureDetails, InstanceState, MachineState,
+    AttestationMode, CleanupContext, CleanupState, FailureDetails, InstanceState, MachineState,
     MachineValidatingState, ManagedHostState, MeasuringState, NetworkConfigUpdateState,
     SpdmMeasuringState, ValidationState,
 };
@@ -679,6 +679,7 @@ async fn test_measurement_assigned_ready_to_waiting_for_measurements_to_ca_faile
             cleanup_state: CleanupState::HostCleanup {
                 boss_controller_id: None,
             },
+            cleanup_context: CleanupContext::Deprovision,
         },
     )
     .await;
@@ -5785,6 +5786,7 @@ async fn test_instance_with_vf_when_vf_disabled(_: PgPoolOptions, options: PgCon
         hbn_sfs: None,
         bridging: None,
         public_prefixes: vec![],
+        secondary_vtep_aggregate_prefixes: vec![],
         secondary_overlay_support: false,
     });
 
@@ -5825,6 +5827,7 @@ async fn test_instance_without_vf_when_vf_disabled(_: PgPoolOptions, options: Pg
         hbn_sfs: None,
         bridging: None,
         public_prefixes: vec![],
+        secondary_vtep_aggregate_prefixes: vec![],
         secondary_overlay_support: false,
     });
 

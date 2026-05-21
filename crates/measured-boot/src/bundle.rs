@@ -29,6 +29,7 @@ use serde::Serialize;
 
 use super::pcr::PcrRegisterValue;
 use super::records::{MeasurementBundleState, MeasurementBundleValueRecord};
+use crate::{FromGrpc, FromGrpcOpt};
 
 /// MeasurementBundle is a composition of a MeasurementBundleRecord,
 /// whose attributes are essentially copied directly it, as well as
@@ -88,24 +89,17 @@ impl MeasurementBundle {
         let borrowed = &self.values;
         borrowed.iter().map(|rec| rec.clone().into()).collect()
     }
+}
 
-    ////////////////////////////////////////////////////////////
-    /// from_grpc takes an optional protobuf (as populated in a
-    /// proto response from the API) and attempts to convert it
-    /// to the backing model.
-    ////////////////////////////////////////////////////////////
-    pub fn from_grpc(some_pb: Option<&MeasurementBundlePb>) -> super::Result<Self> {
-        some_pb
-            .ok_or(super::Error::RpcConversion(String::from(
-                "bundle is unexpectedly empty",
-            )))
-            .and_then(|pb| {
-                Self::try_from(pb.clone()).map_err(|e| {
-                    super::Error::RpcConversion(format!("bundle failed pb->model conversion: {e}"))
-                })
-            })
+impl crate::DisplayName for MeasurementBundle {
+    fn display_name() -> &'static str {
+        "bundle"
     }
 }
+
+impl FromGrpc<MeasurementBundlePb> for MeasurementBundle {}
+
+impl FromGrpcOpt<MeasurementBundlePb> for MeasurementBundle {}
 
 impl TryFrom<MeasurementBundlePb> for MeasurementBundle {
     type Error = Box<dyn std::error::Error>;

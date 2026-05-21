@@ -43,6 +43,7 @@ use super::records::{
     MeasurementBundleRecord, MeasurementBundleValueRecord, MeasurementSystemProfileAttrRecord,
     MeasurementSystemProfileRecord,
 };
+use crate::{FromGrpc, FromGrpcOpt, FromPbVec};
 
 #[derive(Serialize)]
 pub struct ImportResult {
@@ -83,27 +84,20 @@ impl ToTable for SiteModel {
     }
 }
 
-impl SiteModel {
-    ////////////////////////////////////////////////////////////
-    /// from_grpc takes an optional protobuf (as populated in a
-    /// proto response from the API) and attempts to convert it
-    /// to the backing model.
-    ////////////////////////////////////////////////////////////
-    pub fn from_grpc(some_pb: Option<&SiteModelPb>) -> super::Result<Self> {
-        some_pb
-            .ok_or(super::Error::RpcConversion(
-                "model is unexpectedly empty".to_string(),
-            ))
-            .and_then(|pb| {
-                Self::from_pb(pb).map_err(|e| {
-                    super::Error::RpcConversion(format!("site failed pb->model conversion: {e}"))
-                })
-            })
+impl crate::DisplayName for SiteModel {
+    fn display_name() -> &'static str {
+        "model"
     }
+}
 
-    /// from_pb takes a SiteModelPb and converts it to a SiteModel,
-    /// generally for the purpose of importing it into the database.
-    pub fn from_pb(model: &SiteModelPb) -> super::Result<Self> {
+impl FromGrpc<SiteModelPb> for SiteModel {}
+
+impl FromGrpcOpt<SiteModelPb> for SiteModel {}
+
+impl TryFrom<SiteModelPb> for SiteModel {
+    type Error = super::Error;
+
+    fn try_from(model: SiteModelPb) -> Result<Self, Self::Error> {
         Ok(Self {
             measurement_system_profiles: MeasurementSystemProfileRecord::from_pb_vec(
                 &model.measurement_system_profiles,
@@ -117,40 +111,40 @@ impl SiteModel {
             )?,
         })
     }
+}
 
-    /// to_pb takes a SiteModel and converts it to a SiteModelPb,
-    /// generally for the purpose of handling a gRPC response.
-    pub fn to_pb(model: &SiteModel) -> super::Result<SiteModelPb> {
+impl From<SiteModel> for SiteModelPb {
+    fn from(model: SiteModel) -> Self {
         let measurement_system_profiles = model
             .measurement_system_profiles
-            .iter()
-            .map(|record| record.clone().into())
+            .into_iter()
+            .map(|record| record.into())
             .collect();
 
         let measurement_system_profiles_attrs = model
             .measurement_system_profiles_attrs
-            .iter()
-            .map(|record| record.clone().into())
+            .into_iter()
+            .map(|record| record.into())
             .collect();
 
         let measurement_bundles = model
             .measurement_bundles
-            .iter()
-            .map(|record| record.clone().into())
+            .into_iter()
+            .map(|record| record.into())
             .collect();
 
         let measurement_bundles_values = model
             .measurement_bundles_values
-            .iter()
-            .map(|record| record.clone().into())
+            .into_iter()
+            .map(|record| record.into())
             .collect();
 
-        Ok(SiteModelPb {
+        Self {
             measurement_system_profiles,
             measurement_system_profiles_attrs,
             measurement_bundles,
             measurement_bundles_values,
-        })
+        }
     }
 }
 
@@ -169,29 +163,27 @@ pub struct MachineAttestationSummaryList(pub Vec<MachineAttestationSummary>);
 // we need methods to convert this to gRPC messages and back
 impl From<MachineAttestationSummaryList> for ListAttestationSummaryResponse {
     fn from(val: MachineAttestationSummaryList) -> Self {
-        MachineAttestationSummaryList::to_grpc(&val.0)
-    }
-}
-
-impl MachineAttestationSummaryList {
-    pub fn to_grpc(val: &[MachineAttestationSummary]) -> ListAttestationSummaryResponse {
-        ListAttestationSummaryResponse {
+        Self {
             attestation_outcomes: val
-                .iter()
+                .0
+                .into_iter()
                 .map(|e| MachineAttestationSummaryPb {
                     machine_id: e.machine_id.to_string(),
                     bundle_id: e.bundle_id,
-                    profile_name: e.profile_name.clone(),
+                    profile_name: e.profile_name,
                     ts: Some(e.ts.into()),
                 })
                 .collect(),
         }
     }
+}
 
-    pub fn from_grpc(val: &ListAttestationSummaryResponse) -> super::Result<Self> {
+impl TryFrom<ListAttestationSummaryResponse> for MachineAttestationSummaryList {
+    type Error = super::Error;
+    fn try_from(val: ListAttestationSummaryResponse) -> Result<Self, Self::Error> {
         let mut attestation_summary_list = Vec::<MachineAttestationSummary>::new();
 
-        for pb in &val.attestation_outcomes {
+        for pb in val.attestation_outcomes {
             attestation_summary_list.push(MachineAttestationSummary {
                 machine_id: MachineId::from_str(&pb.machine_id).map_err(|err| {
                     super::Error::RpcConversion(format!(
@@ -199,7 +191,7 @@ impl MachineAttestationSummaryList {
                     ))
                 })?,
                 bundle_id: pb.bundle_id,
-                profile_name: pb.profile_name.clone(),
+                profile_name: pb.profile_name,
                 ts: match pb.ts {
                     Some(ts) => chrono::DateTime::<Utc>::try_from(ts).map_err(|err| {
                         super::Error::RpcConversion(format!(

@@ -27,6 +27,7 @@ mod tests {
     use carbide_uuid::measured_boot::TrustedMachineId;
     use measured_boot::pcr::PcrRegisterValue;
     use measured_boot::records::MeasurementApprovedMachineRecord;
+    use measured_boot::{FromGrpc, FromGrpcOpt};
     use model::machine::{CURRENT_STATE_MODEL_VERSION, ManagedHostState};
     use rpc::protos::measured_boot as mbrpc;
 
@@ -1676,7 +1677,7 @@ mod tests {
         let resp = site::handle_add_measurement_trusted_machine(api, req).await?;
         assert!(resp.approval_record.is_some());
         let machine_approval =
-            MeasurementApprovedMachineRecord::from_grpc(resp.approval_record.as_ref())?;
+            MeasurementApprovedMachineRecord::from_grpc_opt(resp.approval_record)?;
         assert_eq!("*".to_string(), machine_approval.machine_id.to_string());
 
         // And then re-fetch the "*" approval just to make sure
@@ -1686,7 +1687,7 @@ mod tests {
         let resp = site::handle_list_measurement_trusted_machines(api, req).await?;
         assert_eq!(1, resp.approval_records.len());
         let permissive_approval =
-            MeasurementApprovedMachineRecord::from_grpc(Some(&resp.approval_records[0]))?;
+            MeasurementApprovedMachineRecord::from_grpc(resp.approval_records[0].clone())?;
         assert_eq!(
             permissive_approval.machine_id.to_string(),
             String::from("*")

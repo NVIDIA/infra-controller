@@ -56,33 +56,9 @@ use sqlx::{
     postgres::PgRow,
     {FromRow, Row},
 };
-use tonic::Status;
 
 use super::pcr::PcrRegisterValue;
-
-/// ProtoParseError is an error used for reporting back failures
-/// to parse a protobuf message back into its record or model.
-#[derive(Debug)]
-pub struct ProtoParseError {
-    // from is the input type
-    pub from: String,
-    // to is the output type
-    pub to: String,
-    // msg is the msg
-    pub msg: String,
-}
-
-impl fmt::Display for ProtoParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "failed to convert {} to {}: {}",
-            self.from, self.to, self.msg,
-        )
-    }
-}
-
-impl Error for ProtoParseError {}
+use crate::{DisplayName, FromGrpc, FromGrpcOpt, FromPbVec};
 
 /// StringToEnumError is used for taking an input string and converting
 /// it to an enum of a given type. It is leveraged by MeasurementBundleState,
@@ -121,31 +97,21 @@ pub struct MeasurementSystemProfileRecord {
     pub ts: chrono::DateTime<Utc>,
 }
 
-impl MeasurementSystemProfileRecord {
-    pub fn from_grpc(msg: MeasurementSystemProfileRecordPb) -> super::Result<Self> {
-        Self::try_from(msg).map_err(|e| {
-            super::Error::RpcConversion(format!("bad input system profile record: {e}"))
-        })
-    }
-
-    pub fn from_pb_vec(pbs: &[MeasurementSystemProfileRecordPb]) -> super::Result<Vec<Self>> {
-        pbs.iter()
-            .map(|record| {
-                Self::try_from(record.clone()).map_err(|e| {
-                    super::Error::RpcConversion(format!(
-                        "failed system profile record conversion: {e}"
-                    ))
-                })
-            })
-            .collect()
-    }
-}
-
 impl DbTable for MeasurementSystemProfileRecord {
     fn db_table_name() -> &'static str {
         "measurement_system_profiles"
     }
 }
+
+impl DisplayName for MeasurementSystemProfileRecord {
+    fn display_name() -> &'static str {
+        "system profile record"
+    }
+}
+
+impl FromGrpc<MeasurementSystemProfileRecordPb> for MeasurementSystemProfileRecord {}
+
+impl FromPbVec<MeasurementSystemProfileRecordPb> for MeasurementSystemProfileRecord {}
 
 impl From<MeasurementSystemProfileRecord> for MeasurementSystemProfileRecordPb {
     fn from(val: MeasurementSystemProfileRecord) -> Self {
@@ -211,31 +177,21 @@ pub struct MeasurementSystemProfileAttrRecord {
     pub ts: chrono::DateTime<Utc>,
 }
 
-impl MeasurementSystemProfileAttrRecord {
-    pub fn from_grpc(msg: MeasurementSystemProfileAttrRecordPb) -> super::Result<Self> {
-        Self::try_from(msg).map_err(|e| {
-            super::Error::RpcConversion(format!("bad input system profile attr record: {e}"))
-        })
-    }
-
-    pub fn from_pb_vec(pbs: &[MeasurementSystemProfileAttrRecordPb]) -> super::Result<Vec<Self>> {
-        pbs.iter()
-            .map(|record| {
-                Self::try_from(record.clone()).map_err(|e| {
-                    super::Error::RpcConversion(format!(
-                        "failed system profile record attr conversion: {e}"
-                    ))
-                })
-            })
-            .collect()
-    }
-}
-
 impl DbTable for MeasurementSystemProfileAttrRecord {
     fn db_table_name() -> &'static str {
         "measurement_system_profiles_attrs"
     }
 }
+
+impl DisplayName for MeasurementSystemProfileAttrRecord {
+    fn display_name() -> &'static str {
+        "system profile attr record"
+    }
+}
+
+impl FromGrpc<MeasurementSystemProfileAttrRecordPb> for MeasurementSystemProfileAttrRecord {}
+
+impl FromPbVec<MeasurementSystemProfileAttrRecordPb> for MeasurementSystemProfileAttrRecord {}
 
 impl From<MeasurementSystemProfileAttrRecord> for MeasurementSystemProfileAttrRecordPb {
     fn from(val: MeasurementSystemProfileAttrRecord) -> Self {
@@ -403,30 +359,21 @@ pub struct MeasurementBundleRecord {
     pub ts: chrono::DateTime<Utc>,
 }
 
-impl MeasurementBundleRecord {
-    pub fn from_grpc(msg: MeasurementBundleRecordPb) -> super::Result<Self> {
-        Self::try_from(msg)
-            .map_err(|e| super::Error::RpcConversion(format!("bad input bundle record: {e}")))
-    }
-
-    pub fn from_pb_vec(pbs: &[MeasurementBundleRecordPb]) -> super::Result<Vec<Self>> {
-        pbs.iter()
-            .map(|record| {
-                Self::try_from(record.clone()).map_err(|e| {
-                    super::Error::RpcConversion(format!(
-                        "failed bundle record attr conversion: {e}"
-                    ))
-                })
-            })
-            .collect()
-    }
-}
-
 impl DbTable for MeasurementBundleRecord {
     fn db_table_name() -> &'static str {
         "measurement_bundles"
     }
 }
+
+impl DisplayName for MeasurementBundleRecord {
+    fn display_name() -> &'static str {
+        "bundle record"
+    }
+}
+
+impl FromGrpc<MeasurementBundleRecordPb> for MeasurementBundleRecord {}
+
+impl FromPbVec<MeasurementBundleRecordPb> for MeasurementBundleRecord {}
 
 impl From<MeasurementBundleRecord> for MeasurementBundleRecordPb {
     fn from(val: MeasurementBundleRecord) -> Self {
@@ -498,30 +445,21 @@ pub struct MeasurementBundleValueRecord {
     pub ts: chrono::DateTime<Utc>,
 }
 
-impl MeasurementBundleValueRecord {
-    pub fn from_grpc(msg: MeasurementBundleValueRecordPb) -> super::Result<Self> {
-        Self::try_from(msg)
-            .map_err(|e| super::Error::RpcConversion(format!("bad input bundle value record: {e}")))
-    }
-
-    pub fn from_pb_vec(pbs: &[MeasurementBundleValueRecordPb]) -> super::Result<Vec<Self>> {
-        pbs.iter()
-            .map(|record| {
-                Self::try_from(record.clone()).map_err(|e| {
-                    super::Error::RpcConversion(format!(
-                        "failed bundle value record attr conversion: {e}"
-                    ))
-                })
-            })
-            .collect()
-    }
-}
-
 impl DbTable for MeasurementBundleValueRecord {
     fn db_table_name() -> &'static str {
         "measurement_bundles_values"
     }
 }
+
+impl DisplayName for MeasurementBundleValueRecord {
+    fn display_name() -> &'static str {
+        "bundle value record"
+    }
+}
+
+impl FromGrpc<MeasurementBundleValueRecordPb> for MeasurementBundleValueRecord {}
+
+impl FromPbVec<MeasurementBundleValueRecordPb> for MeasurementBundleValueRecord {}
 
 impl From<MeasurementBundleValueRecord> for PcrRegisterValue {
     fn from(val: MeasurementBundleValueRecord) -> Self {
@@ -580,18 +518,19 @@ pub struct MeasurementReportRecord {
     pub ts: chrono::DateTime<Utc>,
 }
 
-impl MeasurementReportRecord {
-    pub fn from_grpc(msg: MeasurementReportRecordPb) -> Result<Self, Status> {
-        Self::try_from(msg)
-            .map_err(|e| Status::invalid_argument(format!("bad input report record: {e}")))
-    }
-}
-
 impl DbTable for MeasurementReportRecord {
     fn db_table_name() -> &'static str {
         "measurement_reports"
     }
 }
+
+impl DisplayName for MeasurementReportRecord {
+    fn display_name() -> &'static str {
+        "report record"
+    }
+}
+
+impl FromGrpc<MeasurementReportRecordPb> for MeasurementReportRecord {}
 
 impl From<MeasurementReportRecord> for MeasurementReportRecordPb {
     fn from(val: MeasurementReportRecord) -> Self {
@@ -660,18 +599,19 @@ pub struct MeasurementReportValueRecord {
     pub ts: chrono::DateTime<Utc>,
 }
 
-impl MeasurementReportValueRecord {
-    pub fn from_grpc(msg: MeasurementReportValueRecordPb) -> Result<Self, Status> {
-        Self::try_from(msg)
-            .map_err(|e| Status::invalid_argument(format!("bad input report value record: {e}")))
-    }
-}
-
 impl DbTable for MeasurementReportValueRecord {
     fn db_table_name() -> &'static str {
         "measurement_reports_values"
     }
 }
+
+impl DisplayName for MeasurementReportValueRecord {
+    fn display_name() -> &'static str {
+        "report value record"
+    }
+}
+
+impl FromGrpc<MeasurementReportValueRecordPb> for MeasurementReportValueRecord {}
 
 impl From<MeasurementReportValueRecord> for PcrRegisterValue {
     fn from(val: MeasurementReportValueRecord) -> Self {
@@ -762,18 +702,19 @@ pub struct MeasurementJournalRecord {
     pub ts: chrono::DateTime<Utc>,
 }
 
-impl MeasurementJournalRecord {
-    pub fn from_grpc(msg: MeasurementJournalRecordPb) -> Result<Self, Status> {
-        Self::try_from(msg)
-            .map_err(|e| Status::invalid_argument(format!("bad input journal record: {e}")))
-    }
-}
-
 impl DbTable for MeasurementJournalRecord {
     fn db_table_name() -> &'static str {
         "measurement_journal"
     }
 }
+
+impl DisplayName for MeasurementJournalRecord {
+    fn display_name() -> &'static str {
+        "journal record"
+    }
+}
+
+impl FromGrpc<MeasurementJournalRecordPb> for MeasurementJournalRecord {}
 
 impl From<MeasurementJournalRecord> for MeasurementJournalRecordPb {
     fn from(val: MeasurementJournalRecord) -> Self {
@@ -885,13 +826,13 @@ pub struct CandidateMachineSummary {
     pub ts: chrono::DateTime<Utc>,
 }
 
-impl CandidateMachineSummary {
-    pub fn from_grpc(msg: CandidateMachineSummaryPb) -> Result<Self, Status> {
-        Self::try_from(msg).map_err(|e| {
-            Status::invalid_argument(format!("bad input candidate machine record: {e}"))
-        })
+impl DisplayName for CandidateMachineSummary {
+    fn display_name() -> &'static str {
+        "candidate machine record"
     }
 }
+
+impl FromGrpc<CandidateMachineSummaryPb> for CandidateMachineSummary {}
 
 impl From<CandidateMachineSummary> for CandidateMachineSummaryPb {
     fn from(val: CandidateMachineSummary) -> Self {
@@ -1029,16 +970,15 @@ impl<'r> FromRow<'r, PgRow> for MeasurementApprovedMachineRecord {
     }
 }
 
-impl MeasurementApprovedMachineRecord {
-    pub fn from_grpc(msg: Option<&MeasurementApprovedMachineRecordPb>) -> Result<Self, Status> {
-        match msg {
-            Some(pb) => Self::try_from(pb.clone()).map_err(|e| {
-                Status::invalid_argument(format!("bad input trusted machine approval record: {e}"))
-            }),
-            None => Err(Status::invalid_argument("record unexpectedly empty")),
-        }
+impl DisplayName for MeasurementApprovedMachineRecord {
+    fn display_name() -> &'static str {
+        "record"
     }
 }
+
+impl FromGrpc<MeasurementApprovedMachineRecordPb> for MeasurementApprovedMachineRecord {}
+
+impl FromGrpcOpt<MeasurementApprovedMachineRecordPb> for MeasurementApprovedMachineRecord {}
 
 impl DbTable for MeasurementApprovedMachineRecord {
     fn db_table_name() -> &'static str {
@@ -1144,16 +1084,15 @@ pub struct MeasurementApprovedProfileRecord {
     pub ts: chrono::DateTime<Utc>,
 }
 
-impl MeasurementApprovedProfileRecord {
-    pub fn from_grpc(msg: Option<&MeasurementApprovedProfileRecordPb>) -> Result<Self, Status> {
-        match msg {
-            Some(pb) => Self::try_from(pb.clone()).map_err(|e| {
-                Status::invalid_argument(format!("bad input trusted profile approval record: {e}"))
-            }),
-            None => Err(Status::invalid_argument("record unexpectedly empty")),
-        }
+impl DisplayName for MeasurementApprovedProfileRecord {
+    fn display_name() -> &'static str {
+        "record"
     }
 }
+
+impl FromGrpc<MeasurementApprovedProfileRecordPb> for MeasurementApprovedProfileRecord {}
+
+impl FromGrpcOpt<MeasurementApprovedProfileRecordPb> for MeasurementApprovedProfileRecord {}
 
 impl DbTable for MeasurementApprovedProfileRecord {
     fn db_table_name() -> &'static str {

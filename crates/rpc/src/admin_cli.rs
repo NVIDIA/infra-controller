@@ -57,6 +57,7 @@ pub trait ToTable {
 }
 
 pub mod output {
+    use std::fmt;
 
     use clap::ValueEnum;
 
@@ -68,5 +69,16 @@ pub mod output {
         Csv,
         Json,
         Yaml,
+    }
+
+    impl fmt::Display for OutputFormat {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                OutputFormat::AsciiTable => write!(f, "ASCII table output format"),
+                OutputFormat::Csv => write!(f, "CSV output format"),
+                OutputFormat::Json => write!(f, "JSON output format"),
+                OutputFormat::Yaml => write!(f, "YAML output format"),
+            }
+        }
     }
 }

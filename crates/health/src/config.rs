@@ -330,6 +330,9 @@ pub struct HealthReportSinkConfig {
 
     /// Number of concurrent workers submitting reports to Carbide API.
     pub workers: usize,
+
+    /// Drop reports that contain no successes and no alerts before submitting them.
+    pub skip_empty_reports: bool,
 }
 
 impl Default for HealthReportSinkConfig {
@@ -337,6 +340,7 @@ impl Default for HealthReportSinkConfig {
         Self {
             connection: CarbideApiConnectionConfig::default(),
             workers: 4,
+            skip_empty_reports: true,
         }
     }
 }
@@ -349,6 +353,9 @@ pub struct RackHealthReportSinkConfig {
 
     /// Number of concurrent workers submitting rack-level reports to Carbide API.
     pub workers: usize,
+
+    /// Drop reports that contain no successes and no alerts before submitting them.
+    pub skip_empty_reports: bool,
 }
 
 impl Default for RackHealthReportSinkConfig {
@@ -356,6 +363,7 @@ impl Default for RackHealthReportSinkConfig {
         Self {
             connection: CarbideApiConnectionConfig::default(),
             workers: 2,
+            skip_empty_reports: true,
         }
     }
 }
@@ -368,6 +376,9 @@ pub struct SwitchHealthReportSinkConfig {
 
     /// Number of concurrent workers submitting switch-level reports to Carbide API.
     pub workers: usize,
+
+    /// Drop reports that contain no successes and no alerts before submitting them.
+    pub skip_empty_reports: bool,
 }
 
 impl Default for SwitchHealthReportSinkConfig {
@@ -375,6 +386,7 @@ impl Default for SwitchHealthReportSinkConfig {
         Self {
             connection: CarbideApiConnectionConfig::default(),
             workers: 2,
+            skip_empty_reports: true,
         }
     }
 }
@@ -387,6 +399,9 @@ pub struct PowerShelfHealthReportSinkConfig {
 
     /// Number of concurrent workers submitting power-shelf-level reports to Carbide API.
     pub workers: usize,
+
+    /// Drop reports that contain no successes and no alerts before submitting them.
+    pub skip_empty_reports: bool,
 }
 
 impl Default for PowerShelfHealthReportSinkConfig {
@@ -394,6 +409,7 @@ impl Default for PowerShelfHealthReportSinkConfig {
         Self {
             connection: CarbideApiConnectionConfig::default(),
             workers: 2,
+            skip_empty_reports: true,
         }
     }
 }
@@ -528,7 +544,7 @@ impl Default for SensorCollectorConfig {
             rediscover_interval: Duration::from_secs(300),
             state_refresh_interval: Duration::from_secs(9000),
             sensor_fetch_interval: Duration::from_secs(60),
-            sensor_fetch_concurrency: 10,
+            sensor_fetch_concurrency: 4,
             include_sensor_thresholds: true,
         }
     }
@@ -939,6 +955,7 @@ mod tests {
                 "/var/run/secrets/spiffe.io/ca.crt"
             );
             assert_eq!(health_report.workers, 8);
+            assert!(health_report.skip_empty_reports);
         } else {
             panic!("health report sink is disabled")
         }
@@ -1167,6 +1184,31 @@ cache_size = 50
         assert!(config.processors.leak_detection.is_enabled());
         assert!(config.collectors.leak_detector.is_enabled());
         assert!(!config.collectors.nvue.is_enabled());
+        if let Configurable::Enabled(ref health_report) = config.sinks.health_report {
+            assert!(health_report.skip_empty_reports);
+        } else {
+            panic!("health report sink should be enabled by default");
+        }
+    }
+
+    #[test]
+    fn test_health_report_sink_can_send_empty_reports_when_configured() {
+        let toml_content = r#"
+[sinks.health_report]
+skip_empty_reports = false
+"#;
+
+        let config: Config = Figment::new()
+            .merge(Serialized::defaults(Config::default()))
+            .merge(Toml::string(toml_content))
+            .extract()
+            .expect("could not parse config toml file");
+
+        if let Configurable::Enabled(ref health_report) = config.sinks.health_report {
+            assert!(!health_report.skip_empty_reports);
+        } else {
+            panic!("health report sink is disabled")
+        }
     }
 
     #[test]
