@@ -65,7 +65,6 @@ mod expected_rack;
 mod expected_switch;
 mod extension_service;
 mod firmware;
-mod firmware_object;
 mod generate_shell_complete;
 mod health_utils;
 mod host;
@@ -272,7 +271,6 @@ async fn main() -> color_eyre::Result<()> {
         CliCommand::Vpc(cmd) => cmd.dispatch(ctx).await?,
         CliCommand::VpcPeering(cmd) => cmd.dispatch(ctx).await?,
         CliCommand::VpcPrefix(cmd) => cmd.dispatch(ctx).await?,
-        CliCommand::FirmwareObject(cmd) => cmd.dispatch(ctx).await?,
         CliCommand::Dpf(cmd) => cmd.dispatch(ctx).await?,
         CliCommand::Redfish(action) => {
             if let redfish::Cmd::Browse(redfish::UriInfo { uri }) = &action.command {

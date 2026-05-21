@@ -38,7 +38,6 @@ pub mod expected_switch;
 pub mod extension_service;
 pub mod finder;
 pub mod firmware;
-pub mod firmware_object;
 pub mod health;
 pub mod host_reprovisioning;
 pub mod ib_fabric;

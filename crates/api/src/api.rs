@@ -1510,62 +1510,6 @@ impl Forge for Api {
         crate::handlers::expected_machine::update_expected_machines(self, request).await
     }
 
-    async fn create_firmware_object(
-        &self,
-        request: tonic::Request<rpc::CreateFirmwareObjectRequest>,
-    ) -> Result<Response<rpc::FirmwareObject>, tonic::Status> {
-        crate::handlers::firmware_object::create(self, request).await
-    }
-
-    async fn get_firmware_object(
-        &self,
-        request: tonic::Request<rpc::GetFirmwareObjectRequest>,
-    ) -> Result<Response<rpc::FirmwareObject>, tonic::Status> {
-        crate::handlers::firmware_object::get(self, request).await
-    }
-
-    async fn list_firmware_objects(
-        &self,
-        request: tonic::Request<rpc::FirmwareObjectSearchFilter>,
-    ) -> Result<Response<rpc::FirmwareObjectList>, tonic::Status> {
-        crate::handlers::firmware_object::list(self, request).await
-    }
-
-    async fn delete_firmware_object(
-        &self,
-        request: tonic::Request<rpc::DeleteFirmwareObjectRequest>,
-    ) -> Result<Response<()>, tonic::Status> {
-        crate::handlers::firmware_object::delete(self, request).await
-    }
-
-    async fn apply_firmware_object(
-        &self,
-        request: tonic::Request<rpc::ApplyFirmwareObjectRequest>,
-    ) -> Result<Response<rpc::ApplyFirmwareObjectResponse>, tonic::Status> {
-        crate::handlers::firmware_object::apply(self, request).await
-    }
-
-    async fn get_firmware_object_job_status(
-        &self,
-        request: tonic::Request<rpc::FirmwareObjectJobStatusRequest>,
-    ) -> Result<Response<rpc::FirmwareObjectJobStatusResponse>, tonic::Status> {
-        crate::handlers::firmware_object::get_job_status(self, request).await
-    }
-
-    async fn get_firmware_object_history(
-        &self,
-        request: tonic::Request<rpc::FirmwareObjectHistoryRequest>,
-    ) -> Result<Response<rpc::FirmwareObjectHistoryResponse>, tonic::Status> {
-        crate::handlers::firmware_object::get_history(self, request).await
-    }
-
-    async fn set_default_firmware_object(
-        &self,
-        request: tonic::Request<rpc::SetDefaultFirmwareObjectRequest>,
-    ) -> Result<Response<()>, tonic::Status> {
-        crate::handlers::firmware_object::set_default(self, request).await
-    }
-
     async fn get_expected_power_shelf(
         &self,
         request: Request<rpc::ExpectedPowerShelfRequest>,

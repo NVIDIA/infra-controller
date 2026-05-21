@@ -41,7 +41,6 @@ mod explored_endpoint_find;
 mod explored_managed_host_find;
 mod extension_service;
 mod finder;
-mod firmware_object;
 mod host_bmc_firmware_test;
 mod ib_fabric_find;
 mod ib_fabric_monitor;
