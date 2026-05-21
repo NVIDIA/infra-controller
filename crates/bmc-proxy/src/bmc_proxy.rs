@@ -36,8 +36,8 @@ use carbide_authn::middleware::{
 use carbide_utils::HostPortPair;
 use forge_tls::client_config::ClientCert;
 use http::{HeaderMap, Method, Request, Response, StatusCode, Uri};
-use hyper::server::conn::http2;
 use hyper_util::rt::{TokioExecutor, TokioIo};
+use hyper_util::server::conn::auto;
 use hyper_util::service::TowerToHyperService;
 use opentelemetry::KeyValue;
 use opentelemetry::metrics::Meter;
@@ -98,13 +98,24 @@ impl BmcProxyState {
             return false;
         };
 
-        auth_context.principals.iter().any(|princ| {
-            self.config.auth.acls.allows(
-                &princ.as_identifier(),
-                request.method(),
-                request.uri().path(),
-            )
-        })
+        let principal_ids = request_principal_ids(auth_context);
+        let allowed = principal_ids.iter().any(|principal| {
+            self.config
+                .auth
+                .acls
+                .allows(principal, request.method(), request.uri().path())
+        });
+
+        if !allowed {
+            tracing::info!(
+                principals = ?principal_ids,
+                path = request.uri().path(),
+                method = request.method().as_str(),
+                "Request denied by BMC proxy ACLs"
+            );
+        }
+
+        allowed
     }
 }
 
@@ -202,7 +213,7 @@ struct BmcProxy {
 
 impl BmcProxy {
     async fn run(mut self, cancel_token: CancellationToken) {
-        let http = http2::Builder::new(TokioExecutor::new());
+        let http = auto::Builder::new(TokioExecutor::new());
 
         let connection_total_counter = self
             .state
@@ -413,7 +424,7 @@ fn get_tls_acceptor(tls_config: &TlsConfig) -> Result<RefreshableTlsAcceptor, Bm
             BmcProxyError::TlsConfig(format!("Rustls error building server config: {e}",))
         })?;
 
-    tls.alpn_protocols = vec![b"h2".to_vec()];
+    tls.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
 
     let acceptor = TlsAcceptor::from(Arc::new(tls));
     Ok(RefreshableTlsAcceptor {
@@ -547,12 +558,7 @@ async fn authorize_proxy_request(
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
-    let mut present_principals = auth_context
-        .principals
-        .iter()
-        .map(Principal::as_identifier)
-        .collect::<Vec<_>>();
-    present_principals.push(Principal::Anonymous.as_identifier());
+    let present_principals = request_principal_ids(auth_context);
 
     let allowed = present_principals
         .iter()
@@ -569,6 +575,16 @@ async fn authorize_proxy_request(
         );
         Err(StatusCode::FORBIDDEN)
     }
+}
+
+fn request_principal_ids(auth_context: &AuthContext<()>) -> Vec<String> {
+    let mut principals = auth_context
+        .principals
+        .iter()
+        .map(Principal::as_identifier)
+        .collect::<Vec<_>>();
+    principals.push(Principal::Anonymous.as_identifier());
+    principals
 }
 
 fn build_response(
