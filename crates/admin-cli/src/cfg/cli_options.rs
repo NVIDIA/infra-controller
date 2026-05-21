@@ -25,9 +25,9 @@ use crate::{
     machine_interfaces, machine_validation, managed_host, managed_switch, mlx, network_devices,
     network_security_group, network_segment, nvl_logical_partition, nvl_partition,
     nvlink_nmxc_endpoints, operating_system, os_image, ping, power_shelf, rack, rack_firmware,
-    redfish, resource_pool, rms, route_server, scout_stream, set, site_explorer, sku, ssh, switch,
-    tenant, tenant_keyset, tpm_ca, trim_table, version, vpc, vpc_peering, vpc_prefix,
-    spx_partition,
+    redfish, resource_pool, rms, route_server, scout_stream, set, site_explorer, sku,
+    spx_partition, ssh, switch, tenant, tenant_keyset, tpm_ca, trim_table, version, vpc,
+    vpc_peering, vpc_prefix,
 };
 
 #[derive(Parser, Debug)]

@@ -117,7 +117,6 @@ pub(crate) async fn delete(
         .map_err(CarbideError::from)?;
 
     if let Some(vni) = resp.vni {
-
         let mut txn = api.txn_begin().await?;
 
         db::resource_pool::release(&api.common_pools.ethernet.pool_dpa_vni, &mut txn, vni)

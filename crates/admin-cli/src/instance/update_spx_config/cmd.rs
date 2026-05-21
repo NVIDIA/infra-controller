@@ -15,9 +15,8 @@
  * limitations under the License.
  */
 
-use crate::errors::{CarbideCliError, CarbideCliResult};
-
 use super::args::Args;
+use crate::errors::{CarbideCliError, CarbideCliResult};
 use crate::instance::common::GlobalOptions;
 use crate::rpc::ApiClient;
 

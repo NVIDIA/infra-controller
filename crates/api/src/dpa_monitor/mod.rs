@@ -256,6 +256,8 @@ impl DpaMonitor {
     // or remove the NIC from any partition.
     // The desired state will be in instance.spx_config field. The observed state will be in the
     // NIC's network_status_observation field.
+    // Currently, we only support one attachment per NIC. This routine will have to be changed
+    // when we start supporting multiple attachments per NIC.
     #[allow(clippy::too_many_arguments)]
     async fn reconcile_assigned_state<'a>(
         &mut self,
@@ -319,16 +321,14 @@ impl DpaMonitor {
             ));
         }
 
-
         if this_nic_configured_attachments.is_empty() {
             if !this_nic_observed_attachments.is_empty() {
                 need_deletion = true;
             }
         } else {
-            let mut txn =
-                db_services.db_pool.begin().await.map_err(|e| {
-                    db::AnnotatedSqlxError::new("reconcile_assigned_state begin txn", e)
-                })?;
+            let mut txn = db_services.db_pool.begin().await.map_err(|e| {
+                db::AnnotatedSqlxError::new("reconcile_assigned_state begin txn", e)
+            })?;
             let partition_id = this_nic_configured_attachments.remove(0).spx_partition_id;
             let partition = db::spx_partition::find_by(
                 txn.as_mut(),
@@ -412,6 +412,8 @@ impl DpaMonitor {
     // This function will be called when the DPA object is in Ready state.
     // We need to make sure that the partitioning configuration of the NIC is in sync with
     // the desired state.
+    // Currently, we only support one attachment per NIC. This routine will have to be changed
+    // when we start supporting multiple attachments per NIC.
     async fn reconcile_ready_state<'a>(
         &mut self,
         machine: &Machine,
