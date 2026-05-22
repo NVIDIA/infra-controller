@@ -161,6 +161,9 @@ spec:
             - name: nico-roots
               mountPath: "/var/run/secrets/forge-roots"
               readOnly: true
+            - name: nico-roots
+              mountPath: "/var/run/secrets/nico-roots"
+              readOnly: true
             - name: firmware
               mountPath: "/opt/carbide/firmware"
               readOnly: true

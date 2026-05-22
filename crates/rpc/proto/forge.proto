@@ -3972,6 +3972,7 @@ message ManagedHostNetworkConfigResponse {
 
   // Route imports and tagging details for exports
   // used by FNN configs.
+  // Deprecated: use FlatInterfaceConfig.routing_profile for per-VPC routing.
   // NOTE: This will replace internet_l3_vni and common_internal_route_target but could allow
   //       common_internal_route_target to be renamed/repurposed as a site-level RT.
   //       to become a site-level common route target.
@@ -4195,6 +4196,10 @@ message FlatInterfaceConfig {
 
   // IPv6 configuration for dual-stack FNN interfaces.
   optional FlatInterfaceIpv6Config ipv6_interface_config = 19;
+
+  // Route imports and tagging details for exports used by FNN configs.
+  // This is scoped to the VPC that owns this interface.
+  optional RoutingProfile routing_profile = 20;
 
   // The details of the network security group associated with
   // either the instance or its parent VPC.

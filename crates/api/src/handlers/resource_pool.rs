@@ -50,7 +50,6 @@ pub(crate) async fn grow(
             Ok(Response::new(rpc::GrowResourcePoolResponse {}))
         }
         Err(DE::InvalidArgument(msg)) => Err(CarbideError::InvalidArgument(msg).into()),
-        Err(DE::InvalidToml(err)) => Err(CarbideError::InvalidArgument(err.to_string()).into()),
         Err(DE::ResourcePoolError(msg)) => Err(CarbideError::Internal {
             message: msg.to_string(),
         }

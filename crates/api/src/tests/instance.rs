@@ -4805,6 +4805,268 @@ async fn test_allocate_instance_with_multiple_fnn_vpc_prefixes(
     );
 }
 
+#[crate::sqlx_test]
+async fn test_fnn_vrf_loopbacks_are_per_vpc_and_removed_on_network_update(pool: sqlx::PgPool) {
+    let mut overrides = TestEnvOverrides::default().with_fnn_config(None);
+    overrides.fnn_config.as_mut().unwrap().use_vpc_vrf_loopback = true;
+    let env = create_test_env_with_overrides(pool, overrides).await;
+
+    // Create FNN tenants matching the existing peer-VPC fixture organizations.
+    for (organization_id, name) in [
+        (
+            "2829bbe3-c169-4cd9-8b2a-19a8b1618a93",
+            "fnn loopback tenant 1",
+        ),
+        (
+            "e65a9d69-39d2-4872-a53e-e5cb87c84e75",
+            "fnn loopback tenant 2",
+        ),
+    ] {
+        env.api
+            .create_tenant(Request::new(rpc::forge::CreateTenantRequest {
+                organization_id: organization_id.to_string(),
+                routing_profile_type: Some("INTERNAL".to_string()),
+                metadata: Some(rpc::forge::Metadata {
+                    name: name.to_string(),
+                    ..Default::default()
+                }),
+            }))
+            .await
+            .unwrap();
+    }
+
+    // Create two FNN VPCs and allocate one interface on each VPC.
+    let (first_vpc, _, first_segment_id, second_vpc, _, second_segment_id) = env
+        .create_vpc_and_peer_vpc_with_tenant_segments(
+            rpc::forge::VpcVirtualizationType::Fnn,
+            rpc::forge::VpcVirtualizationType::Fnn,
+        )
+        .await;
+    let first_vpc = first_vpc.expect("first VPC should be present");
+    let second_vpc = second_vpc.expect("second VPC should be present");
+    let mh = create_managed_host_multi_dpu(&env, 2).await;
+    let first_dpu_id = mh.dpu_n(0).id;
+    let second_dpu_id = mh.dpu_n(1).id;
+
+    let mut txn = env.db_txn().await;
+    let host_machine = mh.host().db_machine(&mut txn).await;
+    let device_locators = [first_dpu_id, second_dpu_id]
+        .iter()
+        .map(|dpu_id| host_machine.get_device_locator_for_dpu_id(dpu_id).unwrap())
+        .collect_vec();
+    txn.commit().await.unwrap();
+
+    let instance = mh
+        .instance_builer(&env)
+        .network(interface_network_config_with_devices(
+            &[first_segment_id, second_segment_id],
+            &device_locators,
+        ))
+        .build()
+        .await;
+
+    // Fetch each DPU config so each interface resolves its own VPC loopback.
+    let first_config = env
+        .api
+        .get_managed_host_network_config(Request::new(
+            rpc::forge::ManagedHostNetworkConfigRequest {
+                dpu_machine_id: Some(first_dpu_id),
+            },
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    let second_config = env
+        .api
+        .get_managed_host_network_config(Request::new(
+            rpc::forge::ManagedHostNetworkConfigRequest {
+                dpu_machine_id: Some(second_dpu_id),
+            },
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+
+    // Verify each DPU received a loopback for its interface's VPC.
+    assert_eq!(first_config.tenant_interfaces.len(), 1);
+    assert_eq!(second_config.tenant_interfaces.len(), 1);
+    let first_loopback = first_config.tenant_interfaces[0]
+        .tenant_vrf_loopback_ip
+        .clone()
+        .expect("first VPC loopback should be present");
+    let second_loopback = second_config.tenant_interfaces[0]
+        .tenant_vrf_loopback_ip
+        .clone()
+        .expect("second VPC loopback should be present");
+    assert_ne!(first_loopback, second_loopback);
+
+    // Update the instance to keep only the first VPC interface.
+    env.api
+        .update_instance_config(Request::new(rpc::forge::InstanceConfigUpdateRequest {
+            if_version_match: None,
+            config: Some(rpc::InstanceConfig {
+                tenant: Some(default_tenant_config()),
+                os: Some(default_os_config()),
+                network: Some(interface_network_config_with_devices(
+                    &[first_segment_id],
+                    std::slice::from_ref(&device_locators[0]),
+                )),
+                infiniband: None,
+                nvlink: None,
+                network_security_group_id: None,
+                dpu_extension_services: None,
+            }),
+            instance_id: Some(instance.id),
+            metadata: Some(rpc::Metadata {
+                name: "single-fnn-vpc".to_string(),
+                description: "tests/instance".to_string(),
+                labels: vec![],
+            }),
+        }))
+        .await
+        .unwrap();
+
+    // Move the instance to ready state after the network config update.
+    env.run_machine_state_controller_iteration_network_config_return_to_ready(&mh, false)
+        .await;
+
+    // Verify only the removed VPC loopback was released.
+    let mut txn = env.db_txn().await;
+    let retained_loopback = db::vpc_dpu_loopback::find(txn.as_mut(), &first_dpu_id, &first_vpc)
+        .await
+        .unwrap()
+        .expect("retained VPC loopback should remain");
+    assert_eq!(retained_loopback.loopback_ip.to_string(), first_loopback);
+    assert!(
+        db::vpc_dpu_loopback::find(txn.as_mut(), &second_dpu_id, &second_vpc)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[crate::sqlx_test]
+async fn test_fnn_vrf_loopbacks_are_per_vpc_for_pf_and_vf_on_one_dpu(pool: sqlx::PgPool) {
+    let mut overrides = TestEnvOverrides::default().with_fnn_config(None);
+    overrides.fnn_config.as_mut().unwrap().use_vpc_vrf_loopback = true;
+    let env = create_test_env_with_overrides(pool, overrides).await;
+
+    // Create FNN tenants matching the existing peer-VPC fixture organizations.
+    for (organization_id, name) in [
+        (
+            "2829bbe3-c169-4cd9-8b2a-19a8b1618a93",
+            "fnn vf loopback tenant 1",
+        ),
+        (
+            "e65a9d69-39d2-4872-a53e-e5cb87c84e75",
+            "fnn vf loopback tenant 2",
+        ),
+    ] {
+        env.api
+            .create_tenant(Request::new(rpc::forge::CreateTenantRequest {
+                organization_id: organization_id.to_string(),
+                routing_profile_type: Some("INTERNAL".to_string()),
+                metadata: Some(rpc::forge::Metadata {
+                    name: name.to_string(),
+                    ..Default::default()
+                }),
+            }))
+            .await
+            .unwrap();
+    }
+
+    // Create two FNN VPCs and allocate PF/VF interfaces on one DPU.
+    let (first_vpc, _, first_segment_id, second_vpc, _, second_segment_id) = env
+        .create_vpc_and_peer_vpc_with_tenant_segments(
+            rpc::forge::VpcVirtualizationType::Fnn,
+            rpc::forge::VpcVirtualizationType::Fnn,
+        )
+        .await;
+    let first_vpc = first_vpc.expect("first VPC should be present");
+    let second_vpc = second_vpc.expect("second VPC should be present");
+    let mh = create_managed_host(&env).await;
+    let dpu_id = mh.dpu().id;
+    let instance = mh
+        .instance_builer(&env)
+        .network(single_interface_network_config_with_vfs(vec![
+            first_segment_id,
+            second_segment_id,
+        ]))
+        .build()
+        .await;
+
+    // Fetch the single DPU config and verify both PF and VF receive loopbacks.
+    let network_config = env
+        .api
+        .get_managed_host_network_config(Request::new(
+            rpc::forge::ManagedHostNetworkConfigRequest {
+                dpu_machine_id: Some(dpu_id),
+            },
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(network_config.tenant_interfaces.len(), 2);
+    assert_eq!(
+        network_config.tenant_interfaces[0].function_type,
+        rpc::InterfaceFunctionType::Physical as i32
+    );
+    assert_eq!(
+        network_config.tenant_interfaces[1].function_type,
+        rpc::InterfaceFunctionType::Virtual as i32
+    );
+    let first_loopback = network_config.tenant_interfaces[0]
+        .tenant_vrf_loopback_ip
+        .clone()
+        .expect("PF VPC loopback should be present");
+    let second_loopback = network_config.tenant_interfaces[1]
+        .tenant_vrf_loopback_ip
+        .clone()
+        .expect("VF VPC loopback should be present");
+    assert_ne!(first_loopback, second_loopback);
+
+    // Update the instance to keep only the PF-backed VPC interface.
+    env.api
+        .update_instance_config(Request::new(rpc::forge::InstanceConfigUpdateRequest {
+            if_version_match: None,
+            config: Some(rpc::InstanceConfig {
+                tenant: Some(default_tenant_config()),
+                os: Some(default_os_config()),
+                network: Some(single_interface_network_config(first_segment_id)),
+                infiniband: None,
+                nvlink: None,
+                network_security_group_id: None,
+                dpu_extension_services: None,
+            }),
+            instance_id: Some(instance.id),
+            metadata: Some(rpc::Metadata {
+                name: "single-fnn-vpc".to_string(),
+                description: "tests/instance".to_string(),
+                labels: vec![],
+            }),
+        }))
+        .await
+        .unwrap();
+
+    // Move the instance to ready state after the network config update.
+    env.run_machine_state_controller_iteration_network_config_return_to_ready(&mh, false)
+        .await;
+
+    // Verify the retained PF VPC loopback remains and the removed VF VPC loopback is gone.
+    let mut txn = env.db_txn().await;
+    let retained_loopback = db::vpc_dpu_loopback::find(txn.as_mut(), &dpu_id, &first_vpc)
+        .await
+        .unwrap()
+        .expect("retained PF VPC loopback should remain");
+    assert_eq!(retained_loopback.loopback_ip.to_string(), first_loopback);
+    assert!(
+        db::vpc_dpu_loopback::find(txn.as_mut(), &dpu_id, &second_vpc)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
 /// Verifies that non-FNN interfaces cannot span direct segments from multiple VPCs.
 #[crate::sqlx_test]
 async fn test_allocate_instance_rejects_multiple_non_fnn_network_segments(

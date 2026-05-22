@@ -24,7 +24,6 @@ use std::str::FromStr;
 use ::rpc::errors::RpcDataConversionError;
 use carbide_uuid::machine::MachineId;
 use db::measured_boot::interface::machine::get_candidate_machine_records;
-use measured_boot::pcr::PcrRegisterValue;
 use rpc::protos::measured_boot::{
     AttestCandidateMachineRequest, AttestCandidateMachineResponse, ListCandidateMachinesRequest,
     ListCandidateMachinesResponse, ShowCandidateMachineRequest, ShowCandidateMachineResponse,
@@ -34,6 +33,7 @@ use tonic::Status;
 
 use crate::CarbideError;
 use crate::api::Api;
+use crate::measured_boot::convert_vec;
 
 /// handle_attest_candidate_machine handles the AttestCandidateMachine API endpoint.
 pub async fn handle_attest_candidate_machine(
@@ -46,7 +46,7 @@ pub async fn handle_attest_candidate_machine(
         MachineId::from_str(&req.machine_id).map_err(|_| {
             CarbideError::from(RpcDataConversionError::InvalidMachineId(req.machine_id))
         })?,
-        &PcrRegisterValue::from_pb_vec(req.pcr_values),
+        &convert_vec(req.pcr_values),
     )
     .await
     .map_err(|e| CarbideError::Internal {

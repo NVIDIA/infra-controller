@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
+use ::rpc::measured_boot::FromGrpc;
 use base64::prelude::*;
 use carbide_uuid::machine::MachineId;
 use carbide_uuid::machine_validation::MachineValidationId;
@@ -37,7 +38,6 @@ use common::api_fixtures::{
 };
 use health_report::HealthReport;
 use ipnetwork::IpNetwork;
-use measured_boot::FromGrpc;
 use measured_boot::bundle::MeasurementBundle;
 use measured_boot::pcr::PcrRegisterValue;
 use measured_boot::records::MeasurementBundleState;
@@ -60,6 +60,7 @@ use rpc::{DiscoveryData, DiscoveryInfo};
 use tonic::{Code, Request};
 
 use crate::handlers::measured_boot::rpc_forge::MachineDiscoveryInfo;
+use crate::measured_boot::convert_vec;
 use crate::state_controller::db_write_batch::DbWriteBatch;
 use crate::state_controller::machine::context::MachineStateHandlerContextObjects;
 use crate::state_controller::machine::handler::{
@@ -1740,7 +1741,7 @@ async fn test_measurement_host_init_failed_to_waiting_for_measurements_to_pendin
         .attest_candidate_machine(Request::new(
             rpc::protos::measured_boot::AttestCandidateMachineRequest {
                 machine_id: host_machine_id.to_string(),
-                pcr_values: PcrRegisterValue::to_pb_vec(&pcr_values),
+                pcr_values: convert_vec(pcr_values),
             },
         ))
         .await

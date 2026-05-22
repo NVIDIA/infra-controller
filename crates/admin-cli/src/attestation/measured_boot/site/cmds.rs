@@ -21,11 +21,11 @@
 use std::fs::File;
 use std::io::BufReader;
 
-use ::rpc::admin_cli::{ToTable, set_summary};
+use ::rpc::measured_boot::FromGrpcOpt;
 use ::rpc::protos::measured_boot::ImportSiteMeasurementsRequest;
-use measured_boot::FromGrpcOpt;
 use measured_boot::records::{MeasurementApprovedMachineRecord, MeasurementApprovedProfileRecord};
 use measured_boot::site::{ImportResult, SiteModel};
+use measured_boot::{ToTable, set_summary};
 use serde::Serialize;
 
 use crate::attestation::measured_boot::global;

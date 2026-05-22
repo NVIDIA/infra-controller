@@ -23,14 +23,15 @@
 mod tests {
     use std::str::FromStr;
 
+    use ::rpc::measured_boot::{FromGrpc, FromGrpcOpt};
     use carbide_uuid::machine::MachineId;
     use carbide_uuid::measured_boot::TrustedMachineId;
     use measured_boot::pcr::PcrRegisterValue;
     use measured_boot::records::MeasurementApprovedMachineRecord;
-    use measured_boot::{FromGrpc, FromGrpcOpt};
     use model::machine::{CURRENT_STATE_MODEL_VERSION, ManagedHostState};
     use rpc::protos::measured_boot as mbrpc;
 
+    use crate::measured_boot::convert_vec;
     use crate::measured_boot::rpc::{bundle, journal, machine, profile, report, site};
     use crate::measured_boot::tests::common::{create_test_machine, load_topology_json};
     use crate::tests::common::api_fixtures::create_test_env;
@@ -299,7 +300,7 @@ mod tests {
         ];
         let req = mbrpc::AttestCandidateMachineRequest {
             machine_id: princess_network.machine_id.to_string(),
-            pcr_values: PcrRegisterValue::to_pb_vec(&pcr_values),
+            pcr_values: convert_vec(pcr_values),
         };
 
         // And that attestation resulted in..
@@ -382,7 +383,7 @@ mod tests {
         // Make the report.
         let req = mbrpc::CreateMeasurementReportRequest {
             machine_id: princess_network.machine_id.to_string(),
-            pcr_values: PcrRegisterValue::to_pb_vec(&pcr_values),
+            pcr_values: convert_vec(pcr_values),
         };
         let result = report::handle_create_measurement_report(api, req).await;
         assert!(result.is_ok());
@@ -552,7 +553,7 @@ mod tests {
 
         let req = mbrpc::CreateMeasurementReportRequest {
             machine_id: princess_network.machine_id.to_string(),
-            pcr_values: PcrRegisterValue::to_pb_vec(&pcr_values),
+            pcr_values: convert_vec(pcr_values),
         };
         let result = report::handle_create_measurement_report(api, req).await;
         assert!(result.is_ok());
@@ -652,7 +653,7 @@ mod tests {
         let req = mbrpc::CreateMeasurementBundleRequest {
             name: Some(String::from("test-bundle")),
             profile_id: profile.profile_id,
-            pcr_values: PcrRegisterValue::to_pb_vec(&pcr_values),
+            pcr_values: convert_vec(pcr_values.clone()),
             state: mbrpc::MeasurementBundleStatePb::Active.into(),
         };
         let resp = bundle::handle_create_measurement_bundle(api, req).await?;
@@ -857,7 +858,7 @@ mod tests {
         // Make the report.
         let req = mbrpc::CreateMeasurementReportRequest {
             machine_id: princess_network.machine_id.to_string(),
-            pcr_values: PcrRegisterValue::to_pb_vec(&report_pcr_values()),
+            pcr_values: convert_vec(report_pcr_values()),
         };
         let result = report::handle_create_measurement_report(api, req).await;
         assert!(result.is_ok());
@@ -904,7 +905,7 @@ mod tests {
         let req = mbrpc::CreateMeasurementBundleRequest {
             name: Some(String::from("3-elem_3m")),
             profile_id: profile.profile_id,
-            pcr_values: PcrRegisterValue::to_pb_vec(&pcr_values),
+            pcr_values: convert_vec(pcr_values.clone()),
             state: mbrpc::MeasurementBundleStatePb::Active.into(),
         };
         let resp = bundle::handle_create_measurement_bundle(api, req).await?;
@@ -942,7 +943,7 @@ mod tests {
         let req = mbrpc::CreateMeasurementBundleRequest {
             name: Some(String::from("5-elem_2m")),
             profile_id: profile.profile_id,
-            pcr_values: PcrRegisterValue::to_pb_vec(&pcr_values),
+            pcr_values: convert_vec(pcr_values.clone()),
             state: mbrpc::MeasurementBundleStatePb::Active.into(),
         };
         let resp = bundle::handle_create_measurement_bundle(api, req).await?;
@@ -978,7 +979,7 @@ mod tests {
         let req = mbrpc::CreateMeasurementBundleRequest {
             name: Some(String::from("5-elem_0m")),
             profile_id: profile.profile_id,
-            pcr_values: PcrRegisterValue::to_pb_vec(&pcr_values),
+            pcr_values: convert_vec(pcr_values.clone()),
             state: mbrpc::MeasurementBundleStatePb::Active.into(),
         };
         let resp = bundle::handle_create_measurement_bundle(api, req).await?;
@@ -1013,7 +1014,7 @@ mod tests {
         let req = mbrpc::CreateMeasurementBundleRequest {
             name: Some(String::from("4-elem_3m")),
             profile_id: profile.profile_id,
-            pcr_values: PcrRegisterValue::to_pb_vec(&pcr_values),
+            pcr_values: convert_vec(pcr_values.clone()),
             state: mbrpc::MeasurementBundleStatePb::Active.into(),
         };
         let resp = bundle::handle_create_measurement_bundle(api, req).await?;
@@ -1042,7 +1043,7 @@ mod tests {
         let req = mbrpc::CreateMeasurementBundleRequest {
             name: Some(String::from("3-elem_1m")),
             profile_id: profile.profile_id,
-            pcr_values: PcrRegisterValue::to_pb_vec(&pcr_values),
+            pcr_values: convert_vec(pcr_values.clone()),
             state: mbrpc::MeasurementBundleStatePb::Active.into(),
         };
         let resp = bundle::handle_create_measurement_bundle(api, req).await?;
@@ -1182,7 +1183,7 @@ mod tests {
         // Make the report.
         let req = mbrpc::CreateMeasurementReportRequest {
             machine_id: princess_network.machine_id.to_string(),
-            pcr_values: PcrRegisterValue::to_pb_vec(&report_pcr_values()),
+            pcr_values: convert_vec(report_pcr_values()),
         };
         let result = report::handle_create_measurement_report(api, req).await;
         assert!(result.is_ok());
@@ -1226,7 +1227,7 @@ mod tests {
         // Make the report for another machine
         let req = mbrpc::CreateMeasurementReportRequest {
             machine_id: beer_louisiana.machine_id.to_string(),
-            pcr_values: PcrRegisterValue::to_pb_vec(&three_elem_3matching_pcr_values()),
+            pcr_values: convert_vec(three_elem_3matching_pcr_values()),
         };
         let result = report::handle_create_measurement_report(api, req).await;
         assert!(result.is_ok());
@@ -1256,7 +1257,7 @@ mod tests {
         let req = mbrpc::CreateMeasurementBundleRequest {
             name: Some(String::from("3-elem_3m")),
             profile_id: beer_louisiana_profile_id,
-            pcr_values: PcrRegisterValue::to_pb_vec(&three_elem_3matching_pcr_values()),
+            pcr_values: convert_vec(three_elem_3matching_pcr_values()),
             state: mbrpc::MeasurementBundleStatePb::Active.into(),
         };
         let resp = bundle::handle_create_measurement_bundle(api, req).await?;
@@ -1369,7 +1370,7 @@ mod tests {
         let req = mbrpc::CreateMeasurementBundleRequest {
             name: Some(String::from("test-bundle")),
             profile_id: profile1.profile_id,
-            pcr_values: PcrRegisterValue::to_pb_vec(&pcr_values1),
+            pcr_values: convert_vec(pcr_values1.clone()),
             state: mbrpc::MeasurementBundleStatePb::Active.into(),
         };
         let resp = bundle::handle_create_measurement_bundle(api, req).await?;
@@ -1382,7 +1383,7 @@ mod tests {
         let req = mbrpc::CreateMeasurementBundleRequest {
             name: Some(String::from("test-bundle-2")),
             profile_id: profile2.profile_id,
-            pcr_values: PcrRegisterValue::to_pb_vec(&pcr_values2),
+            pcr_values: convert_vec(pcr_values2.clone()),
             state: mbrpc::MeasurementBundleStatePb::Active.into(),
         };
         let resp = bundle::handle_create_measurement_bundle(api, req).await?;
@@ -1462,7 +1463,7 @@ mod tests {
 
         let req = mbrpc::CreateMeasurementReportRequest {
             machine_id: princess_network.machine_id.to_string(),
-            pcr_values: PcrRegisterValue::to_pb_vec(&pcr_values),
+            pcr_values: convert_vec(pcr_values),
         };
         let result = report::handle_create_measurement_report(api, req).await;
         assert!(result.is_ok());
@@ -1571,7 +1572,7 @@ mod tests {
 
         let req = mbrpc::CreateMeasurementReportRequest {
             machine_id: princess_network.machine_id.to_string(),
-            pcr_values: PcrRegisterValue::to_pb_vec(&pcr_values),
+            pcr_values: convert_vec(pcr_values),
         };
         let result = report::handle_create_measurement_report(api, req).await;
         assert!(result.is_ok());
@@ -1778,7 +1779,7 @@ mod tests {
 
         let req = mbrpc::CreateMeasurementReportRequest {
             machine_id: princess_network.machine_id.to_string(),
-            pcr_values: PcrRegisterValue::to_pb_vec(&princess_values),
+            pcr_values: convert_vec(princess_values),
         };
         let result = report::handle_create_measurement_report(api, req).await;
         assert!(result.is_ok());
@@ -1836,7 +1837,7 @@ mod tests {
 
         let req = mbrpc::CreateMeasurementReportRequest {
             machine_id: beer_louisiana.machine_id.to_string(),
-            pcr_values: PcrRegisterValue::to_pb_vec(&beer_values),
+            pcr_values: convert_vec(beer_values),
         };
         let result = report::handle_create_measurement_report(api, req).await;
         assert!(result.is_ok());
@@ -1894,7 +1895,7 @@ mod tests {
 
         let req = mbrpc::CreateMeasurementReportRequest {
             machine_id: lime_coconut.machine_id.to_string(),
-            pcr_values: PcrRegisterValue::to_pb_vec(&lime_values),
+            pcr_values: convert_vec(lime_values),
         };
         let result = report::handle_create_measurement_report(api, req).await;
         assert!(result.is_ok());

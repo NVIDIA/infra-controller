@@ -23,7 +23,9 @@ use ::rpc::forge::{
     InstanceDpuExtensionServiceConfig, InstanceDpuExtensionServicesConfig,
     ManagedHostNetworkConfigRequest, ManagedHostNetworkStatusRequest,
 };
-use common::api_fixtures::network_segment::create_network_segment;
+use common::api_fixtures::network_segment::{
+    FIXTURE_TENANT_NETWORK_SEGMENT_GATEWAYS, create_network_segment, create_tenant_network_segment,
+};
 use common::api_fixtures::{self, create_managed_host, dpu, network_configured_with_health};
 use forge_secrets::credentials::{BgpCredentialType, CredentialKey, Credentials};
 use mac_address::MacAddress;
@@ -36,7 +38,7 @@ use rpc::Metadata;
 use rpc::forge::forge_server::Forge;
 
 use crate::cfg::file::{
-    AdminFnnConfig, FnnConfig, FnnRoutingProfileConfig, PrefixFilterPolicyEntry,
+    AdminFnnConfig, FnnConfig, FnnRoutingProfileConfig, PrefixFilterPolicyEntry, RouteTargetConfig,
 };
 use crate::tests::common;
 use crate::tests::common::api_fixtures::TestEnvOverrides;
@@ -186,7 +188,7 @@ async fn test_managed_host_network_config_includes_routing_profile_prefix_lists(
         .build()
         .await;
 
-    // Fetch the DPU network config and extract its routing profile.
+    // Fetch the DPU network config and extract its per-interface routing profile.
     let response = env
         .api
         .get_managed_host_network_config(tonic::Request::new(ManagedHostNetworkConfigRequest {
@@ -195,7 +197,10 @@ async fn test_managed_host_network_config_includes_routing_profile_prefix_lists(
         .await
         .unwrap()
         .into_inner();
-    let routing_profile = response.routing_profile.unwrap();
+    let routing_profile = response.tenant_interfaces[0]
+        .routing_profile
+        .clone()
+        .unwrap();
 
     // Verify the configured leak prefixes are preserved in the gRPC response.
     let actual_leaks: Vec<_> = routing_profile
@@ -214,6 +219,192 @@ async fn test_managed_host_network_config_includes_routing_profile_prefix_lists(
     assert_eq!(
         actual_allowed_anycast_prefixes,
         expected_allowed_anycast_prefixes
+    );
+
+    // Verify the deprecated top-level field is still populated for rollout compatibility.
+    assert!(response.routing_profile.is_some());
+}
+
+#[crate::sqlx_test]
+async fn test_managed_host_network_config_includes_per_vpc_routing_profiles(pool: sqlx::PgPool) {
+    let internal_import = RouteTargetConfig {
+        asn: 65001,
+        vni: 111,
+    };
+    let external_export = RouteTargetConfig {
+        asn: 65002,
+        vni: 222,
+    };
+
+    // Configure two distinguishable FNN routing profiles.
+    let env = api_fixtures::create_test_env_with_overrides(
+        pool,
+        TestEnvOverrides::default().with_fnn_config(Some(FnnConfig {
+            admin_vpc: None,
+            common_internal_route_target: None,
+            additional_route_target_imports: vec![],
+            routing_profiles: HashMap::from([
+                (
+                    "INTERNAL".to_string(),
+                    FnnRoutingProfileConfig {
+                        internal: true,
+                        access_tier: 1,
+                        leak_default_route_from_underlay: true,
+                        route_target_imports: vec![internal_import.clone()],
+                        ..Default::default()
+                    },
+                ),
+                (
+                    "EXTERNAL".to_string(),
+                    FnnRoutingProfileConfig {
+                        internal: false,
+                        access_tier: 2,
+                        leak_tenant_host_routes_to_underlay: true,
+                        route_targets_on_exports: vec![external_export.clone()],
+                        ..Default::default()
+                    },
+                ),
+            ]),
+            use_vpc_vrf_loopback: false,
+        })),
+    )
+    .await;
+
+    // Create a tenant that can use both routing profiles.
+    let tenant = env
+        .api
+        .create_tenant(tonic::Request::new(rpc::forge::CreateTenantRequest {
+            organization_id: "per-vpc-routing-profile".to_string(),
+            routing_profile_type: Some("INTERNAL".to_string()),
+            metadata: Some(rpc::forge::Metadata {
+                name: "per-vpc-routing-profile".to_string(),
+                description: "".to_string(),
+                labels: vec![],
+            }),
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .tenant
+        .unwrap();
+
+    // Create two FNN VPCs with different routing profiles.
+    let internal_vpc = env
+        .api
+        .create_vpc(tonic::Request::new(
+            VpcCreationRequest::builder(tenant.organization_id.as_str())
+                .metadata(Metadata {
+                    name: "internal profile vpc".to_string(),
+                    ..Default::default()
+                })
+                .network_virtualization_type(rpc::forge::VpcVirtualizationType::Fnn as i32)
+                .routing_profile_type("INTERNAL".to_string())
+                .rpc(),
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    let internal_segment_id = create_tenant_network_segment(
+        &env.api,
+        internal_vpc.id,
+        FIXTURE_TENANT_NETWORK_SEGMENT_GATEWAYS[0],
+        "TENANT_INTERNAL",
+        true,
+    )
+    .await;
+    env.run_network_segment_controller_iteration().await;
+    env.run_network_segment_controller_iteration().await;
+
+    let external_vpc = env
+        .api
+        .create_vpc(tonic::Request::new(
+            VpcCreationRequest::builder(tenant.organization_id.as_str())
+                .metadata(Metadata {
+                    name: "external profile vpc".to_string(),
+                    ..Default::default()
+                })
+                .network_virtualization_type(rpc::forge::VpcVirtualizationType::Fnn as i32)
+                .routing_profile_type("EXTERNAL".to_string())
+                .rpc(),
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    let external_segment_id = create_tenant_network_segment(
+        &env.api,
+        external_vpc.id,
+        FIXTURE_TENANT_NETWORK_SEGMENT_GATEWAYS[1],
+        "TENANT_EXTERNAL",
+        true,
+    )
+    .await;
+    env.run_network_segment_controller_iteration().await;
+    env.run_network_segment_controller_iteration().await;
+
+    // Allocate an instance spanning both VPCs so each interface carries its own profile.
+    let mh = create_managed_host(&env).await;
+    mh.instance_builer(&env)
+        .tenant_org(tenant.organization_id)
+        .network(
+            api_fixtures::instance::single_interface_network_config_with_vfs(vec![
+                internal_segment_id,
+                external_segment_id,
+            ]),
+        )
+        .build()
+        .await;
+
+    // Fetch the DPU config and index profiles by the interface's actual VPC VNI.
+    let response = env
+        .api
+        .get_managed_host_network_config(tonic::Request::new(ManagedHostNetworkConfigRequest {
+            dpu_machine_id: Some(mh.dpu().id),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    let mut txn = env.db_txn().await;
+    let internal_vpc = db::vpc::find_by_segment(txn.as_mut(), internal_segment_id)
+        .await
+        .unwrap();
+    let external_vpc = db::vpc::find_by_segment(txn.as_mut(), external_segment_id)
+        .await
+        .unwrap();
+    let internal_vni = internal_vpc.status.unwrap().vni.unwrap() as u32;
+    let external_vni = external_vpc.status.unwrap().vni.unwrap() as u32;
+    let profiles_by_vni = response
+        .tenant_interfaces
+        .into_iter()
+        .map(|interface| {
+            (
+                interface.vpc_vni,
+                interface
+                    .routing_profile
+                    .expect("FNN interface should include a routing profile"),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    assert_eq!(profiles_by_vni.len(), 2);
+
+    // Verify each VPC receives the profile resolved from that VPC, not the first VPC.
+    let internal_profile = profiles_by_vni.get(&internal_vni).unwrap();
+    assert!(internal_profile.leak_default_route_from_underlay);
+    assert_eq!(
+        internal_profile.route_target_imports,
+        vec![rpc::common::RouteTarget {
+            asn: internal_import.asn,
+            vni: internal_import.vni,
+        }]
+    );
+
+    let external_profile = profiles_by_vni.get(&external_vni).unwrap();
+    assert!(external_profile.leak_tenant_host_routes_to_underlay);
+    assert_eq!(
+        external_profile.route_targets_on_exports,
+        vec![rpc::common::RouteTarget {
+            asn: external_export.asn,
+            vni: external_export.vni,
+        }]
     );
 }
 
@@ -375,7 +566,14 @@ async fn test_managed_host_network_config_omits_admin_fnn_vrf_loopback_by_defaul
     overrides.fnn_config.as_mut().unwrap().admin_vpc = Some(AdminFnnConfig {
         enabled: true,
         vpc_vni: Some(10000),
-        routing_profile: FnnRoutingProfileConfig::default(),
+        routing_profile: FnnRoutingProfileConfig {
+            leak_default_route_from_underlay: true,
+            route_target_imports: vec![RouteTargetConfig {
+                asn: 64512,
+                vni: 10000,
+            }],
+            ..Default::default()
+        },
     });
 
     let env = api_fixtures::create_test_env_with_overrides(pool, overrides).await;
@@ -409,6 +607,16 @@ async fn test_managed_host_network_config_omits_admin_fnn_vrf_loopback_by_defaul
     assert!(response.use_admin_network);
     assert_eq!(admin_interface.vpc_vni, 10000);
     assert!(admin_interface.tenant_vrf_loopback_ip.is_none());
+    assert!(response.routing_profile.is_some());
+
+    let routing_profile = admin_interface
+        .routing_profile
+        .as_ref()
+        .expect("admin interface should include per-interface routing profile");
+    assert!(routing_profile.leak_default_route_from_underlay);
+    assert_eq!(routing_profile.route_target_imports.len(), 1);
+    assert_eq!(routing_profile.route_target_imports[0].asn, 64512);
+    assert_eq!(routing_profile.route_target_imports[0].vni, 10000);
 
     // Verify the admin VPC also did not allocate a VPC/DPU loopback row.
     let mut txn = env.db_txn().await;
