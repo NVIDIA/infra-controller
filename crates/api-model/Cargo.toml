@@ -76,7 +76,6 @@ strum = { workspace = true }
 strum_macros = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-tss-esapi = { optional = true, workspace = true }
 url = { workspace = true }
 uuid = { features = ["v4", "serde"], workspace = true }
 version-compare = { workspace = true }

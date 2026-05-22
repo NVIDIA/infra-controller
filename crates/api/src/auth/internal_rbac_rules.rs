@@ -496,6 +496,7 @@ impl InternalRBACRules {
             vec![SiteAgent, ForgeAdminCLI],
         );
         x.perm("FindMacAddressByBmcIp", vec![SiteAgent, BmcProxy]);
+        x.perm("FindBmcIps", vec![ForgeAdminCLI, BmcProxy]);
         x.perm("BmcCredentialStatus", vec![ForgeAdminCLI, SiteAgent]);
         x.perm(
             "GetMachineValidationExternalConfigs",

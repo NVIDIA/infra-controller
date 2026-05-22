@@ -87,6 +87,7 @@ impl RpcTryFrom<ManagedHostStateSnapshot> for Option<rpc::Instance> {
                 .infiniband_status_observation
                 .as_ref(),
             snapshot.host_snapshot.nvlink_status_observation.as_ref(),
+            &snapshot.host_snapshot.health_reports,
         )?;
 
         Ok(Some(rpc::Instance {
