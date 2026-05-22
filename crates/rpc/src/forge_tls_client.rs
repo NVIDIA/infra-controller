@@ -23,13 +23,13 @@ use eyre::Result;
 use forge_http_connector::connector::ForgeHttpConnector;
 use forge_http_connector::resolver::{ForgeResolver, ForgeResolverOpts};
 use forge_tls::client_config::ClientCert;
+use forge_tls::dummy_tls_verifier::DummyTlsVerifier;
 use hickory_resolver::config::ResolverConfig;
 use hyper::body::Incoming;
 use hyper_util::client::legacy;
 use hyper_util::rt::{TokioExecutor, TokioTimer};
-use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
-use rustls::{ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use rustls::{ClientConfig, RootCertStore};
 use tonic::body::Body;
 use tonic::transport::Uri;
 use tower::ServiceExt;
@@ -80,104 +80,9 @@ pub type ForgeClientT = ForgeClient<
     >,
 >;
 
-//this code was copy and pasted from the implementation of the same struct in sqlx::core,
-//and is only necessary for as long as we're optionally validating TLS
-#[derive(Debug)]
-pub struct DummyTlsVerifier {
-    print_warning: bool,
-}
-
-impl Default for DummyTlsVerifier {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl DummyTlsVerifier {
-    #[cfg(not(test))]
-    pub fn new() -> Self {
-        Self {
-            // Warnings are suppressed if this is running in a unit-test
-            print_warning: std::env::var_os("CARGO_MANIFEST_DIR").is_none(),
-        }
-    }
-
-    #[cfg(test)]
-    pub fn new() -> Self {
-        Self {
-            // Warnings are suppressed if this is running in a unit-test
-            print_warning: false,
-        }
-    }
-}
-
 pub const DEFAULT_DOMAIN: &str = "forge.local";
 
 const VRF_NAME: &str = "mgmt";
-
-impl ServerCertVerifier for DummyTlsVerifier {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &ServerName,
-        _ocsp_response: &[u8],
-        _now: UnixTime,
-    ) -> Result<ServerCertVerified, rustls::Error> {
-        if self.print_warning {
-            eprintln!(
-                "IGNORING SERVER CERT, Please ensure that I am removed to actually validate TLS."
-            );
-        }
-        Ok(ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        if self.print_warning {
-            eprintln!(
-                "IGNORING SERVER CERT, Please ensure that I am removed to actually validate TLS."
-            );
-        }
-        Ok(HandshakeSignatureValid::assertion())
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        if self.print_warning {
-            eprintln!(
-                "IGNORING SERVER CERT, Please ensure that I am removed to actually validate TLS."
-            );
-        }
-        Ok(HandshakeSignatureValid::assertion())
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        vec![
-            SignatureScheme::RSA_PKCS1_SHA1,
-            SignatureScheme::ECDSA_SHA1_Legacy,
-            SignatureScheme::RSA_PKCS1_SHA256,
-            SignatureScheme::ECDSA_NISTP256_SHA256,
-            SignatureScheme::RSA_PKCS1_SHA384,
-            SignatureScheme::ECDSA_NISTP384_SHA384,
-            SignatureScheme::RSA_PKCS1_SHA512,
-            SignatureScheme::ECDSA_NISTP521_SHA512,
-            SignatureScheme::RSA_PSS_SHA256,
-            SignatureScheme::RSA_PSS_SHA384,
-            SignatureScheme::RSA_PSS_SHA512,
-            SignatureScheme::ED25519,
-            SignatureScheme::ED448,
-        ]
-    }
-}
 
 #[derive(Clone, Debug, Default)]
 pub struct ForgeClientConfig {
@@ -619,9 +524,9 @@ impl<'a> ForgeTlsClient<'a> {
                 } else {
                     base_config_builder()
                         .dangerous()
-                        .with_custom_certificate_verifier(std::sync::Arc::new(
-                            DummyTlsVerifier::new(),
-                        ))
+                        .with_custom_certificate_verifier(
+                            Arc::new(DummyTlsVerifier::new_for_prod()),
+                        )
                 }
             };
 
@@ -900,7 +805,7 @@ mod tests {
                 .with_safe_default_protocol_versions()
                 .unwrap()
                 .dangerous()
-                .with_custom_certificate_verifier(std::sync::Arc::new(DummyTlsVerifier::new()))
+                .with_custom_certificate_verifier(Arc::new(DummyTlsVerifier::new_for_tests()))
                 .with_no_client_auth();
 
                 hyper_rustls::HttpsConnectorBuilder::new()

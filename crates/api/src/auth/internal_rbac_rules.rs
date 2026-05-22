@@ -936,7 +936,7 @@ impl RuleInfo {
                         Principal::SpiffeServiceIdentifier("carbide-hardware-health".to_string())
                     }
                     RulePrincipal::Flow => {
-                        Principal::SpiffeServiceIdentifier("carbide-rla".to_string())
+                        Principal::SpiffeServiceIdentifier("carbide-flow".to_string())
                     }
                     RulePrincipal::MaintenanceJobs => {
                         Principal::SpiffeServiceIdentifier("carbide-maintenance-jobs".to_string())
@@ -1108,25 +1108,25 @@ mod rbac_rule_tests {
         assert!(InternalRBACRules::allowed_from_static(
             "SetMaintenance",
             &[Principal::SpiffeServiceIdentifier(
-                "carbide-rla".to_string()
+                "carbide-flow".to_string()
             )]
         ));
         assert!(InternalRBACRules::allowed_from_static(
             "InsertMachineHealthReport",
             &[Principal::SpiffeServiceIdentifier(
-                "carbide-rla".to_string()
+                "carbide-flow".to_string()
             )]
         ));
         assert!(InternalRBACRules::allowed_from_static(
             "RemoveMachineHealthReport",
             &[Principal::SpiffeServiceIdentifier(
-                "carbide-rla".to_string()
+                "carbide-flow".to_string()
             )]
         ));
         assert!(InternalRBACRules::allowed_from_static(
             "MachineSetAutoUpdate",
             &[Principal::SpiffeServiceIdentifier(
-                "carbide-rla".to_string()
+                "carbide-flow".to_string()
             )]
         ));
         for method in ["FindMacAddressByBmcIp", "GetBmcCredentials"] {
