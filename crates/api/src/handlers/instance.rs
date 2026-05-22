@@ -19,6 +19,7 @@ use std::str::FromStr;
 
 use ::rpc::errors::RpcDataConversionError;
 use ::rpc::forge::{self as rpc, AdminForceDeleteMachineResponse};
+use ::rpc::model::RpcTryFrom;
 use carbide_redfish::libredfish::RedfishAuth;
 use carbide_uuid::infiniband::IBPartitionId;
 use carbide_uuid::instance::InstanceId;
@@ -282,7 +283,7 @@ pub(crate) async fn find_by_machine_id(
     };
 
     let maybe_instance =
-        Option::<rpc::Instance>::try_from(mh_snapshot).map_err(CarbideError::from)?;
+        Option::<rpc::Instance>::rpc_try_from(mh_snapshot).map_err(CarbideError::from)?;
 
     let instances = if let Some(instance) = maybe_instance {
         vec![instance]
@@ -1539,7 +1540,7 @@ fn snapshot_to_instance(
     mh_snapshot: ManagedHostStateSnapshot,
 ) -> Result<rpc::Instance, CarbideError> {
     let machine_id = mh_snapshot.host_snapshot.id;
-    Option::<rpc::Instance>::try_from(mh_snapshot)
+    Option::<rpc::Instance>::rpc_try_from(mh_snapshot)
         .map_err(CarbideError::from)?
         .ok_or_else(|| {
             CarbideError::internal(format!(

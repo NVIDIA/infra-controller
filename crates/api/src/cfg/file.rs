@@ -1017,6 +1017,11 @@ pub struct FnnRoutingProfileConfig {
     #[serde(default)]
     pub accepted_leaks_from_underlay: Vec<PrefixFilterPolicyEntry>,
 
+    /// Prefixes that tenant hosts are allowed to announce
+    /// to the DPU as anycast routes.
+    #[serde(default)]
+    pub allowed_anycast_prefixes: Vec<PrefixFilterPolicyEntry>,
+
     /// Currently controls which profiles a tenant can use
     /// when creating VPCs.  Lower value means broader access.
     /// A tenant can create a VPC with a routing profile of the same or broader access.
@@ -1028,6 +1033,46 @@ pub struct FnnRoutingProfileConfig {
     /// - A tenant with INTERNAL could only create INTERNAL VPCs.
     #[serde(default)]
     pub access_tier: u32,
+}
+
+impl From<&FnnRoutingProfileConfig> for rpc::forge::RoutingProfile {
+    fn from(profile: &FnnRoutingProfileConfig) -> Self {
+        Self {
+            tenant_leak_communities_accepted: profile.tenant_leak_communities_accepted,
+            leak_default_route_from_underlay: profile.leak_default_route_from_underlay,
+            leak_tenant_host_routes_to_underlay: profile.leak_tenant_host_routes_to_underlay,
+            accepted_leaks_from_underlay: profile
+                .accepted_leaks_from_underlay
+                .iter()
+                .map(|entry| rpc::forge::PrefixFilterPolicyEntry {
+                    prefix: entry.prefix.to_string(),
+                })
+                .collect(),
+            allowed_anycast_prefixes: profile
+                .allowed_anycast_prefixes
+                .iter()
+                .map(|entry| rpc::forge::PrefixFilterPolicyEntry {
+                    prefix: entry.prefix.to_string(),
+                })
+                .collect(),
+            route_target_imports: profile
+                .route_target_imports
+                .iter()
+                .map(|route_target| rpc::common::RouteTarget {
+                    asn: route_target.asn,
+                    vni: route_target.vni,
+                })
+                .collect(),
+            route_targets_on_exports: profile
+                .route_targets_on_exports
+                .iter()
+                .map(|route_target| rpc::common::RouteTarget {
+                    asn: route_target.asn,
+                    vni: route_target.vni,
+                })
+                .collect(),
+        }
+    }
 }
 
 /// Entries used for prefix-list policies on the DPUS.
@@ -1336,7 +1381,7 @@ impl MachineStateControllerConfig {
     }
 
     pub fn failure_retry_time_default() -> Duration {
-        Duration::minutes(30)
+        Duration::minutes(90)
     }
 
     pub fn dpu_up_threshold_default() -> Duration {
@@ -2713,6 +2758,12 @@ pub struct VmaasConfig {
     /// Prefixes expected to be publicly routable and used
     /// by traffic-intercept users.
     pub public_prefixes: Vec<Ipv4Network>,
+
+    /// Aggregate prefixes associated with secondary VTEPs. These are used only
+    /// for routing and filtering; IP allocation is provided by the secondary
+    /// VTEP resource pool.
+    #[serde(default)]
+    pub secondary_vtep_aggregate_prefixes: Vec<IpNetwork>,
 
     /// Whether a secondary overlay is expected,
     /// which will require secondary VTEP IPs to be allocated

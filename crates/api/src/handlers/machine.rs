@@ -21,6 +21,7 @@ use std::str::FromStr;
 
 use ::rpc::errors::RpcDataConversionError;
 use ::rpc::forge as rpc;
+use ::rpc::model::machine::ManagedHostStateSnapshotRpc;
 use carbide_redfish::libredfish::RedfishAuth;
 use carbide_uuid::machine::MachineId;
 use forge_secrets::credentials::{BmcCredentialType, CredentialKey};
@@ -30,7 +31,6 @@ use model::hardware_info::MachineNvLinkInfo;
 use model::machine::machine_search_config::MachineSearchConfig;
 use model::machine::{LoadSnapshotOptions, Machine, ManagedHostState, ManagedHostStateSnapshot};
 use model::metadata::Metadata;
-use model::rpc_conv::machine::ManagedHostStateSnapshotRpc;
 use tonic::{Request, Response, Status};
 
 use crate::CarbideError;

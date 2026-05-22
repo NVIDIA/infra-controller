@@ -18,6 +18,7 @@ use model::dpu_remediation::{
     ApproveRemediation, EnableRemediation, NewRemediation, RemediationApplicationStatus, Reviewer,
 };
 use rpc::forge::CreateRemediationRequest;
+use rpc::model::RpcTryFrom;
 
 use crate::tests::common::api_fixtures::{create_managed_host_multi_dpu, create_test_env};
 
@@ -29,26 +30,30 @@ fn test_try_from_rpc() -> Result<(), Box<dyn std::error::Error>> {
     };
     let good_author = "good_author_string".to_string();
 
-    assert!(NewRemediation::try_from((bad_request_negative_retries, good_author.clone())).is_err());
+    assert!(
+        NewRemediation::rpc_try_from((bad_request_negative_retries, good_author.clone())).is_err()
+    );
 
     let mut bad_request_too_long_script = CreateRemediationRequest::default();
     let too_long_string = "x".repeat(2 << (13 + 1));
     bad_request_too_long_script.script = too_long_string;
 
-    assert!(NewRemediation::try_from((bad_request_too_long_script, good_author.clone())).is_err());
+    assert!(
+        NewRemediation::rpc_try_from((bad_request_too_long_script, good_author.clone())).is_err()
+    );
 
     let mut bad_request_no_script = CreateRemediationRequest::default();
     let empty_string = String::new();
     bad_request_no_script.script = empty_string;
 
-    assert!(NewRemediation::try_from((bad_request_no_script, good_author.clone())).is_err());
+    assert!(NewRemediation::rpc_try_from((bad_request_no_script, good_author.clone())).is_err());
 
     let good_request = CreateRemediationRequest {
         script: "echo 'hello world'".to_string(),
         ..Default::default()
     };
 
-    assert!(NewRemediation::try_from((good_request, good_author)).is_ok());
+    assert!(NewRemediation::rpc_try_from((good_request, good_author)).is_ok());
 
     Ok(())
 }

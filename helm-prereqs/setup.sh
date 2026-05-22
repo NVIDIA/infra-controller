@@ -15,28 +15,60 @@
 # limitations under the License.
 
 # =============================================================================
-# setup.sh — install nico-prereqs stack
+# setup.sh — install the NICo prerequisite stack
 #
-# Requires:
-#   - REGISTRY_PULL_SECRET  env var (registry pull secret / API key)
-#   - NICO_IMAGE_REGISTRY    env var (container registry for all NICo images,
-#                                    e.g. my-registry.example.com/ncx)
-#   - NICO_CORE_IMAGE_TAG    env var (NICo Core image tag, e.g. v2025.12.30)
-#   - NICO_REST_IMAGE_TAG    env var (NICo REST image tag, e.g. v1.0.4)
-#   - Tools: helmfile, helm, kubectl, jq, ssh-keygen
+# Tool requirements:
+#   helmfile, helm, kubectl, jq, ssh-keygen
+#
+# Required environment:
+#   KUBECONFIG            Optional only if the current kubectl context already
+#                         points at the target cluster.
+#   NICO_IMAGE_REGISTRY    Required unless both --skip-core and --skip-rest are
+#                         used. Registry/repository prefix for NICo images,
+#                         without http(s)://. Example: registry.example.com/nico
+#   NICO_CORE_IMAGE_TAG    Required unless --skip-core is used.
+#                         NICo Core tag. Example: v2025.12.30
+#   NICO_REST_IMAGE_TAG    Required unless --skip-rest is used.
+#                         NICo REST tag. Example: v1.0.4
+#
+# Optional environment:
+#   REGISTRY_PULL_SECRET   Registry password/API key. If unset, setup does not
+#                          create image pull secrets; images must be public,
+#                          preloaded, or use existing imagePullSecrets.
+#   REGISTRY_PULL_USERNAME Username for generated pull secrets.
+#                          Default: $oauthtoken
+#   NICO_REST_REPO          Path to infra-controller-rest. Required only when
+#                          REST is not skipped; preflight can auto-discover or
+#                          clone it if missing. NICO_REPO is accepted as a
+#                          deprecated alias.
+#   NICO_SITE_UUID          Stable REST site UUID. Used only when REST is
+#                          deployed. Default is a dev placeholder.
+#   VAULT_NS               Vault namespace. Default: vault
+#   CERT_MANAGER_NS        cert-manager namespace. Default: cert-manager
+#   PREFLIGHT_CHECK_IMAGE  Image for preflight per-node checks.
+#                          Default: busybox:1.36
 #
 # Usage:
-#   export REGISTRY_PULL_SECRET=<secret>
-#   export NICO_IMAGE_REGISTRY=<registry>
-#   export NICO_CORE_IMAGE_TAG=<tag>
-#   export NICO_REST_IMAGE_TAG=<tag>
-#   ./setup.sh             # prompts before deploying nico core and NCX
-#   ./setup.sh -y          # skip prompts, deploy both automatically
+#   export KUBECONFIG=/path/to/kubeconfig
+#   export NICO_IMAGE_REGISTRY=<registry>    # unless using --skip-core --skip-rest
+#   export NICO_CORE_IMAGE_TAG=<tag>       # unless using --skip-core
+#   export NICO_REST_IMAGE_TAG=<tag>       # unless using --skip-rest
+#   export REGISTRY_PULL_SECRET=<secret>  # optional
+#   ./setup.sh                          # prompts before deploying NICo Core and NICo REST
+#   ./setup.sh -y                       # skip all prompts, deploy everything automatically
+#   ./setup.sh --skip-core              # skip Phase 6 NICo Core (print command, deploy manually)
+#   ./setup.sh --skip-rest              # skip Phase 7 NICo REST entirely (no repo needed)
+#   ./setup.sh --skip-core --skip-rest  # fully non-interactive infra-only run
+#   ./setup.sh --core-values /path/to/values.yaml      # use site-specific values for Phase 6
+#   ./setup.sh --metallb-config /path/to/metallb.yaml  # use site-specific MetalLB config (file or kustomize dir)
+#   ./setup.sh --site-overlay /path/to/kustomize-dir   # kubectl apply -k after Phase 6 (NTP services, etc.)
+#   ./setup.sh --debug                  # enable bash -x trace (or run: bash -x ./setup.sh)
 #
-# Optional:
-#   export NICO_REPO=/path/to/ncx-repo   # override NICo repo path discovery
-#   (default: looks for sibling dirs 'ncx' or 'ncx-infra-controller-rest'
-#    next to nico-helm; customer is prompted if neither is found)
+# Notes:
+#   - --core-values supplies site-specific NICo Core Helm values.
+#   - --metallb-config supplies site-specific MetalLB resources.
+#   - --debug enables shell tracing and may print secrets; avoid it when
+#     REGISTRY_PULL_SECRET is set unless logs are protected.
 # =============================================================================
 set -euo pipefail
 
@@ -44,28 +76,44 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}"
 
 AUTO_YES=false
-while getopts "y" _opt; do
-    case "${_opt}" in
-        y) AUTO_YES=true ;;
-        *) echo "Usage: $0 [-y]"; exit 1 ;;
+SKIP_CORE=false
+SKIP_REST=false
+CORE_VALUES=""
+METALLB_CONFIG=""
+SITE_OVERLAY=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -y)             AUTO_YES=true  ;;
+        --skip-core)    SKIP_CORE=true ;;
+        --skip-rest)    SKIP_REST=true ;;
+        --debug)        set -x         ;;
+        --core-values)
+            [[ -z "${2:-}" ]] && { echo "Error: --core-values requires a file path"; exit 1; }
+            CORE_VALUES="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"
+            [[ ! -f "${CORE_VALUES}" ]] && { echo "Error: --core-values file not found: $2"; exit 1; }
+            shift ;;
+        --metallb-config)
+            [[ -z "${2:-}" ]] && { echo "Error: --metallb-config requires a file or directory path"; exit 1; }
+            METALLB_CONFIG="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"
+            [[ ! -e "${METALLB_CONFIG}" ]] && { echo "Error: --metallb-config path not found: $2"; exit 1; }
+            shift ;;
+        --site-overlay)
+            [[ -z "${2:-}" ]] && { echo "Error: --site-overlay requires a kustomize directory path"; exit 1; }
+            SITE_OVERLAY="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"
+            [[ ! -d "${SITE_OVERLAY}" ]] && { echo "Error: --site-overlay directory not found: $2"; exit 1; }
+            shift ;;
+        *) echo "Usage: $0 [-y] [--skip-core] [--skip-rest] [--core-values <file>] [--metallb-config <file-or-dir>] [--site-overlay <dir>] [--debug]"; exit 1 ;;
     esac
+    shift
 done
 
 # ---------------------------------------------------------------------------
 # Pre-flight checks — env vars, tools, config files, NICo REST repo
-# Exports NICO_REPO if resolved. Exits 1 if user declines to continue.
+# Exports NICO_REST_REPO if resolved. Exits 1 if user declines to continue.
 # ---------------------------------------------------------------------------
-export AUTO_YES
+export AUTO_YES SKIP_CORE SKIP_REST
 # shellcheck source=preflight.sh
 source "${SCRIPT_DIR}/preflight.sh"
-
-# Fail fast if required variables are still unset after preflight.
-# preflight already printed a clear error for each missing var; these guards
-# prevent a cryptic "unbound variable" failure from set -u later in the script.
-: "${REGISTRY_PULL_SECRET:?REGISTRY_PULL_SECRET is required — export it before running setup.sh}"
-: "${NICO_IMAGE_REGISTRY:?NICO_IMAGE_REGISTRY is required — export it before running setup.sh}"
-: "${NICO_CORE_IMAGE_TAG:?NICO_CORE_IMAGE_TAG is required — export it before running setup.sh}"
-: "${NICO_REST_IMAGE_TAG:?NICO_REST_IMAGE_TAG is required — export it before running setup.sh}"
 
 VAULT_NS="${VAULT_NS:-vault}"
 CERT_MANAGER_NS="${CERT_MANAGER_NS:-cert-manager}"
@@ -78,29 +126,36 @@ _SETUP_PHASE="initializing"
 
 _on_failure() {
     local _rc=$?
+    local _cmd="${BASH_COMMAND}"
     [[ ${_rc} -eq 0 ]] && return              # clean exit — nothing to do
     [[ "${_SETUP_PHASE}" == "complete" ]] && return  # finished successfully
 
     echo ""
     echo "========================================================================="
     echo "  SETUP FAILED"
-    echo "  Phase : ${_SETUP_PHASE}"
-    echo "  Code  : ${_rc}"
+    echo "  Phase   : ${_SETUP_PHASE}"
+    echo "  Command : ${_cmd}"
+    echo "  Code    : ${_rc}"
     echo "========================================================================="
     echo ""
     echo "  The cluster may be in a partially installed state."
     echo "  clean.sh will remove all resources installed by this run and"
     echo "  return the cluster to a clean state."
     echo ""
-    # Read directly from /dev/tty — helm/helmfile can exhaust stdin leaving it
-    # at EOF, so exec 0</dev/tty is unreliable. Writing the prompt to /dev/tty
-    # and reading from it directly bypasses any stdin redirection entirely.
-    if [ -c /dev/tty ]; then
-        printf "  ➤  Run clean.sh to revert the cluster now? [y/N] " >/dev/tty
-        read -r _clean_reply </dev/tty
-    else
-        _clean_reply="N"
+    # Prompt only when this process can actually read from the controlling TTY.
+    if ! { exec 3</dev/tty; } 2>/dev/null; then
+        echo "  No interactive TTY — skipping cleanup prompt. To clean up manually:"
+        echo "    ${SCRIPT_DIR}/clean.sh"
+        return
     fi
+    if ! read -r -p "  ➤  Run clean.sh to revert the cluster now? [y/N] " _clean_reply <&3; then
+        exec 3<&-
+        echo ""
+        echo "  No interactive response — skipping cleanup prompt. To clean up manually:"
+        echo "    ${SCRIPT_DIR}/clean.sh"
+        return
+    fi
+    exec 3<&-
     echo ""
     if [[ "${_clean_reply:-N}" =~ ^[Yy]$ ]]; then
         echo "  Running clean.sh..."
@@ -191,23 +246,21 @@ fi
 # ---------------------------------------------------------------------------
 _SETUP_PHASE="[1/6] local-path-provisioner"
 echo "=== [1/6] local-path-provisioner ==="
-# StorageClass.provisioner is immutable — delete the "local-path" SC if it
-# already exists (e.g. left over from a prior forged/carbide install) before
-# applying the bundle, otherwise kubectl apply rejects the provisioner change.
-kubectl delete storageclass local-path --ignore-not-found 2>/dev/null || true
 kubectl apply -f operators/local-path-provisioner.yaml
+# StorageClass provisioner is immutable — delete before apply so a stale
+# provisioner from a previous install doesn't block the update.
 kubectl delete -f operators/storageclass-local-path-persistent.yaml \
     --ignore-not-found 2>/dev/null || true
 kubectl apply -f operators/storageclass-local-path-persistent.yaml
 kubectl rollout status deployment/local-path-provisioner -n local-path-storage --timeout=120s
 # Mark local-path as the cluster default StorageClass so workloads that don't
-# specify one (e.g. NICo postgres, Temporal) get a valid provisioner.
+# specify one (e.g. NICo REST postgres, Temporal) get a valid provisioner.
 kubectl annotate storageclass local-path \
     storageclass.kubernetes.io/is-default-class=true --overwrite
 
 # ---------------------------------------------------------------------------
 # 1b. postgres-operator — Zalando operator must be up (CRD registered) before
-#     nico-prereqs creates the postgresql resource in Phase 5.
+#     the NICo prereqs chart creates the postgresql resource in Phase 5.
 #     No TLS dependency — install early.
 # ---------------------------------------------------------------------------
 _SETUP_PHASE="[1b] postgres-operator"
@@ -217,36 +270,14 @@ helmfile sync -l name=postgres-operator
 # ---------------------------------------------------------------------------
 # 1c. MetalLB — LoadBalancer service provider (BGP or L2 mode).
 #     No TLS/PKI dependency — installed early so it is ready before NICo Core
-#     deploys LoadBalancer services (nico-api, dhcp, dns, pxe, ssh-console-rs).
+#     deploys LoadBalancer services (NICo Core API, dhcp, dns, pxe, ssh-console-rs).
 #
 #     After the helm release installs the CRDs, site-specific config is applied
-#     from values/metallb-config.yaml (IPAddressPool, BGPPeer, BGPAdvertisement).
-#     Fill in that file for your site before running setup.sh.
+#     from --metallb-config <path> (file or kustomize dir) if provided, otherwise
+#     from values/metallb-config.yaml. Fill in that file or pass --metallb-config.
 # ---------------------------------------------------------------------------
 _SETUP_PHASE="[1c] MetalLB"
 echo "=== [1c] MetalLB ==="
-
-if [[ ! -f "${SCRIPT_DIR}/values/metallb-config.yaml" ]]; then
-    echo "ERROR: values/metallb-config.yaml not found."
-    echo "  This file is required and ships with the repo — it may have been deleted."
-    echo "  Restore it from git and fill in your site's VIP pools and BGP peers."
-    exit 1
-fi
-
-# If MetalLB cluster-scoped resources exist from a prior non-helm install (e.g.
-# raw-manifest forged setup), helm refuses to "adopt" them without the
-# meta.helm.sh annotations. Delete the RBAC + webhook resources so helm can
-# recreate them under its own ownership; CRDs (with site data) are left alone.
-if ! helm status metallb -n metallb-system >/dev/null 2>&1; then
-    if kubectl get clusterrole metallb:controller >/dev/null 2>&1; then
-        echo "Removing leftover MetalLB RBAC/webhook resources from prior non-helm install..."
-        kubectl get clusterrole,clusterrolebinding -o name 2>/dev/null \
-            | grep -E '/(metallb:|metallb-)' \
-            | xargs -r -n1 kubectl delete --ignore-not-found 2>/dev/null || true
-        kubectl delete validatingwebhookconfiguration metallb-webhook-configuration \
-            --ignore-not-found 2>/dev/null || true
-    fi
-fi
 
 helmfile sync -l name=metallb
 
@@ -255,7 +286,15 @@ kubectl wait --for=condition=Available deployment/metallb-controller \
     -n metallb-system --timeout=120s
 
 echo "Applying MetalLB site config (IPAddressPool, BGPPeer, BGPAdvertisement)..."
-kubectl apply -f "${SCRIPT_DIR}/values/metallb-config.yaml"
+if [[ -n "${METALLB_CONFIG}" ]]; then
+    if [[ -d "${METALLB_CONFIG}" ]]; then
+        kubectl apply -k "${METALLB_CONFIG}"
+    else
+        kubectl apply -f "${METALLB_CONFIG}"
+    fi
+else
+    kubectl apply -f "${SCRIPT_DIR}/values/metallb-config.yaml"
+fi
 echo "MetalLB ready"
 
 # ---------------------------------------------------------------------------
@@ -268,10 +307,13 @@ _SETUP_PHASE="[2/6] cert-manager + Vault TLS bootstrap"
 echo "=== [2/6] cert-manager + Vault TLS bootstrap ==="
 helmfile sync -l name=cert-manager
 
+kubectl apply --server-side -f operators/crds/ \
+    --field-manager=helmfile --force-conflicts
+
 kubectl create namespace "${VAULT_NS}" 2>/dev/null || true
 helm template nico-prereqs . \
     --namespace nico-system \
-    --set imagePullSecrets.ngcNicoPull="${REGISTRY_PULL_SECRET}" \
+    --set imagePullSecrets.ngcNicoPull="${REGISTRY_PULL_SECRET:-}" \
     --show-only templates/site-root-certificate.yaml \
     --show-only templates/vault-tls-certs.yaml \
     | kubectl apply --server-side --field-manager=helm -f -
@@ -294,7 +336,7 @@ helmfile sync -l name=vault
 # ---------------------------------------------------------------------------
 # 4. Initialize + unseal vault
 #    Also sets up nico-system namespace (Helm labels + ssh-host-key)
-#    so nico-prereqs helm install can adopt it.
+#    so the NICo prereqs helm install can adopt it.
 # ---------------------------------------------------------------------------
 _SETUP_PHASE="[4/6] vault init + unseal"
 echo "=== [4/6] unseal vault ==="
@@ -302,16 +344,16 @@ echo "=== [4/6] unseal vault ==="
 ./bootstrap_ssh_host_key.sh
 
 # ---------------------------------------------------------------------------
-# 5. external-secrets + nico-prereqs
+# 5. external-secrets + NICo prereqs
 # ---------------------------------------------------------------------------
-_SETUP_PHASE="[5/6] external-secrets + nico-prereqs"
-echo "=== [5/6] external-secrets + nico-prereqs ==="
+_SETUP_PHASE="[5/6] external-secrets + NICo prereqs"
+echo "=== [5/6] external-secrets + NICo prereqs ==="
 helmfile sync -l name=external-secrets
 helmfile sync -l name=nico-prereqs
 
 # ---------------------------------------------------------------------------
 # Wait for postgres-operator to provision the cluster and ESO to sync creds
-# before nico core starts (nico-api needs the DB credentials Secret).
+# before NICo Core starts (the NICo Core API needs the DB credentials Secret).
 # ---------------------------------------------------------------------------
 echo "Waiting for nico-pg-cluster to reach Running state..."
 until kubectl get postgresql nico-pg-cluster -n postgres \
@@ -331,108 +373,175 @@ until kubectl get secret nico-system.nico.nico-pg-cluster.credentials \
 done
 echo "DB credentials ready"
 
-# ---------------------------------------------------------------------------
-# nico core
-# ---------------------------------------------------------------------------
-NICO_CMD="helm upgrade --install nico ./helm \
-    --namespace nico-system \
-    -f helm-prereqs/values/nico-core.yaml \
-    --set global.image.repository=\"${NICO_IMAGE_REGISTRY}/nvmetal-carbide\" \
-    --set global.image.tag=\"${NICO_CORE_IMAGE_TAG}\" \
-    --timeout 900s --wait"
+echo "Waiting for Vault AppRole credentials to be synced by ESO..."
+until ROLE_ID_B64="$(kubectl get secret nico-vault-approle-tokens \
+        -n nico-system -o jsonpath='{.data.VAULT_ROLE_ID}' 2>/dev/null)" && \
+      SECRET_ID_B64="$(kubectl get secret nico-vault-approle-tokens \
+        -n nico-system -o jsonpath='{.data.VAULT_SECRET_ID}' 2>/dev/null)" && \
+      [[ -n "${ROLE_ID_B64}" && -n "${SECRET_ID_B64}" ]]; do
+    echo "  AppRole credentials not yet synced — retrying in 5s..."
+    sleep 5
+done
+echo "Vault AppRole credentials ready"
 
-# Warn if nico-core.yaml still contains example placeholder values.
-if grep -q "api-examplesite.example.com\|sitename = \"examplesite\"\|examplesite.example.com" \
-        "${SCRIPT_DIR}/values/nico-core.yaml" 2>/dev/null; then
-    echo "WARNING: values/nico-core.yaml still contains example placeholder values."
-    echo "  Update nico-api.hostname, sitename, initial_domain_name, dhcp_servers,"
-    echo "  site_fabric_prefixes, deny_prefixes, pools, and networks for your site."
-    echo ""
+if ! "${SKIP_CORE}"; then
+    # Create imagepullsecret in nico-system so the API migrate hook can pull its
+    # image. The hook runs before chart resources are created, so this must exist
+    # before helm install — not as a post-install manual step.
+    # Skipped when REGISTRY_PULL_SECRET is unset (air-gapped / pre-loaded registry).
+    if [[ -n "${REGISTRY_PULL_SECRET:-}" ]]; then
+        _registry_server="${NICO_IMAGE_REGISTRY%%/*}"
+        echo "Creating imagepullsecret in nico-system (server: ${_registry_server})..."
+        kubectl create secret docker-registry imagepullsecret \
+            --namespace nico-system \
+            --docker-server="${_registry_server}" \
+            --docker-username="${REGISTRY_PULL_USERNAME:-\$oauthtoken}" \
+            --docker-password="${REGISTRY_PULL_SECRET}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+    else
+        echo "REGISTRY_PULL_SECRET not set — skipping imagepullsecret creation (air-gapped or pre-loaded registry)."
+    fi
 fi
 
-echo ""
-echo "========================================================================="
-echo "  ACTION REQUIRED: Before deploying NICo Core, confirm you have updated:"
-echo "    helm-prereqs/values/nico-core.yaml"
-echo ""
-echo "  Key fields:"
-echo "    global.image.repository   — ${NICO_IMAGE_REGISTRY}/nvmetal-carbide"
-echo "    global.image.tag          — ${NICO_CORE_IMAGE_TAG}"
-echo "    nico-api.hostname      — your site hostname"
-echo "    nico-api.siteConfig    — site-specific network/pool/IB config"
-echo "========================================================================="
-echo ""
-if "${AUTO_YES}"; then
-    _reply="Y"
+# ---------------------------------------------------------------------------
+# NICo Core
+# ---------------------------------------------------------------------------
+if "${SKIP_CORE}"; then
+    echo "=== [6/6] NICo Core ==="
+    echo "Skipped (--skip-core flag set)."
 else
-    read -r -p "  ➤  Deploy NICo Core now? [Y/n] " _reply
+    _CORE_VALUES_FILE="${CORE_VALUES:-${SCRIPT_DIR}/values/nico-core.yaml}"
+    _CORE_VALUES_ARG="${CORE_VALUES:-helm-prereqs/values/nico-core.yaml}"
+
+    NICO_CORE_CMD=(
+        helm upgrade --install nico ./helm
+        --namespace nico-system
+        -f "${_CORE_VALUES_ARG}"
+        --set-string "global.image.repository=${NICO_IMAGE_REGISTRY}/nvmetal-carbide"
+        --set-string "global.image.tag=${NICO_CORE_IMAGE_TAG}"
+        --timeout 300s --wait
+    )
+    _NICO_CORE_CMD_DISPLAY=""
+    for _arg in "${NICO_CORE_CMD[@]}"; do
+        printf -v _quoted_arg '%q' "${_arg}"
+        _NICO_CORE_CMD_DISPLAY="${_NICO_CORE_CMD_DISPLAY}${_NICO_CORE_CMD_DISPLAY:+ }${_quoted_arg}"
+    done
+
+    # Warn if nico-core.yaml still contains example placeholder values.
+    if [[ -z "${CORE_VALUES}" ]] && \
+       grep -q "api-examplesite.example.com\|sitename = \"examplesite\"\|examplesite.example.com" \
+            "${SCRIPT_DIR}/values/nico-core.yaml" 2>/dev/null; then
+        echo "WARNING: values/nico-core.yaml still contains example placeholder values."
+        echo "  Update nico-api.hostname, sitename, initial_domain_name, dhcp_servers,"
+        echo "  site_fabric_prefixes, deny_prefixes, pools, and networks for your site."
+        echo "  Or use --core-values /path/to/your-site-values.yaml to skip nico-core.yaml."
+        echo ""
+    fi
+
     echo ""
-fi
-if [[ "${_reply:-Y}" =~ ^[Yy]$ ]]; then
-    _SETUP_PHASE="[6/6] NICo Core"
-echo "=== [6/6] nico core ==="
-    (cd "${SCRIPT_DIR}/.." && eval "${NICO_CMD}")
-else
-    echo "Skipped. To deploy manually, run from $(dirname "${SCRIPT_DIR}"):"
-    echo "  ${NICO_CMD}"
+    echo "========================================================================="
+    echo "  ACTION REQUIRED: Before deploying NICo Core, confirm you have updated:"
+    echo "    ${_CORE_VALUES_FILE}"
+    echo ""
+    echo "  Key fields:"
+    echo "    global.image.repository   — ${NICO_IMAGE_REGISTRY}/nvmetal-carbide"
+    echo "    global.image.tag          — ${NICO_CORE_IMAGE_TAG}"
+    echo "    nico-api.hostname      — your site hostname"
+    echo "    nico-api.siteConfig    — site-specific network/pool/IB config"
+    echo "========================================================================="
+    echo ""
+    if "${AUTO_YES}"; then
+        _reply="Y"
+    else
+        read -r -p "  ➤  Deploy NICo Core now? [Y/n] " _reply
+        echo ""
+    fi
+    if [[ "${_reply:-Y}" =~ ^[Yy]$ ]]; then
+        _SETUP_PHASE="[6/6] NICo Core"
+        echo "=== [6/6] NICo Core ==="
+        (cd "${SCRIPT_DIR}/.." && "${NICO_CORE_CMD[@]}")
+    else
+        echo "Skipped. To deploy manually, run from $(dirname "${SCRIPT_DIR}"):"
+        echo "  ${_NICO_CORE_CMD_DISPLAY}"
+    fi
 fi
 
 # ---------------------------------------------------------------------------
-# 7. NCX (nico-rest) full stack
+# Site kustomize overlay — applies site-specific resources that are not
+# managed by the NICo Helm chart (e.g. per-pod LoadBalancer Services,
+# additional StatefulSets, or supplemental MetalLB config). Idempotent.
+# ---------------------------------------------------------------------------
+if [[ -n "${SITE_OVERLAY}" ]]; then
+    _SETUP_PHASE="site overlay"
+    echo "=== Site overlay: $(basename "${SITE_OVERLAY}") ==="
+    kubectl apply -k "${SITE_OVERLAY}"
+    echo "Site overlay applied"
+fi
+
+# ---------------------------------------------------------------------------
+# 7. NICo REST full stack
 #    Order of operations:
-#      7a. Resolve NICo repo + CA signing secret
-#      7b. nico-rest-ca-issuer ClusterIssuer (cert-manager.io)
-#      7c. NICo postgres (simple StatefulSet — temporal + nico DBs)
+#      7a. Resolve NICo REST repo + CA signing secret
+#      7b. NICo REST CA issuer ClusterIssuer (cert-manager.io)
+#      7c. NICo REST postgres (simple StatefulSet — temporal + forge DBs)
 #      7d. Keycloak (dev IdP)
-#      7e. Temporal namespace + TLS certs (issued by nico-rest-ca-issuer)
+#      7e. Temporal namespace + TLS certs (issued by the NICo REST CA issuer)
 #      7f. Temporal helm chart
-#      7g. nico-rest helm chart (API, cert-manager, workflow, site-manager)
+#      7g. NICo REST helm chart (API, cert-manager, workflow, site-manager)
 # ---------------------------------------------------------------------------
 echo ""
 _SETUP_PHASE="[7/7] NICo REST"
-echo "=== [7/7] NICo REST (nico-rest) ==="
+echo "=== [7/7] NICo REST ==="
 
-# --- 7a. NICo repo (resolved and exported by preflight.sh) -------------------
-if [[ -z "${NICO_REPO:-}" ]]; then
+if "${SKIP_REST}"; then
+    echo "Skipped (--skip-rest flag set)."
+    echo ""
+    echo "=== Setup complete (NICo REST skipped) ==="
+    _SETUP_PHASE="complete"
+    exit 0
+fi
+
+# --- 7a. NICo REST repo (resolved and exported by preflight.sh) -------------------
+if [[ -z "${NICO_REST_REPO:-}" ]]; then
     echo "ERROR: NICo REST repo is not set. Re-run setup.sh and choose to clone, or:"
-    echo "  export NICO_REPO=/path/to/<ncx-rest-repo>   # e.g. nico-rest, ncx, ncx-infra-controller-rest"
+    echo "  export NICO_REST_REPO=/path/to/infra-controller-rest"
     exit 1
 fi
-echo "NICo repo: ${NICO_REPO}"
+echo "NICo REST repo: ${NICO_REST_REPO}"
 
-# Create nico-rest namespace
+# Create NICo REST namespace
 kubectl create namespace nico-rest 2>/dev/null || true
 
-# CA signing secret — needed by nico-rest-cert-manager (internal PKI)
+# CA signing secret — needed by the NICo REST cert-manager component (internal PKI)
 # and the cert-manager.io ClusterIssuer. gen-site-ca.sh creates it in
-# both nico-rest and cert-manager namespaces in one shot.
+# both the NICo REST and cert-manager namespaces in one shot.
 if kubectl get secret ca-signing-secret -n nico-rest &>/dev/null; then
     echo "ca-signing-secret already present — skipping CA generation"
 else
-    echo "Generating nico-rest CA signing secret..."
-    (cd "${NICO_REPO}" && ./scripts/gen-site-ca.sh)
+    echo "Generating NICo REST CA signing secret..."
+    (cd "${NICO_REST_REPO}" && ./scripts/gen-site-ca.sh)
 fi
 
 # --- 7b. ClusterIssuer -------------------------------------------------------
-_SETUP_PHASE="[7b/7] nico-rest-ca-issuer ClusterIssuer"
-echo "=== [7b/7] nico-rest-ca-issuer ClusterIssuer ==="
-(cd "${NICO_REPO}" && kubectl apply -k deploy/kustomize/base/cert-manager-io)
+_SETUP_PHASE="[7b/7] NICo REST CA issuer ClusterIssuer"
+echo "=== [7b/7] NICo REST CA issuer ClusterIssuer ==="
+(cd "${NICO_REST_REPO}" && kubectl apply -k deploy/kustomize/base/cert-manager-io)
 
-# --- 7c. NICo postgres --------------------------------------------------------
+# --- 7c. NICo REST postgres --------------------------------------------------------
 # Simple postgres StatefulSet with all NICo databases pre-initialised:
-# nico, temporal, temporal_visibility, keycloak.
+# forge, temporal, temporal_visibility, keycloak.
 # Lives alongside nico-pg-cluster in the postgres namespace — different
-# service name ("postgres") so temporal/NCX values work without changes.
-_SETUP_PHASE="[7c/7] NICo postgres"
-echo "=== [7c/7] NICo postgres ==="
-(cd "${NICO_REPO}" && kubectl apply -k deploy/kustomize/base/postgres)
+# service name ("postgres") so Temporal and NICo values work without changes.
+_SETUP_PHASE="[7c/7] NICo REST postgres"
+echo "=== [7c/7] NICo REST postgres ==="
+(cd "${NICO_REST_REPO}" && kubectl apply -k deploy/kustomize/base/postgres)
 kubectl rollout status statefulset/postgres -n postgres --timeout=180s
-echo "NICo postgres ready"
+echo "NICo REST postgres ready"
 
 # --- 7d. Keycloak (conditional) -----------------------------------------------
 # Only deploy Keycloak if nico-rest.yaml has keycloak.enabled: true.
 # If using external OAuth2/OIDC (Option B in nico-rest.yaml), skip this step.
-# Dev OIDC IdP, pre-loaded with nico realm + test users.
+# Dev OIDC IdP, pre-loaded with the configured NICo development realm + test users.
 # nico-rest-api talks to it at http://keycloak.nico-rest:8082
 _SETUP_PHASE="[7d/7] Keycloak"
 _KC_ENABLED="$(grep -A5 'keycloak:' "${SCRIPT_DIR}/values/nico-rest.yaml" \
@@ -449,9 +558,9 @@ fi
 # --- 7e. Temporal namespace + TLS certs + db-creds --------------------------
 _SETUP_PHASE="[7e/7] Temporal TLS bootstrap"
 echo "=== [7e/7] Temporal TLS bootstrap ==="
-(cd "${NICO_REPO}" && kubectl apply -f deploy/kustomize/base/temporal-helm/namespace.yaml)
-(cd "${NICO_REPO}" && kubectl apply -f deploy/kustomize/base/temporal-helm/db-creds.yaml)
-(cd "${NICO_REPO}" && kubectl apply -f deploy/kustomize/base/temporal-helm/certificates.yaml)
+(cd "${NICO_REST_REPO}" && kubectl apply -f deploy/kustomize/base/temporal-helm/namespace.yaml)
+(cd "${NICO_REST_REPO}" && kubectl apply -f deploy/kustomize/base/temporal-helm/db-creds.yaml)
+(cd "${NICO_REST_REPO}" && kubectl apply -f deploy/kustomize/base/temporal-helm/certificates.yaml)
 
 echo "Waiting for temporal TLS certificates to be issued..."
 kubectl wait --for=condition=Ready certificate/server-interservice-cert \
@@ -465,9 +574,9 @@ echo "Temporal TLS certs ready"
 # --- 7f. Temporal ------------------------------------------------------------
 _SETUP_PHASE="[7f/7] Temporal"
 echo "=== [7f/7] Temporal ==="
-helm upgrade --install temporal "${NICO_REPO}/temporal-helm/temporal" \
+helm upgrade --install temporal "${NICO_REST_REPO}/temporal-helm/temporal" \
     --namespace temporal \
-    -f "${NICO_REPO}/temporal-helm/temporal/values-kind.yaml" \
+    -f "${NICO_REST_REPO}/temporal-helm/temporal/values-kind.yaml" \
     --timeout 300s --wait
 echo "Temporal ready"
 
@@ -485,44 +594,59 @@ kubectl exec -n temporal deploy/temporal-admintools -- \
 echo "Temporal namespaces ready"
 
 _SETUP_PHASE="[7g/7] NICo REST helm chart"
-# --- 7g. nico-rest helm chart --------------------------------------------
-NICO_HELM_CHART="${NICO_REPO}/helm/charts/nico-rest"
-# Build dockerconfigjson for the image-pull-secret that nico-rest-common creates.
-# Same NGC key as nico; helm manages the secret so there's no ownership conflict.
-_ncx_docker_cfg="$(printf '{"auths":{"nvcr.io":{"username":"$oauthtoken","password":"%s"}}}' \
-    "${REGISTRY_PULL_SECRET}" | base64 | tr -d '\n')"
+# --- 7g. NICo REST helm chart -------------------------------------------------
+NICO_HELM_CHART="${NICO_REST_REPO}/helm/charts/nico-rest"
+NICO_REST_CMD=(
+    helm upgrade --install nico-rest "${NICO_HELM_CHART}"
+    --namespace nico-rest
+    -f "${SCRIPT_DIR}/values/nico-rest.yaml"
+    --set global.image.repository="${NICO_IMAGE_REGISTRY}"
+    --set global.image.tag="${NICO_REST_IMAGE_TAG}"
+    --timeout 600s --wait
+)
+
+if [[ -n "${REGISTRY_PULL_SECRET:-}" ]]; then
+    # Build dockerconfigjson for the image-pull-secret that the NICo REST common
+    # chart creates. The registry host is derived from NICO_IMAGE_REGISTRY so this
+    # works for nvcr.io and private non-NGC registries.
+    _nico_registry_server="${NICO_IMAGE_REGISTRY%%/*}"
+    _nico_docker_cfg="$(printf '{"auths":{"%s":{"username":"%s","password":"%s"}}}' \
+        "${_nico_registry_server}" \
+        "${REGISTRY_PULL_USERNAME:-\$oauthtoken}" \
+        "${REGISTRY_PULL_SECRET}" | base64 | tr -d '\n')"
+    NICO_REST_CMD+=(
+        --set "nico-rest-common.secrets.imagePullSecret.dockerconfigjson=${_nico_docker_cfg}"
+    )
+else
+    echo "REGISTRY_PULL_SECRET not set — omitting NICo REST image pull secret override."
+    echo "NICo REST images must be public, preloaded, or configured with existing imagePullSecrets in values."
+fi
 
 echo ""
 echo "========================================================================="
-echo "  NICo REST (nico-rest)"
+echo "  NICo REST"
 echo "    Image:  ${NICO_IMAGE_REGISTRY}  tag: ${NICO_REST_IMAGE_TAG}"
 echo "    Values: ${SCRIPT_DIR}/values/nico-rest.yaml"
 echo "    Auth:   Keycloak dev instance (step 7d) — update nico-rest.yaml for production IdP"
 echo "========================================================================="
 echo ""
 if "${AUTO_YES}"; then
-    _ncx_reply="Y"
+    _nico_reply="Y"
 else
-    read -r -p "  ➤  Deploy NICo REST now? [Y/n] " _ncx_reply
+    read -r -p "  ➤  Deploy NICo REST now? [Y/n] " _nico_reply
     echo ""
 fi
-if [[ "${_ncx_reply:-Y}" =~ ^[Yy]$ ]]; then
-    helm upgrade --install nico-rest "${NICO_HELM_CHART}" \
-        --namespace nico-rest \
-        -f "${SCRIPT_DIR}/values/nico-rest.yaml" \
-        --set global.image.repository="${NICO_IMAGE_REGISTRY}" \
-        --set global.image.tag="${NICO_REST_IMAGE_TAG}" \
-        --set "nico-rest-common.secrets.imagePullSecret.dockerconfigjson=${_ncx_docker_cfg}" \
-        --timeout 600s --wait
+if [[ "${_nico_reply:-Y}" =~ ^[Yy]$ ]]; then
+    "${NICO_REST_CMD[@]}"
 else
-    echo "Skipped NICo REST (nico-rest). Re-run with -y or answer Y to deploy."
+    echo "Skipped NICo REST. Re-run with -y or answer Y to deploy."
     echo ""
     echo "=== Setup complete (NICo REST skipped) ==="
     exit 0
 fi
 
 # --- 7h. NICo REST site-agent -------------------------------------------------
-# The site-agent is a separate chart from the main nico-rest umbrella.
+# The site-agent is a separate chart from the main NICo REST umbrella.
 #
 # Bootstrap order:
 #   1. Create the per-site Temporal namespace BEFORE helm install so the
@@ -537,32 +661,41 @@ fi
 #      no FailedMount window. Do NOT pre-create the secret — that would trigger
 #      the Job's idempotency check and skip the real bootstrap.
 #
-# The  binary also needs DB credentials for its local elektratest DB.
+# The site-agent binary also needs DB credentials for its local elektratest DB.
 # All of this is wired via --set flags so nico-rest.yaml stays registry-agnostic.
-NICO_SITE_AGENT_CHART="${NICO_REPO}/helm/charts/nico-rest-site-agent"
+NICO_SITE_AGENT_CHART="${NICO_REST_REPO}/helm/charts/nico-rest-site-agent"
 
 # Stable placeholder UUID for this site (must be a valid UUID).
 NICO_SITE_UUID="${NICO_SITE_UUID:-a1b2c3d4-e5f6-4000-8000-000000000001}"
 
+NICO_SITE_AGENT_ARGS=(
+    --namespace nico-rest
+    -f "${SCRIPT_DIR}/values/nico-site-agent.yaml"
+    --set global.image.repository="${NICO_IMAGE_REGISTRY}"
+    --set global.image.tag="${NICO_REST_IMAGE_TAG}"
+)
+if [[ -n "${REGISTRY_PULL_SECRET:-}" ]]; then
+    NICO_SITE_AGENT_ARGS+=(
+        --set "global.imagePullSecrets[0].name=image-pull-secret"
+    )
+fi
+
 _SETUP_PHASE="[7h/7] NICo REST site-agent"
 echo "=== [7h/7] NICo REST site-agent (site UUID: ${NICO_SITE_UUID}) ==="
 
-# Pre-apply the Certificate resource so cert-manager issues the nico gRPC client
+# Pre-apply the Certificate resource so cert-manager issues the NICo gRPC client
 # cert BEFORE the StatefulSet pod starts. Without this, there is a race: helm creates
 # both the Certificate and the StatefulSet simultaneously, and the pod's
 # GetInitialCertMD5() call fails because the secret hasn't been projected yet.
-echo "Pre-applying nico gRPC client certificate..."
-# Issue the cert from vault-nico-issuer (same CA as nico-api) so that:
-#   1. nico-api trusts the site-agent's client cert (Vault PKI CA)
+echo "Pre-applying NICo gRPC client certificate..."
+# Issue the cert from vault-nico-issuer (same CA as the NICo Core API) so that:
+#   1. the NICo Core API trusts the site-agent's client cert (Vault PKI CA)
 #   2. the ca.crt in the secret is the Vault PKI CA, which the site-agent uses
-#      as ServerCAPath to verify nico-api's server cert (also Vault-signed)
+#      as ServerCAPath to verify the NICo Core API server cert (also Vault-signed)
 # Use the same values file as the install step so the rendered Certificate is
 # byte-for-byte identical — preventing cert-manager from re-issuing the cert.
 helm template nico-rest-site-agent "${NICO_SITE_AGENT_CHART}" \
-    --namespace nico-rest \
-    -f "${SCRIPT_DIR}/values/nico-site-agent.yaml" \
-    --set global.image.repository="${NICO_IMAGE_REGISTRY}" \
-    --set global.image.tag="${NICO_REST_IMAGE_TAG}" \
+    "${NICO_SITE_AGENT_ARGS[@]}" \
     --show-only templates/certificate.yaml | kubectl apply -f -
 # Add Helm ownership annotations so the subsequent helm install can adopt this resource
 # instead of failing with "exists and cannot be imported into the current release".
@@ -589,22 +722,19 @@ kubectl exec -n temporal deploy/temporal-admintools -- \
 echo "Temporal namespace ready"
 
 helm upgrade --install nico-rest-site-agent "${NICO_SITE_AGENT_CHART}" \
-    --namespace nico-rest \
-    -f "${SCRIPT_DIR}/values/nico-site-agent.yaml" \
-    --set global.image.repository="${NICO_IMAGE_REGISTRY}" \
-    --set global.image.tag="${NICO_REST_IMAGE_TAG}" \
+    "${NICO_SITE_AGENT_ARGS[@]}" \
     --set "envConfig.CLUSTER_ID=${NICO_SITE_UUID}" \
     --set "envConfig.TEMPORAL_SUBSCRIBE_NAMESPACE=${NICO_SITE_UUID}" \
     --set "envConfig.TEMPORAL_SUBSCRIBE_QUEUE=site" \
     --timeout 300s --wait
 echo "NICo REST site-agent deployed and bootstrap complete"
 
-# Verify gRPC connection to nico-api succeeded. The site-agent attempts
+# Verify the site-agent's gRPC connection to NICo Core succeeded. The site-agent attempts
 # the connection exactly once at startup with a 5-second deadline; if it
 # fails for any transient reason the NicoClient stays nil permanently and
 # all inventory activities panic.  Detect failure and restart the pod so it
 # gets a fresh attempt with the same correct config.
-echo "Verifying site-agent nico-api gRPC connection..."
+echo "Verifying site-agent NICo Core gRPC connection..."
 _CONNECTED=false
 for _i in $(seq 1 24); do
     _POD="$(kubectl get pods -n nico-rest \
@@ -614,7 +744,7 @@ for _i in $(seq 1 24); do
        kubectl logs -n nico-rest "${_POD}" --since=5m 2>/dev/null \
            | grep -q "NicoClient: successfully connected to server"; then
         _CONNECTED=true
-        echo "Site-agent successfully connected to nico-api gRPC"
+        echo "Site-agent successfully connected to NICo Core gRPC"
         break
     fi
     echo "  Waiting for gRPC connection (${_i}/24)..."
@@ -646,7 +776,7 @@ if [[ "${_KC_ENABLED:-false}" == "true" ]]; then
 else
     echo "    • Acquiring an access token             (Keycloak disabled — use your own IdP)"
 fi
-echo "    • Setting up nicocli against this cluster"
+echo "    • Setting up the NICo CLI against this cluster"
 echo "    • Bootstrap the org and create your first site"
 echo "    • Next: IP blocks and downstream resources"
 echo ""

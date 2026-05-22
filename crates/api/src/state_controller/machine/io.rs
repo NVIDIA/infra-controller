@@ -285,7 +285,7 @@ impl StateControllerIO for MachineStateControllerIO {
             ManagedHostState::Assigned { instance_state } => {
                 ("assigned", instance_state_name(instance_state))
             }
-            ManagedHostState::WaitingForCleanup { cleanup_state } => {
+            ManagedHostState::WaitingForCleanup { cleanup_state, .. } => {
                 ("waitingforcleanup", cleanup_state_name(cleanup_state))
             }
             ManagedHostState::Created => ("created", ""),

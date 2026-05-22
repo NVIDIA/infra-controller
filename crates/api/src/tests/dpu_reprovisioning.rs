@@ -26,11 +26,11 @@ use model::machine::{
     DpuInitState, FailureDetails, InstallDpuOsState, InstanceState, MachineLastRebootRequestedMode,
     MachineState, ManagedHostState, ReprovisionState,
 };
-use model::rpc_conv::instance::snapshot::instance_snapshot_derive_status;
 use rpc::forge::MachineArchitecture;
 use rpc::forge::dpu_reprovisioning_request::Mode;
 use rpc::forge::forge_server::Forge;
 use rpc::forge_agent_control_response::Action;
+use rpc::model::instance::snapshot::instance_snapshot_derive_status;
 
 use crate::state_controller::machine::handler::MachineStateHandlerBuilder;
 use crate::tests::common;

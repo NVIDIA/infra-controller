@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 use ::rpc::forge as rpc;
+use ::rpc::model::RpcTryFrom;
 use db::dpu_remediation::AppliedRemediationIdQueryType;
 use model::dpu_remediation::{
     ApproveRemediation, DisableRemediation, EnableRemediation, NewRemediation, RevokeRemediation,
@@ -54,7 +55,7 @@ pub(crate) async fn create(
 
     let mut txn = api.txn_begin().await?;
     let response = Ok(db::dpu_remediation::persist_remediation(
-        NewRemediation::try_from((request.into_inner(), authored_by))?,
+        NewRemediation::rpc_try_from((request.into_inner(), authored_by))?,
         &mut txn,
     )
     .await
@@ -76,7 +77,7 @@ pub(crate) async fn approve(
     let mut txn = api.txn_begin().await?;
 
     db::dpu_remediation::persist_approve_remediation(
-        ApproveRemediation::try_from((request.into_inner(), approved_by))?,
+        ApproveRemediation::rpc_try_from((request.into_inner(), approved_by))?,
         &mut txn,
     )
     .await?;
@@ -96,7 +97,7 @@ pub(crate) async fn revoke(
     let mut txn = api.txn_begin().await?;
 
     db::dpu_remediation::persist_revoke_remediation(
-        RevokeRemediation::try_from((request.into_inner(), revoked_by))?,
+        RevokeRemediation::rpc_try_from((request.into_inner(), revoked_by))?,
         &mut txn,
     )
     .await?;
@@ -116,7 +117,7 @@ pub(crate) async fn enable(
     let mut txn = api.txn_begin().await?;
 
     db::dpu_remediation::persist_enable_remediation(
-        EnableRemediation::try_from((request.into_inner(), enabled_by))?,
+        EnableRemediation::rpc_try_from((request.into_inner(), enabled_by))?,
         &mut txn,
     )
     .await?;
@@ -136,7 +137,7 @@ pub(crate) async fn disable(
     let mut txn = api.txn_begin().await?;
 
     db::dpu_remediation::persist_disable_remediation(
-        DisableRemediation::try_from((request.into_inner(), disabled_by))?,
+        DisableRemediation::rpc_try_from((request.into_inner(), disabled_by))?,
         &mut txn,
     )
     .await?;

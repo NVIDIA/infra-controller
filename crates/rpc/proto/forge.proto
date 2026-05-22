@@ -3973,6 +3973,7 @@ message ManagedHostNetworkConfigResponse {
 
   // Route imports and tagging details for exports
   // used by FNN configs.
+  // Deprecated: use FlatInterfaceConfig.routing_profile for per-VPC routing.
   // NOTE: This will replace internet_l3_vni and common_internal_route_target but could allow
   //       common_internal_route_target to be renamed/repurposed as a site-level RT.
   //       to become a site-level common route target.
@@ -4016,6 +4017,12 @@ message TrafficInterceptConfig {
   // Prefixes expected to be publicly routable and used
   // by VMaaS for internet gateways.
   repeated string public_prefixes            = 3;
+
+  // IPv4 or IPv6 aggregate prefixes associated with secondary
+  // VTEPs. These are used only for routing and filtering, not for
+  // allocating IPs. IP allocation is provided by the secondary VTEP
+  // resource pool.
+  repeated string secondary_vtep_aggregate_prefixes = 4;
 }
 
 
@@ -4190,6 +4197,10 @@ message FlatInterfaceConfig {
 
   // IPv6 configuration for dual-stack FNN interfaces.
   optional FlatInterfaceIpv6Config ipv6_interface_config = 19;
+
+  // Route imports and tagging details for exports used by FNN configs.
+  // This is scoped to the VPC that owns this interface.
+  optional RoutingProfile routing_profile = 20;
 
   // The details of the network security group associated with
   // either the instance or its parent VPC.
@@ -7750,6 +7761,10 @@ message RoutingProfile {
   // These are purely for routing purposes and will not have any
   // impact on ACLs.
   repeated PrefixFilterPolicyEntry accepted_leaks_from_underlay = 6;
+
+  // IP prefixes that tenant hosts are allowed to announce to the DPU as
+  // anycast routes. Accepts IPv4 and IPv6 CIDR prefixes.
+  repeated PrefixFilterPolicyEntry allowed_anycast_prefixes = 7;
 }
 
 // ============================================================================
