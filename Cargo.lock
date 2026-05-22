@@ -1174,6 +1174,7 @@ dependencies = [
  "carbide-authn",
  "carbide-dpf",
  "carbide-firmware",
+ "carbide-health-metrics",
  "carbide-health-report",
  "carbide-host-support",
  "carbide-ib-fabric",
@@ -1880,6 +1881,16 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+]
+
+[[package]]
+name = "carbide-health-metrics"
+version = "0.0.0"
+dependencies = [
+ "carbide-api-model",
+ "carbide-health-report",
+ "carbide-utils",
+ "opentelemetry",
 ]
 
 [[package]]
