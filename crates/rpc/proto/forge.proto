@@ -8063,6 +8063,9 @@ message ComponentPowerControlRequest {
     PowerShelfIdList power_shelf_ids = 3;
   }
   common.SystemPowerControl action = 4;
+  // When true, bypass the state controller and dispatch directly to the
+  // component backend.
+  bool bypass_state_controller = 5;
 }
 
 message ComponentPowerControlResponse {
@@ -8145,6 +8148,9 @@ message UpdateComponentFirmwareRequest {
     UpdateRackFirmwareTarget racks = 5;
   }
   string target_version = 4;
+  // When true, bypass the state controller and dispatch directly to the
+  // component backend.
+  bool bypass_state_controller = 6;
 }
 
 message UpdateComponentFirmwareResponse {

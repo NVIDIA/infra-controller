@@ -873,6 +873,7 @@ pub(crate) async fn component_power_control(
     let req = request.into_inner();
 
     let action = map_power_action(req.action)?;
+    let bypass_state_controller = req.bypass_state_controller;
 
     let target = req
         .target
@@ -880,6 +881,12 @@ pub(crate) async fn component_power_control(
 
     let (results, exploration_ips) = match target {
         rpc::component_power_control_request::Target::SwitchIds(list) => {
+            if cm.nv_switch_use_state_controller && !bypass_state_controller {
+                // TODO: implement state controller path for switch power control
+                return Err(Status::unimplemented(
+                    "switch power control through the state controller is not yet supported",
+                ));
+            }
             let endpoints = resolve_switch_endpoints(api, &list.ids).await?;
 
             let mut results: Vec<_> = endpoints
@@ -918,6 +925,12 @@ pub(crate) async fn component_power_control(
             (results, ips)
         }
         rpc::component_power_control_request::Target::PowerShelfIds(list) => {
+            if cm.power_shelf_use_state_controller && !bypass_state_controller {
+                // TODO: implement state controller path for power shelf power control
+                return Err(Status::unimplemented(
+                    "power shelf power control through the state controller is not yet supported",
+                ));
+            }
             let endpoints = resolve_power_shelf_endpoints(api, &list.ids).await?;
 
             let mut results: Vec<_> = endpoints
@@ -956,7 +969,7 @@ pub(crate) async fn component_power_control(
             (results, ips)
         }
         rpc::component_power_control_request::Target::MachineIds(list) => {
-            if cm.compute_tray_use_state_controller {
+            if cm.compute_tray_use_state_controller && !bypass_state_controller {
                 // TODO: implement state controller path for compute tray power control
                 return Err(Status::unimplemented(
                     "compute tray power control through the state controller is not yet supported",
@@ -1280,6 +1293,7 @@ pub(crate) async fn update_component_firmware(
 ) -> Result<Response<rpc::UpdateComponentFirmwareResponse>, Status> {
     log_request_data(&request);
     let req = request.into_inner();
+    let bypass_state_controller = req.bypass_state_controller;
 
     let target = req
         .target
@@ -1302,7 +1316,7 @@ pub(crate) async fn update_component_firmware(
                 return Err(Status::invalid_argument("switch_ids must not be empty"));
             }
 
-            if cm.nv_switch_use_state_controller {
+            if cm.nv_switch_use_state_controller && !bypass_state_controller {
                 component_names = map_nv_switch_component_names(&t.components)?;
 
                 let mut txn =
@@ -1367,7 +1381,7 @@ pub(crate) async fn update_component_firmware(
                 return Err(Status::invalid_argument("machine_ids must not be empty"));
             }
 
-            if cm.compute_tray_use_state_controller {
+            if cm.compute_tray_use_state_controller && !bypass_state_controller {
                 component_names = map_compute_tray_component_names(&t.components)?;
 
                 let machine = db::machine::find_one(
@@ -1422,6 +1436,12 @@ pub(crate) async fn update_component_firmware(
         }
         rpc::update_component_firmware_request::Target::PowerShelves(t) => {
             let cm = require_component_manager(api)?;
+            if cm.power_shelf_use_state_controller && !bypass_state_controller {
+                // TODO: implement state controller path for power shelf firmware updates
+                return Err(Status::unimplemented(
+                    "power shelf firmware updates through the state controller are not yet supported",
+                ));
+            }
             let list = t
                 .power_shelf_ids
                 .ok_or_else(|| Status::invalid_argument("power_shelf_ids is required"))?;
@@ -1454,6 +1474,12 @@ pub(crate) async fn update_component_firmware(
             power_shelf_results = Some(results);
         }
         rpc::update_component_firmware_request::Target::Racks(t) => {
+            if bypass_state_controller {
+                // TODO: implement RMS backend direct dispatch for a full rack
+                return Err(Status::invalid_argument(
+                    "bypass_state_controller is not supported for rack-level firmware updates",
+                ));
+            }
             let list = t
                 .rack_ids
                 .ok_or_else(|| Status::invalid_argument("rack_ids is required"))?;
