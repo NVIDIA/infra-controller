@@ -618,6 +618,36 @@ pub async fn update_cleanup_time(
     Ok(())
 }
 
+pub async fn set_cleanup_time(
+    machine_id: &MachineId,
+    cleanup_time: DateTime<Utc>,
+    txn: &mut PgConnection,
+) -> Result<(), DatabaseError> {
+    let query = "UPDATE machines SET last_cleanup_time=$1 WHERE id=$2 RETURNING id";
+    let _id = sqlx::query_as::<_, MachineId>(query)
+        .bind(cleanup_time)
+        .bind(machine_id)
+        .fetch_one(txn)
+        .await
+        .map_err(|e| DatabaseError::query(query, e))?;
+
+    Ok(())
+}
+
+pub async fn clear_cleanup_time(
+    machine_id: &MachineId,
+    txn: &mut PgConnection,
+) -> Result<(), DatabaseError> {
+    let query = "UPDATE machines SET last_cleanup_time=NULL WHERE id=$1 RETURNING id";
+    let _id = sqlx::query_as::<_, MachineId>(query)
+        .bind(machine_id)
+        .fetch_one(txn)
+        .await
+        .map_err(|e| DatabaseError::query(query, e))?;
+
+    Ok(())
+}
+
 pub async fn update_bios_password_set_time(
     machine_id: &MachineId,
     txn: &mut PgConnection,

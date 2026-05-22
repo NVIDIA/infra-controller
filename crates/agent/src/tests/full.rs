@@ -90,6 +90,7 @@ async fn test_traffic_intercept_bridging() -> eyre::Result<()> {
     let bridging = traffic_intercept_bridging::build(
         traffic_intercept_bridging::TrafficInterceptBridgingConfig {
             secondary_overlay_vtep_ip: "1.1.1.1".to_string(),
+            secondary_vtep_aggregate_prefixes: vec!["1.1.1.0/24".to_string()],
             vf_intercept_bridge_ip: "10.10.10.2".to_string(),
             vf_intercept_bridge_name: "pfdpu000br-dpu".to_string(),
             intercept_bridge_prefix_len: 29,
@@ -461,6 +462,7 @@ async fn handle_netconf(AxumState(state): AxumState<Arc<Mutex<State>>>) -> impl 
         internal_uuid: None,
         mtu: None,
         ipv6_interface_config: None,
+        routing_profile: None,
     };
     assert_eq!(admin_interface.svi_ip, None);
 
@@ -630,6 +632,7 @@ async fn handle_netconf(AxumState(state): AxumState<Arc<Mutex<State>>>) -> impl 
         internal_uuid: None,
         mtu: None,
         ipv6_interface_config: None,
+        routing_profile: None,
     };
 
     let network_security_policy_overrides = vec![
@@ -867,6 +870,7 @@ async fn handle_netconf(AxumState(state): AxumState<Arc<Mutex<State>>>) -> impl 
             }),
             additional_overlay_vtep_ip: Some("10.2.2.1".to_string()),
             public_prefixes: vec!["7.8.0.0/16".to_string()],
+            secondary_vtep_aggregate_prefixes: vec!["10.2.2.0/24".to_string()],
         }),
 
         dhcp_servers: vec!["127.0.0.1".to_string()],

@@ -4,8 +4,8 @@ A small authenticated HTTP/2 proxy for BMC access:
 
 - authenticates callers with mTLS
 - authorizes callers by service principal
-- maps `Forwarded: host=<bmc_ip>` to a known BMC
-- fetches the BMC's admin credentials from vault
+- maps `Forwarded: host=<bmc_ip>` to a known BMC through carbide-api
+- fetches the BMC's credentials from carbide-api over gRPC
 - proxies the HTTP request to the target BMC
 
 The point is to keep BMC authentication and credential handling in one place, while allowing multiple higher-level systems to coexist as peers.
@@ -22,9 +22,9 @@ Important configuration fields:
 
 - `listen`: proxy listen address, default `[::]:1079`
 - `metrics_endpoint`: metrics listen address, default `[::]:1080`
-- `database_url`: PostgreSQL connection string used to resolve BMC IPs
 - `allowed_principals`: authorized caller principals, for example `spiffe-service-id/<name>`
 - `tls.*`: server certificate, key, and trust roots for mTLS
+- `carbide_api.*`: carbide-api gRPC endpoint and mTLS material used for BMC IP resolution and `GetBmcCredentials`
 - `auth.trust.*`: SPIFFE trust domain and allowed base paths
 - `auth.acls`: per-principal ACL rules for HTTP method and path authorization
 - `auth.cli_certs`: optional criteria for externally issued admin/client certs
@@ -35,7 +35,6 @@ Example shape:
 ```toml
 listen = "[::]:1079"
 metrics_endpoint = "[::]:1080"
-database_url = "postgres://..."
 allowed_principals = ["spiffe-service-id/dpf"]
 
 [tls]
@@ -43,6 +42,12 @@ identity_pemfile_path = "/var/run/secrets/spiffe.io/tls.crt"
 identity_keyfile_path = "/var/run/secrets/spiffe.io/tls.key"
 root_cafile_path = "/var/run/secrets/spiffe.io/ca.crt"
 admin_root_cafile_path = "/etc/forge/carbide-bmc-proxy/site/admin_root_cert_pem"
+
+[carbide_api]
+root_ca = "/var/run/secrets/spiffe.io/ca.crt"
+client_cert = "/var/run/secrets/spiffe.io/tls.crt"
+client_key = "/var/run/secrets/spiffe.io/tls.key"
+api_url = "https://carbide-api.forge-system.svc.cluster.local:1079"
 
 [auth.trust]
 spiffe_trust_domain = "forge.local"
@@ -149,8 +154,7 @@ Future work can implement a mode in carbide-api where it doesn't know about any 
 Today, the proxy reuses existing Carbide-adjacent building blocks:
 
 - `carbide-authn`:  mTLS and SPIFFE principal extraction
-- `carbide-secrets`: BMC credential lookup
-- `carbide-api-db`: Access to the carbide database to resolve BMC IP's to MAC addresses (necessary for looking up credentials.)
+- `carbide-rpc`: carbide-api gRPC client used for BMC IP resolution and credential lookup
 
 ### Dependency View
 
@@ -159,14 +163,11 @@ flowchart LR
     DPF[DPF or other peer service]
     Carbide[carbide-api]
     Proxy[carbide-bmc-proxy]
-    DB[(Carbide DB)]
-    Vault[(Secrets / Vault)]
     BMC[BMC Redfish endpoint]
 
     DPF --> Proxy
     Carbide --> Proxy
-    Proxy --> DB
-    Proxy --> Vault
+    Proxy --> Carbide
     Proxy --> BMC
 ```
 
@@ -183,8 +184,8 @@ flowchart TB
     subgraph ProxyBoundary["carbide-bmc-proxy"]
         MTLS[mTLS termination + SPIFFE/external cert authn]
         ALLOW[principal allow-list]
-        LOOKUP[DB lookup: BMC IP -> BMC identity]
-        CREDS[credential lookup]
+        LOOKUP[carbide-api: BMC IP -> BMC identity]
+        CREDS[carbide-api: credential lookup]
         FORWARD[upstream HTTP proxy]
     end
 
@@ -203,18 +204,17 @@ The caller authenticates with a client certificate. If the caller is authorized,
 sequenceDiagram
     participant Client
     participant Proxy as carbide-bmc-proxy
-    participant DB as Carbide DB
-    participant Vault as Secrets/Vault
+    participant API as carbide-api
     participant BMC
 
     Client->>Proxy: HTTPS + HTTP/2 + client cert
     Client->>Proxy: GET /redfish/v1/...<br/>Forwarded: host=10.0.0.42
     Proxy->>Proxy: authenticate + authorize principal
-    Proxy->>DB: resolve 10.0.0.42
-    DB-->>Proxy: BMC MAC / identity
-    Proxy->>Vault: get BMC credentials
-    Vault-->>Proxy: username/password
-    Proxy->>BMC: HTTPS request + Basic Auth
+    Proxy->>API: FindMacAddressByBmcIp(10.0.0.42)
+    API-->>Proxy: BMC MAC / identity
+    Proxy->>API: GetBmcCredentials(BMC MAC)
+    API-->>Proxy: BMC credentials
+    Proxy->>BMC: HTTPS request + provided BMC credentials
     BMC-->>Proxy: Redfish response
     Proxy-->>Client: proxied response
 ```
@@ -224,8 +224,8 @@ sequenceDiagram
 This crate is meant to implement a clean architectural boundary, but the implementation still couples to carbide in slightly uncomfortable ways:
 
 1. It's still a component of the ncx-infra-controller-core repo, so it's not fully independent
-2. It expects a populated machine_interfaces table in the database in order to look up IP's to vault credential keys (which we rely on carbide-api to populate.)
-3. It expects populated credentials in vault for every BMC (which we rely on carbide-api to populate.)
+2. It expects carbide-api to resolve proxied BMC IPs through `FindMacAddressByBmcIp`.
+3. It expects carbide-api to return credentials from `GetBmcCredentials` for every proxied BMC.
 
 Point #1 doesn't really need to be solved, since there's no problem storing the crate in this repo and taking advantage of existing code. But future work can focus on making carbide-bmc-proxy:
 

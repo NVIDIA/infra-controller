@@ -32,6 +32,7 @@ use carbide_redfish::libredfish::conv::{
     IntoLibredfish, IntoModel, machine_last_reboot_requested_mode,
 };
 use carbide_uuid::machine::MachineId;
+use carbide_uuid::vpc::VpcId;
 use chrono::{DateTime, Duration, Utc};
 use config_version::{ConfigVersion, Versioned};
 use db::DatabaseError;
@@ -68,11 +69,11 @@ use model::machine::infiniband::{IbConfigNotSyncedReason, ib_config_synced};
 use model::machine::nvlink::nvlink_config_synced;
 use model::machine::{
     AttestationMode, BiosConfigInfo, BiosConfigState, BomValidating, BomValidatingContext,
-    CleanupState, CreateBossVolumeContext, CreateBossVolumeState, DpuDiscoveringState,
-    DpuInitNextStateResolver, DpuInitState, FailureCause, FailureDetails, FailureSource,
-    HostPlatformConfigurationState, HostReprovisionState, InitialResetPhase, InstallDpuOsState,
-    InstanceNextStateResolver, InstanceState, LockdownInfo, LockdownState, Machine,
-    MachineLastRebootRequested, MachineLastRebootRequestedMode, MachineNextStateResolver,
+    CleanupContext, CleanupState, CreateBossVolumeContext, CreateBossVolumeState,
+    DpuDiscoveringState, DpuInitNextStateResolver, DpuInitState, FailureCause, FailureDetails,
+    FailureSource, HostPlatformConfigurationState, HostReprovisionState, InitialResetPhase,
+    InstallDpuOsState, InstanceNextStateResolver, InstanceState, LockdownInfo, LockdownState,
+    Machine, MachineLastRebootRequested, MachineLastRebootRequestedMode, MachineNextStateResolver,
     MachineState, ManagedHostState, ManagedHostStateSnapshot, MeasuringState,
     NetworkConfigUpdateState, NextStateBFBSupport, PerformPowerOperation, PowerDrainState,
     PowerState, ReprovisionState, RetryInfo, SecureEraseBossContext, SecureEraseBossState,
@@ -970,7 +971,10 @@ impl MachineStateHandler {
                     .await
             }
 
-            ManagedHostState::WaitingForCleanup { cleanup_state } => {
+            ManagedHostState::WaitingForCleanup {
+                cleanup_state,
+                cleanup_context,
+            } => {
                 let redfish_client = ctx
                     .services
                     .create_redfish_client_from_machine(&mh_snapshot.host_snapshot)
@@ -984,27 +988,27 @@ impl MachineStateHandler {
                                 .await
                                 .map_err(|e| redfish_error("get_boss_controller", e))?
                         {
-                            let next_state: ManagedHostState =
-                                ManagedHostState::WaitingForCleanup {
-                                    cleanup_state: CleanupState::SecureEraseBoss {
-                                        secure_erase_boss_context: SecureEraseBossContext {
-                                            boss_controller_id,
-                                            secure_erase_jid: None,
-                                            secure_erase_boss_state:
-                                                SecureEraseBossState::UnlockHost,
-                                            iteration: Some(0),
-                                        },
+                            let next_state = waiting_for_cleanup_state(
+                                CleanupState::SecureEraseBoss {
+                                    secure_erase_boss_context: SecureEraseBossContext {
+                                        boss_controller_id,
+                                        secure_erase_jid: None,
+                                        secure_erase_boss_state: SecureEraseBossState::UnlockHost,
+                                        iteration: Some(0),
                                     },
-                                };
+                                },
+                                *cleanup_context,
+                            );
 
                             return Ok(StateHandlerOutcome::transition(next_state));
                         }
 
-                        let next_state: ManagedHostState = ManagedHostState::WaitingForCleanup {
-                            cleanup_state: CleanupState::HostCleanup {
+                        let next_state = waiting_for_cleanup_state(
+                            CleanupState::HostCleanup {
                                 boss_controller_id: None,
                             },
-                        };
+                            *cleanup_context,
+                        );
 
                         Ok(StateHandlerOutcome::transition(next_state))
                     }
@@ -1021,18 +1025,18 @@ impl MachineStateHandler {
                                     .await
                                     .map_err(|e| redfish_error("set_idrac_lockdown", e))?;
 
-                                let next_state: ManagedHostState =
-                                    ManagedHostState::WaitingForCleanup {
-                                        cleanup_state: CleanupState::SecureEraseBoss {
-                                            secure_erase_boss_context: SecureEraseBossContext {
-                                                boss_controller_id,
-                                                secure_erase_jid: None,
-                                                secure_erase_boss_state:
-                                                    SecureEraseBossState::SecureEraseBoss,
-                                                iteration: secure_erase_boss_context.iteration,
-                                            },
+                                let next_state = waiting_for_cleanup_state(
+                                    CleanupState::SecureEraseBoss {
+                                        secure_erase_boss_context: SecureEraseBossContext {
+                                            boss_controller_id,
+                                            secure_erase_jid: None,
+                                            secure_erase_boss_state:
+                                                SecureEraseBossState::SecureEraseBoss,
+                                            iteration: secure_erase_boss_context.iteration,
                                         },
-                                    };
+                                    },
+                                    *cleanup_context,
+                                );
 
                                 Ok(StateHandlerOutcome::transition(next_state))
                             }
@@ -1046,18 +1050,18 @@ impl MachineStateHandler {
                                         redfish_error("decommission_storage_controller", e)
                                     })?;
 
-                                let next_state: ManagedHostState =
-                                    ManagedHostState::WaitingForCleanup {
-                                        cleanup_state: CleanupState::SecureEraseBoss {
-                                            secure_erase_boss_context: SecureEraseBossContext {
-                                                boss_controller_id,
-                                                secure_erase_jid: jid,
-                                                secure_erase_boss_state:
-                                                    SecureEraseBossState::WaitForJobCompletion,
-                                                iteration: secure_erase_boss_context.iteration,
-                                            },
+                                let next_state = waiting_for_cleanup_state(
+                                    CleanupState::SecureEraseBoss {
+                                        secure_erase_boss_context: SecureEraseBossContext {
+                                            boss_controller_id,
+                                            secure_erase_jid: jid,
+                                            secure_erase_boss_state:
+                                                SecureEraseBossState::WaitForJobCompletion,
+                                            iteration: secure_erase_boss_context.iteration,
                                         },
-                                    };
+                                    },
+                                    *cleanup_context,
+                                );
 
                                 Ok(StateHandlerOutcome::transition(next_state))
                             }
@@ -1102,8 +1106,8 @@ impl MachineStateHandler {
                         .await?;
 
                         let next_state = match boss_controller_id {
-                            Some(boss_controller_id) => ManagedHostState::WaitingForCleanup {
-                                cleanup_state: CleanupState::CreateBossVolume {
+                            Some(boss_controller_id) => waiting_for_cleanup_state(
+                                CleanupState::CreateBossVolume {
                                     create_boss_volume_context: CreateBossVolumeContext {
                                         boss_controller_id: boss_controller_id.to_string(),
                                         create_boss_volume_jid: None,
@@ -1112,15 +1116,9 @@ impl MachineStateHandler {
                                         iteration: Some(0),
                                     },
                                 },
-                            },
-                            None => ManagedHostState::BomValidating {
-                                bom_validating_state: BomValidating::UpdatingInventory(
-                                    BomValidatingContext {
-                                        machine_validation_context: Some("Cleanup".to_string()),
-                                        ..BomValidatingContext::default()
-                                    },
-                                ),
-                            },
+                                *cleanup_context,
+                            ),
+                            None => post_cleanup_state(*cleanup_context),
                         };
 
                         Ok(StateHandlerOutcome::transition(next_state))
@@ -1140,18 +1138,18 @@ impl MachineStateHandler {
                                     .await
                                     .map_err(|e| redfish_error("create_storage_volume", e))?;
 
-                                let next_state: ManagedHostState =
-                                    ManagedHostState::WaitingForCleanup {
-                                        cleanup_state: CleanupState::CreateBossVolume {
-                                            create_boss_volume_context: CreateBossVolumeContext {
-                                                boss_controller_id,
-                                                create_boss_volume_jid: jid,
-                                                create_boss_volume_state:
-                                                    CreateBossVolumeState::WaitForJobScheduled,
-                                                iteration: create_boss_volume_context.iteration,
-                                            },
+                                let next_state = waiting_for_cleanup_state(
+                                    CleanupState::CreateBossVolume {
+                                        create_boss_volume_context: CreateBossVolumeContext {
+                                            boss_controller_id,
+                                            create_boss_volume_jid: jid,
+                                            create_boss_volume_state:
+                                                CreateBossVolumeState::WaitForJobScheduled,
+                                            iteration: create_boss_volume_context.iteration,
                                         },
-                                    };
+                                    },
+                                    *cleanup_context,
+                                );
 
                                 Ok(StateHandlerOutcome::transition(next_state))
                             }
@@ -1180,20 +1178,20 @@ impl MachineStateHandler {
                                     .await
                                     .map_err(|e| redfish_error("ForceRestart", e))?;
 
-                                let next_state: ManagedHostState =
-                                    ManagedHostState::WaitingForCleanup {
-                                        cleanup_state: CleanupState::CreateBossVolume {
-                                            create_boss_volume_context: CreateBossVolumeContext {
-                                                boss_controller_id,
-                                                create_boss_volume_jid: create_boss_volume_context
-                                                    .create_boss_volume_jid
-                                                    .clone(),
-                                                create_boss_volume_state:
-                                                    CreateBossVolumeState::WaitForJobCompletion,
-                                                iteration: create_boss_volume_context.iteration,
-                                            },
+                                let next_state = waiting_for_cleanup_state(
+                                    CleanupState::CreateBossVolume {
+                                        create_boss_volume_context: CreateBossVolumeContext {
+                                            boss_controller_id,
+                                            create_boss_volume_jid: create_boss_volume_context
+                                                .create_boss_volume_jid
+                                                .clone(),
+                                            create_boss_volume_state:
+                                                CreateBossVolumeState::WaitForJobCompletion,
+                                            iteration: create_boss_volume_context.iteration,
                                         },
-                                    };
+                                    },
+                                    *cleanup_context,
+                                );
 
                                 Ok(StateHandlerOutcome::transition(next_state))
                             }
@@ -1210,17 +1208,7 @@ impl MachineStateHandler {
                                     .await
                                     .map_err(|e| redfish_error("set_idrac_lockdown", e))?;
 
-                                let next_state: ManagedHostState =
-                                    ManagedHostState::BomValidating {
-                                        bom_validating_state: BomValidating::UpdatingInventory(
-                                            BomValidatingContext {
-                                                machine_validation_context: Some(
-                                                    "Cleanup".to_string(),
-                                                ),
-                                                ..BomValidatingContext::default()
-                                            },
-                                        ),
-                                    };
+                                let next_state = post_cleanup_state(*cleanup_context);
 
                                 Ok(StateHandlerOutcome::transition(next_state))
                             }
@@ -1347,8 +1335,14 @@ impl MachineStateHandler {
                                 .unwrap_or_default()
                         {
                             // Cleaned up successfully after a failure.
-                            let next_state = ManagedHostState::WaitingForCleanup {
-                                cleanup_state: CleanupState::Init,
+                            let next_state = match &details.source {
+                                FailureSource::StateMachineArea(StateMachineArea::HostInit) => {
+                                    initial_discovery_waiting_state()
+                                }
+                                _ => waiting_for_cleanup_state(
+                                    CleanupState::Init,
+                                    CleanupContext::Deprovision,
+                                ),
                             };
                             let mut txn = ctx.services.db_pool.begin().await?;
                             db::machine::clear_failure_details(machine_id, &mut txn).await?;
@@ -1541,9 +1535,10 @@ impl MachineStateHandler {
                     AttestationMode::SpdmAttestation {
                         spdm_measuring_state,
                     } => {
-                        let next_skip_state = ManagedHostState::WaitingForCleanup {
-                            cleanup_state: CleanupState::Init,
-                        };
+                        let next_skip_state = waiting_for_cleanup_state(
+                            CleanupState::Init,
+                            CleanupContext::Deprovision,
+                        );
                         if !ctx.services.site_config.spdm.enabled {
                             return Ok(StateHandlerOutcome::transition(next_skip_state));
                         }
@@ -4440,6 +4435,49 @@ fn cleanedup_after_state_transition(
     last_cleanup_time.unwrap_or_default() > version.timestamp()
 }
 
+fn waiting_for_cleanup_state(
+    cleanup_state: CleanupState,
+    cleanup_context: CleanupContext,
+) -> ManagedHostState {
+    ManagedHostState::WaitingForCleanup {
+        cleanup_state,
+        cleanup_context,
+    }
+}
+
+fn initial_discovery_waiting_state() -> ManagedHostState {
+    ManagedHostState::HostInit {
+        machine_state: MachineState::WaitingForDiscovery,
+    }
+}
+
+fn post_cleanup_state(cleanup_context: CleanupContext) -> ManagedHostState {
+    match cleanup_context {
+        CleanupContext::Deprovision => ManagedHostState::BomValidating {
+            bom_validating_state: BomValidating::UpdatingInventory(BomValidatingContext {
+                machine_validation_context: Some("Cleanup".to_string()),
+                ..BomValidatingContext::default()
+            }),
+        },
+        CleanupContext::InitialDiscovery => initial_discovery_waiting_state(),
+    }
+}
+
+fn current_cleanup_context(
+    mh_snapshot: &ManagedHostStateSnapshot,
+) -> Result<CleanupContext, StateHandlerError> {
+    match &mh_snapshot.host_snapshot.state.value {
+        ManagedHostState::WaitingForCleanup {
+            cleanup_context, ..
+        } => Ok(*cleanup_context),
+        _ => Err(StateHandlerError::GenericError(eyre::eyre!(
+            "unexpected host state for {}: {:#?}",
+            mh_snapshot.host_snapshot.id,
+            mh_snapshot.host_snapshot.state,
+        ))),
+    }
+}
+
 /// A `StateHandler` implementation for host machines
 #[derive(Debug, Clone)]
 pub struct HostMachineStateHandler {
@@ -4999,6 +5037,13 @@ impl StateHandler for HostMachineStateHandler {
                     }
                 }
                 MachineState::WaitingForDiscovery => {
+                    if mh_snapshot.host_snapshot.last_cleanup_time.is_none() {
+                        return Ok(StateHandlerOutcome::transition(waiting_for_cleanup_state(
+                            CleanupState::Init,
+                            CleanupContext::InitialDiscovery,
+                        )));
+                    }
+
                     if !discovered_after_state_transition(
                         mh_snapshot.host_snapshot.state.version,
                         mh_snapshot.host_snapshot.last_discovery_time,
@@ -6463,6 +6508,13 @@ async fn handle_instance_network_config_update_request(
                 .collect_vec();
 
             if !resources_to_be_released.is_empty() {
+                // Resolve VPC membership before old VPC-prefix segments are marked deleted.
+                let old_vpc_ids =
+                    vpc_ids_for_interfaces(&update_request.old_config.interfaces, &mut txn).await?;
+                let new_vpc_ids =
+                    vpc_ids_for_interfaces(&update_request.new_config.interfaces, &mut txn).await?;
+                let released_vpc_ids = old_vpc_ids.difference(&new_vpc_ids).copied().collect_vec();
+
                 let addresses = resources_to_be_released
                     .iter()
                     .flat_map(|x| x.ip_addrs.values().copied().collect_vec())
@@ -6476,14 +6528,13 @@ async fn handle_instance_network_config_update_request(
                 db::instance_address::delete_addresses(&mut txn, &addresses).await?;
                 release_network_segments_with_vpc_prefix(&resources_to_be_released, &mut txn)
                     .await?;
-
-                // TODO: This is not the best way, but will work fine. If you delete all loopback IPs
-                // associated with all DPUs, dpu_agent will assign new IPs during next managed_host_network_config
-                // iteration.
-                // The best way would be to find out the VPCs per DPU which are not used in new config
-                // and delete them only. This can be taken care once multi-dpu instance allocation is
-                // completed.
-                release_vpc_dpu_loopback(mh_snapshot, common_pools.as_deref(), &mut txn).await?;
+                release_vpc_dpu_loopback_for_vpcs(
+                    mh_snapshot,
+                    common_pools.as_deref(),
+                    &mut txn,
+                    &released_vpc_ids,
+                )
+                .await?;
             }
             db::instance::delete_update_network_config_request(&instance.id, &mut txn).await?;
             let next_state = ManagedHostState::Assigned {
@@ -6663,6 +6714,67 @@ pub async fn release_vpc_dpu_loopback(
     }
 
     Ok(())
+}
+
+/// Releases VPC DPU loopbacks for selected VPCs on every DPU in the managed host.
+async fn release_vpc_dpu_loopback_for_vpcs(
+    mh_snapshot: &ManagedHostStateSnapshot,
+    common_pools: Option<&CommonPools>,
+    txn: &mut PgConnection,
+    vpc_ids: &[VpcId],
+) -> Result<(), StateHandlerError> {
+    let Some(common_pools) = common_pools else {
+        return Ok(());
+    };
+
+    if vpc_ids.is_empty() {
+        return Ok(());
+    }
+
+    // Release the removed VPC loopbacks from every DPU that may have rendered them.
+    for dpu_snapshot in &mh_snapshot.dpu_snapshots {
+        db::vpc_dpu_loopback::delete_and_deallocate_for_vpcs(
+            common_pools,
+            &dpu_snapshot.id,
+            vpc_ids,
+            txn,
+        )
+        .await
+        .map_err(|e| StateHandlerError::ResourceCleanupError {
+            resource: "VpcLoopbackIp",
+            error: e.to_string(),
+        })?;
+    }
+
+    Ok(())
+}
+
+/// Returns the VPC IDs referenced by the assigned network segments on these interfaces.
+async fn vpc_ids_for_interfaces(
+    interfaces: &[InstanceInterfaceConfig],
+    txn: &mut PgConnection,
+) -> Result<HashSet<VpcId>, StateHandlerError> {
+    let segment_ids = interfaces
+        .iter()
+        .filter_map(|iface| iface.network_segment_id)
+        .collect_vec();
+
+    if segment_ids.is_empty() {
+        return Ok(HashSet::new());
+    }
+
+    // Load segment metadata so VPC-prefix and direct segment interfaces share one path.
+    let segments = db::network_segment::find_by(
+        txn,
+        db::ObjectColumnFilter::List(db::network_segment::IdColumn, &segment_ids),
+        model::network_segment::NetworkSegmentSearchConfig::default(),
+    )
+    .await?;
+
+    Ok(segments
+        .into_iter()
+        .filter_map(|segment| segment.config.vpc_id)
+        .collect())
 }
 
 async fn release_network_segments_with_vpc_prefix(
@@ -8589,7 +8701,10 @@ fn get_next_state_boss_job_failure(
     mh_snapshot: &ManagedHostStateSnapshot,
 ) -> Result<(ManagedHostState, PowerState), StateHandlerError> {
     let (next_state, expected_power_state) = match &mh_snapshot.host_snapshot.state.value {
-        ManagedHostState::WaitingForCleanup { cleanup_state } => match cleanup_state {
+        ManagedHostState::WaitingForCleanup {
+            cleanup_state,
+            cleanup_context,
+        } => match cleanup_state {
             CleanupState::SecureEraseBoss {
                 secure_erase_boss_context,
             } => match &secure_erase_boss_context.secure_erase_boss_state {
@@ -8598,8 +8713,8 @@ fn get_next_state_boss_job_failure(
                     power_state,
                 } => match power_state {
                     PowerState::Off => (
-                        ManagedHostState::WaitingForCleanup {
-                            cleanup_state: CleanupState::SecureEraseBoss {
+                        waiting_for_cleanup_state(
+                            CleanupState::SecureEraseBoss {
                                 secure_erase_boss_context: SecureEraseBossContext {
                                     boss_controller_id: secure_erase_boss_context
                                         .boss_controller_id
@@ -8613,12 +8728,13 @@ fn get_next_state_boss_job_failure(
                                         },
                                 },
                             },
-                        },
+                            *cleanup_context,
+                        ),
                         *power_state,
                     ),
                     PowerState::On => (
-                        ManagedHostState::WaitingForCleanup {
-                            cleanup_state: CleanupState::SecureEraseBoss {
+                        waiting_for_cleanup_state(
+                            CleanupState::SecureEraseBoss {
                                 secure_erase_boss_context: SecureEraseBossContext {
                                     boss_controller_id: secure_erase_boss_context
                                         .boss_controller_id
@@ -8630,7 +8746,8 @@ fn get_next_state_boss_job_failure(
                                     secure_erase_boss_state: SecureEraseBossState::SecureEraseBoss,
                                 },
                             },
-                        },
+                            *cleanup_context,
+                        ),
                         *power_state,
                     ),
                     _ => {
@@ -8657,8 +8774,8 @@ fn get_next_state_boss_job_failure(
                     power_state,
                 } => match power_state {
                     PowerState::Off => (
-                        ManagedHostState::WaitingForCleanup {
-                            cleanup_state: CleanupState::CreateBossVolume {
+                        waiting_for_cleanup_state(
+                            CleanupState::CreateBossVolume {
                                 create_boss_volume_context: CreateBossVolumeContext {
                                     boss_controller_id: create_boss_volume_context
                                         .boss_controller_id
@@ -8672,12 +8789,13 @@ fn get_next_state_boss_job_failure(
                                         },
                                 },
                             },
-                        },
+                            *cleanup_context,
+                        ),
                         *power_state,
                     ),
                     PowerState::On => (
-                        ManagedHostState::WaitingForCleanup {
-                            cleanup_state: CleanupState::CreateBossVolume {
+                        waiting_for_cleanup_state(
+                            CleanupState::CreateBossVolume {
                                 create_boss_volume_context: CreateBossVolumeContext {
                                     boss_controller_id: create_boss_volume_context
                                         .boss_controller_id
@@ -8691,7 +8809,8 @@ fn get_next_state_boss_job_failure(
                                         CreateBossVolumeState::CreateBossVolume,
                                 },
                             },
-                        },
+                            *cleanup_context,
+                        ),
                         *power_state,
                     ),
                     _ => {
@@ -8733,6 +8852,7 @@ fn handle_boss_controller_job_error(
     boss_controller_id: String,
     iterations: u32,
     secure_erase_boss_controller: bool,
+    cleanup_context: CleanupContext,
     err: StateHandlerError,
     time_since_state_change: chrono::TimeDelta,
 ) -> Result<StateHandlerOutcome<ManagedHostState>, StateHandlerError> {
@@ -8789,7 +8909,7 @@ fn handle_boss_controller_job_error(
         },
     };
 
-    let next_state: ManagedHostState = ManagedHostState::WaitingForCleanup { cleanup_state };
+    let next_state = waiting_for_cleanup_state(cleanup_state, cleanup_context);
 
     Ok(StateHandlerOutcome::transition(next_state))
 }
@@ -8801,6 +8921,7 @@ async fn wait_for_boss_controller_job_to_scheduled(
     job_id: String,
     iteration: Option<u32>,
 ) -> Result<StateHandlerOutcome<ManagedHostState>, StateHandlerError> {
+    let cleanup_context = current_cleanup_context(mh_snapshot)?;
     let job_state = match redfish_client.get_job_state(&job_id).await {
         Ok(state) => state,
         Err(e) => {
@@ -8808,6 +8929,7 @@ async fn wait_for_boss_controller_job_to_scheduled(
                 boss_controller_id,
                 iteration.unwrap_or_default(),
                 false,
+                cleanup_context,
                 redfish_error("get_job_state", e),
                 mh_snapshot.host_snapshot.state.version.since_state_change(),
             );
@@ -8815,8 +8937,8 @@ async fn wait_for_boss_controller_job_to_scheduled(
     };
 
     let next_state = match job_state {
-        libredfish::JobState::Scheduled => ManagedHostState::WaitingForCleanup {
-            cleanup_state: CleanupState::CreateBossVolume {
+        libredfish::JobState::Scheduled => waiting_for_cleanup_state(
+            CleanupState::CreateBossVolume {
                 create_boss_volume_context: CreateBossVolumeContext {
                     boss_controller_id,
                     create_boss_volume_jid: Some(job_id),
@@ -8824,7 +8946,8 @@ async fn wait_for_boss_controller_job_to_scheduled(
                     iteration,
                 },
             },
-        },
+            cleanup_context,
+        ),
         libredfish::JobState::Completed => {
             tracing::warn!(
                 "CreateBossVolume: job {} for {} completed before being scheduled, skipping reboot",
@@ -8832,8 +8955,8 @@ async fn wait_for_boss_controller_job_to_scheduled(
                 mh_snapshot.host_snapshot.id,
             );
 
-            ManagedHostState::WaitingForCleanup {
-                cleanup_state: CleanupState::CreateBossVolume {
+            waiting_for_cleanup_state(
+                CleanupState::CreateBossVolume {
                     create_boss_volume_context: CreateBossVolumeContext {
                         boss_controller_id,
                         create_boss_volume_jid: Some(job_id),
@@ -8841,13 +8964,15 @@ async fn wait_for_boss_controller_job_to_scheduled(
                         iteration,
                     },
                 },
-            }
+                cleanup_context,
+            )
         }
         libredfish::JobState::ScheduledWithErrors | libredfish::JobState::CompletedWithErrors => {
             return handle_boss_controller_job_error(
                 boss_controller_id,
                 iteration.unwrap_or_default(),
                 false,
+                cleanup_context,
                 StateHandlerError::GenericError(eyre::eyre!(
                     "CreateBossVolume: job {} failed for {} with state {job_state:#?}",
                     job_id,
@@ -8871,9 +8996,10 @@ async fn wait_for_boss_controller_job_to_complete(
     redfish_client: &dyn Redfish,
     mh_snapshot: &ManagedHostStateSnapshot,
 ) -> Result<StateHandlerOutcome<ManagedHostState>, StateHandlerError> {
+    let cleanup_context = current_cleanup_context(mh_snapshot)?;
     let (boss_controller_id, boss_job_id, iterations, secure_erase_boss_controller) =
         match &mh_snapshot.host_snapshot.state.value {
-            ManagedHostState::WaitingForCleanup { cleanup_state } => match cleanup_state {
+            ManagedHostState::WaitingForCleanup { cleanup_state, .. } => match cleanup_state {
                 CleanupState::SecureEraseBoss {
                     secure_erase_boss_context,
                 } => match &secure_erase_boss_context.secure_erase_boss_state {
@@ -8935,6 +9061,7 @@ async fn wait_for_boss_controller_job_to_complete(
                 boss_controller_id,
                 iterations,
                 secure_erase_boss_controller,
+                cleanup_context,
                 redfish_error("get_job_state", e),
                 mh_snapshot.host_snapshot.state.version.since_state_change(),
             );
@@ -8962,7 +9089,7 @@ async fn wait_for_boss_controller_job_to_complete(
                 },
             };
 
-            let next_state = ManagedHostState::WaitingForCleanup { cleanup_state };
+            let next_state = waiting_for_cleanup_state(cleanup_state, cleanup_context);
             Ok(StateHandlerOutcome::transition(next_state))
         }
         // The job has failed; handle error
@@ -8971,6 +9098,7 @@ async fn wait_for_boss_controller_job_to_complete(
                 boss_controller_id,
                 iterations,
                 secure_erase_boss_controller,
+                cleanup_context,
                 StateHandlerError::GenericError(eyre::eyre!(
                     "job {job_id} will not complete because it is in a failure state: {job_state:#?}",
                 )),
@@ -9738,7 +9866,23 @@ async fn handle_instance_host_platform_config(
 
             log_host_config(redfish_client.as_ref(), mh_snapshot).await;
 
-            let configure_host_boot_order = if redfish_client
+            let is_viking = mh_snapshot
+                .host_snapshot
+                .hardware_info
+                .as_ref()
+                .is_some_and(|hw| hw.is_dgx_h100());
+
+            let configure_host_boot_order = if is_viking {
+                // Viking BMC FW has known issues with the boot-order remediation path.
+                // Skip the unreliable Redfish read/PATCH sequence and apply the host's
+                // lockdown policy before continuing.
+                tracing::info!(
+                    machine_id = %mh_snapshot.host_snapshot.id,
+                    bmc_vendor = %vendor,
+                    "Skipping boot order remediation on Viking (known FW/BMC issue)"
+                );
+                false
+            } else if redfish_client
                 .is_boot_order_setup(&boot_interface_mac.to_string())
                 .await
                 .map_err(|e| redfish_error("is_boot_order_setup", e))?
@@ -9766,7 +9910,9 @@ async fn handle_instance_host_platform_config(
                     },
                 }
             } else {
-                InstanceState::WaitingForDpusToUp
+                InstanceState::HostPlatformConfiguration {
+                    platform_config_state: HostPlatformConfigurationState::LockHost,
+                }
             }
         }
         HostPlatformConfigurationState::ConfigureBios {

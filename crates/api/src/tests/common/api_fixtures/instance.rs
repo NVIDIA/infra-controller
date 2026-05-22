@@ -29,7 +29,8 @@ use model::instance::snapshot::InstanceSnapshot;
 use model::instance::status::network::InstanceNetworkStatusObservation;
 use model::machine::health_override::HARDWARE_HEALTH_OVERRIDE_PREFIX;
 use model::machine::{
-    CleanupState, Machine, MachineState, MachineValidatingState, ManagedHostState, ValidationState,
+    CleanupContext, CleanupState, Machine, MachineState, MachineValidatingState, ManagedHostState,
+    ValidationState,
 };
 use rpc::forge::InstanceDpuExtensionServicesConfig;
 use rpc::forge::forge_server::Forge;
@@ -539,6 +540,7 @@ pub async fn handle_delete_post_bootingwithdiscoveryimage(env: &TestEnv, mh: &Te
             cleanup_state: CleanupState::HostCleanup {
                 boss_controller_id: None,
             },
+            cleanup_context: CleanupContext::Deprovision,
         },
     )
     .await;

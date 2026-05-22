@@ -21,7 +21,7 @@
 use std::fs::File;
 use std::io::Write;
 
-use ::rpc::admin_cli::{OutputFormat, ToTable};
+use ::rpc::admin_cli::OutputFormat;
 use ::rpc::forge_api_client::ForgeApiClient;
 use ::rpc::forge_tls_client::{ApiConfig, ForgeClientConfig};
 use cfg::cli_options::{CliCommand, CliOptions};
@@ -32,6 +32,7 @@ use forge_tls::client_config::{
     get_carbide_api_url, get_client_cert_info, get_config_from_file, get_forge_root_ca_path,
     get_proxy_info,
 };
+use measured_boot::ToTable;
 use serde::Serialize;
 use tracing_subscriber::filter::{EnvFilter, LevelFilter};
 use tracing_subscriber::fmt;

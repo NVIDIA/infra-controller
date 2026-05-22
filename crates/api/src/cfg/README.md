@@ -78,7 +78,7 @@ applicable.
 | `power_manager_options` | `PowerManagerOptions` | *(see below)* | Power management timing (see [PowerManagerOptions](#powermanageroptions)). |
 | `sitename` | `Option<String>` | — | Human-readable site name exposed to tenants via FMDS. |
 | `auto_machine_repair_plugin` | `AutoMachineRepairPluginConfig` | *(default)* | Auto-repair configuration for failed machines. |
-| `vmaas_config` | `Option<VmaasConfig>` | — | VMaaS configuration for VM system integration. |
+| `vmaas_config` | `Option<VmaasConfig>` | — | VMaaS configuration for VM system integration (see [VmaasConfig](#vmaasconfig)). |
 | `mlxconfig_profiles` | `Option<HashMap<String, MlxConfigProfile>>` | — | Named Mellanox NIC register configuration profiles for superNIC firmware flashing. TOML key: `mlx-config-profiles`. |
 | `rack_management_enabled` | `bool` | `false` | Standalone infrastructure manager mode for GB200/GB300/VR144. See doc comment for full behavioral changes. |
 | `force_dpu_nic_mode` | `bool` | `false` | Treat DPUs as regular NICs (skip managed DPU config). For dev labs with BF DPUs. |
@@ -234,6 +234,18 @@ Extends `StateControllerConfig` with:
 | `next_try_duration_on_success` | `Duration` | `5m` | Retry interval after successful power operation. |
 | `next_try_duration_on_failure` | `Duration` | `2m` | Retry interval after failed power operation. |
 | `wait_duration_until_host_reboot` | `Duration` | `15m` | Wait after power-down before powering on host. |
+
+### `VmaasConfig`
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `allow_instance_vf` | `bool` | `true` | Allow VFs on instance creation. |
+| `hbn_reps` | `Option<String>` | — | HBN representors created by DPUs. |
+| `hbn_sfs` | `Option<String>` | — | HBN SF representors created by DPUs. |
+| `bridging` | `Option<TrafficInterceptBridging>` | — | Advanced traffic-intercept routing and bridging options. |
+| `public_prefixes` | `Vec<Ipv4Network>` | **required** | Publicly routable IPv4 CIDR prefixes used by traffic-intercept users. |
+| `secondary_vtep_aggregate_prefixes` | `Vec<IpNetwork>` | `[]` | IPv4 or IPv6 aggregate prefixes used only for routing and filtering. IP allocation is provided by the secondary VTEP resource pool. |
+| `secondary_overlay_support` | `bool` | `true` | Whether secondary overlay VTEP IPs are expected for DPUs. |
 
 ### `DpuConfig`
 

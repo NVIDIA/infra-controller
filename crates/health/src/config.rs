@@ -527,7 +527,7 @@ impl Default for SensorCollectorConfig {
             rediscover_interval: Duration::from_secs(300),
             state_refresh_interval: Duration::from_secs(9000),
             sensor_fetch_interval: Duration::from_secs(60),
-            sensor_fetch_concurrency: 10,
+            sensor_fetch_concurrency: 4,
             include_sensor_thresholds: true,
         }
     }

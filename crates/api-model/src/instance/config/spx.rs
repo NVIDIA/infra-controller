@@ -15,11 +15,7 @@
  * limitations under the License.
  */
 
-//use std::collections::HashSet;
-
-use ::rpc::errors::RpcDataConversionError;
 use carbide_uuid::spx::SpxPartitionId;
-use rpc::forge as rpc;
 use serde::{Deserialize, Serialize};
 
 use crate::ConfigValidationError;
@@ -48,49 +44,6 @@ impl InstanceSpxConfig {
     }
 }
 
-impl TryFrom<rpc::InstanceSpxConfig> for InstanceSpxConfig {
-    type Error = RpcDataConversionError;
-
-    fn try_from(config: rpc::InstanceSpxConfig) -> Result<Self, Self::Error> {
-        let mut spx_attachments = Vec::with_capacity(config.spx_attachments.len());
-        for attachment in config.spx_attachments.into_iter() {
-            let spx_partition_id =
-                attachment
-                    .spx_partition_id
-                    .ok_or(RpcDataConversionError::MissingArgument(
-                        "InstanceSpxAttachment::spx_partition_id",
-                    ))?;
-            spx_attachments.push(InstanceSpxAttachment {
-                device: attachment.device,
-                device_instance: attachment.device_instance,
-                spx_partition_id,
-                attachment_type: SpxAttachmentType::try_from(attachment.attachment_type)?,
-                virtual_function_id: attachment.virtual_function_id,
-                mac_address: None,
-            });
-        }
-        Ok(Self { spx_attachments })
-    }
-}
-
-impl TryFrom<InstanceSpxConfig> for rpc::InstanceSpxConfig {
-    type Error = RpcDataConversionError;
-
-    fn try_from(config: InstanceSpxConfig) -> Result<rpc::InstanceSpxConfig, Self::Error> {
-        let mut spx_attachments = Vec::with_capacity(config.spx_attachments.len());
-        for attachment in config.spx_attachments.into_iter() {
-            spx_attachments.push(rpc::InstanceSpxAttachment {
-                device: attachment.device,
-                device_instance: attachment.device_instance,
-                spx_partition_id: Some(attachment.spx_partition_id),
-                attachment_type: attachment.attachment_type as i32,
-                virtual_function_id: attachment.virtual_function_id,
-            });
-        }
-        Ok(rpc::InstanceSpxConfig { spx_attachments })
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SpxAttachmentType {
     Physical = 0,
@@ -99,17 +52,14 @@ pub enum SpxAttachmentType {
 }
 
 impl TryFrom<i32> for SpxAttachmentType {
-    type Error = RpcDataConversionError;
+    type Error = &'static str;
 
     fn try_from(value: i32) -> Result<Self, Self::Error> {
         match value {
             0 => Ok(SpxAttachmentType::Physical),
             1 => Ok(SpxAttachmentType::Virtual),
             2 => Ok(SpxAttachmentType::Ovn),
-            _ => Err(RpcDataConversionError::InvalidValue(
-                "SpxAttachmentType".to_string(),
-                value.to_string(),
-            )),
+            _ => Err("Invalid SpxAttachmentType value"),
         }
     }
 }

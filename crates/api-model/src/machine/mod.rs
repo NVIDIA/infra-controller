@@ -1106,6 +1106,8 @@ pub enum ManagedHostState {
     // This is host specific state. We expect DPU to be in Ready state.
     WaitingForCleanup {
         cleanup_state: CleanupState,
+        #[serde(default)]
+        cleanup_context: CleanupContext,
     },
 
     /// A forced deletion process has been triggered by the admin CLI
@@ -1835,6 +1837,14 @@ pub enum CleanupState {
     // Unused
     DisableBIOSBMCLockdown,
 }
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum CleanupContext {
+    #[default]
+    Deprovision,
+    InitialDiscovery,
+}
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, EnumIter)]
 #[serde(rename_all = "lowercase")]
 pub enum LockdownState {
@@ -2114,7 +2124,7 @@ impl Display for ManagedHostState {
                     write!(f, "Assigned/{instance_state}")
                 }
             },
-            ManagedHostState::WaitingForCleanup { cleanup_state } => {
+            ManagedHostState::WaitingForCleanup { cleanup_state, .. } => {
                 write!(f, "WaitingForCleanup/{cleanup_state}")
             }
             ManagedHostState::ForceDeletion => write!(f, "ForceDeletion"),
@@ -2205,7 +2215,7 @@ impl ManagedHostState {
                 }
                 _ => format!("Assigned/{instance_state}"),
             },
-            ManagedHostState::WaitingForCleanup { cleanup_state } => {
+            ManagedHostState::WaitingForCleanup { cleanup_state, .. } => {
                 format!("WaitingForCleanup/{cleanup_state}")
             }
             ManagedHostState::ForceDeletion => "ForceDeletion".to_string(),

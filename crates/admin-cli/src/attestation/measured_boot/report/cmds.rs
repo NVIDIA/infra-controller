@@ -18,8 +18,9 @@
 //!
 //! `measurement report` subcommand dispatcher + backing functions.
 
-use ::rpc::admin_cli::ToTable;
+use ::rpc::measured_boot::FromGrpcOpt;
 use ::rpc::protos::measured_boot::ListMeasurementReportRequest;
+use measured_boot::ToTable;
 use measured_boot::bundle::MeasurementBundle;
 use measured_boot::records::MeasurementReportRecord;
 use measured_boot::report::MeasurementReport;
@@ -124,7 +125,7 @@ pub async fn create_for_id(
 ) -> CarbideCliResult<MeasurementReport> {
     let response = grpc_conn.0.create_measurement_report(create).await?;
 
-    MeasurementReport::from_grpc(response.report.as_ref())
+    MeasurementReport::from_grpc_opt(response.report)
         .map_err(|e| crate::CarbideCliError::GenericError(e.to_string()))
 }
 
@@ -132,7 +133,7 @@ pub async fn create_for_id(
 pub async fn delete(grpc_conn: &ApiClient, delete: Delete) -> CarbideCliResult<MeasurementReport> {
     let response = grpc_conn.0.delete_measurement_report(delete).await?;
 
-    MeasurementReport::from_grpc(response.report.as_ref())
+    MeasurementReport::from_grpc_opt(response.report)
         .map_err(|e| crate::CarbideCliError::GenericError(e.to_string()))
 }
 
@@ -145,7 +146,7 @@ pub async fn promote(
 ) -> CarbideCliResult<MeasurementBundle> {
     let response = grpc_conn.0.promote_measurement_report(promote).await?;
 
-    MeasurementBundle::from_grpc(response.bundle.as_ref())
+    MeasurementBundle::from_grpc_opt(response.bundle)
         .map_err(|e| crate::CarbideCliError::GenericError(e.to_string()))
 }
 
@@ -157,7 +158,7 @@ pub async fn promote(
 pub async fn revoke(grpc_conn: &ApiClient, revoke: Revoke) -> CarbideCliResult<MeasurementBundle> {
     let response = grpc_conn.0.revoke_measurement_report(revoke).await?;
 
-    MeasurementBundle::from_grpc(response.bundle.as_ref())
+    MeasurementBundle::from_grpc_opt(response.bundle)
         .map_err(|e| crate::CarbideCliError::GenericError(e.to_string()))
 }
 
@@ -171,7 +172,7 @@ pub async fn show_for_id(
         .show_measurement_report_for_id(show_for_id)
         .await?;
 
-    MeasurementReport::from_grpc(response.report.as_ref())
+    MeasurementReport::from_grpc_opt(response.report)
         .map_err(|e| crate::CarbideCliError::GenericError(e.to_string()))
 }
 

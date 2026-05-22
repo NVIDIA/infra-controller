@@ -22,7 +22,7 @@ use carbide_uuid::machine::MachineId;
 use prettytable::{Row, Table};
 use serde::Serialize;
 
-use crate::errors::{CarbideCliError, CarbideCliResult};
+use crate::errors::CarbideCliResult;
 use crate::rpc::ApiClient;
 use crate::{async_write, async_write_table_as_csv};
 

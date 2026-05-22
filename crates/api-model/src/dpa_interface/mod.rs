@@ -333,6 +333,51 @@ pub struct DpaInterfaceSnapshotPgJson {
     #[serde(default)]
     pub device_description: Option<String>,
 }
+
+impl TryFrom<DpaInterfaceSnapshotPgJson> for DpaInterface {
+    type Error = sqlx::Error;
+
+    fn try_from(value: DpaInterfaceSnapshotPgJson) -> sqlx::Result<Self> {
+        Ok(Self {
+            id: value.id,
+            machine_id: value.machine_id,
+            mac_address: value.mac_address,
+            created: value.created,
+            updated: value.updated,
+            deleted: value.deleted,
+            last_hb_time: value.last_hb_time,
+            controller_state: Versioned {
+                value: value.controller_state,
+                version: value.controller_state_version.parse().map_err(|e| {
+                    sqlx::error::Error::ColumnDecode {
+                        index: "controller_state_version".to_string(),
+                        source: Box::new(e),
+                    }
+                })?,
+            },
+            controller_state_outcome: value.controller_state_outcome,
+            network_config: Versioned {
+                value: value.network_config,
+                version: value.network_config_version.parse().map_err(|e| {
+                    sqlx::error::Error::ColumnDecode {
+                        index: "network_config_version".to_string(),
+                        source: Box::new(e),
+                    }
+                })?,
+            },
+            card_state: value.card_state,
+            device_info: value.device_info,
+            device_info_ts: value.device_info_ts,
+            mlxconfig_profile: value.mlxconfig_profile,
+            history: value.history,
+            pci_name: value.pci_name,
+            underlay_ip: value.underlay_ip,
+            overlay_ip: value.overlay_ip,
+            device_description: value.device_description,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;

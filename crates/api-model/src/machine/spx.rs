@@ -57,33 +57,6 @@ pub struct MachineSpxAttachmentStatusObservation {
     pub observed_at: DateTime<Utc>,
 }
 
-impl From<MachineSpxStatusObservation> for rpc::forge::MachineSpxStatusObservation {
-    fn from(value: MachineSpxStatusObservation) -> Self {
-        rpc::forge::MachineSpxStatusObservation {
-            attachment_status: value
-                .spx_attachments
-                .into_iter()
-                .map(rpc::forge::MachineSpxAttachmentStatusObservation::from)
-                .collect(),
-            observed_at: Some(value.observed_at.into()),
-        }
-    }
-}
-
-impl From<MachineSpxAttachmentStatusObservation>
-    for rpc::forge::MachineSpxAttachmentStatusObservation
-{
-    fn from(value: MachineSpxAttachmentStatusObservation) -> Self {
-        rpc::forge::MachineSpxAttachmentStatusObservation {
-            mac_address: value.mac_address.to_string(),
-            partition_id: value.partition_id,
-            attachment_type: value.attachment_type.map(|at| at as i32),
-            virtual_function_id: value.virtual_function_id,
-            observed_at: Some(value.observed_at.into()),
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct SpxConfigNotSyncedReason(pub String);
 

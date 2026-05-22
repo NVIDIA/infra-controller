@@ -17,10 +17,8 @@
 
 use std::collections::HashMap;
 
-use ::rpc::errors::RpcDataConversionError;
 use carbide_uuid::spx::SpxPartitionId;
 use config_version::Versioned;
-use rpc::forge as rpc;
 use serde::{Deserialize, Serialize};
 
 use crate::instance::config::spx::{InstanceSpxConfig, SpxAttachmentType};
@@ -33,22 +31,6 @@ pub struct InstanceSpxStatus {
     pub spx_attachments: Vec<InstanceSpxAttachmentStatus>,
     /// similar to InstanceNetworkStatus
     pub configs_synced: SyncState,
-}
-
-impl TryFrom<InstanceSpxStatus> for rpc::InstanceSpxStatus {
-    type Error = RpcDataConversionError;
-
-    fn try_from(status: InstanceSpxStatus) -> Result<Self, Self::Error> {
-        let mut spx_attachments: Vec<rpc::InstanceSpxAttachmentStatus> = Vec::new();
-        for attachment in status.spx_attachments.iter() {
-            let a = rpc::InstanceSpxAttachmentStatus::try_from(attachment.clone())?;
-            spx_attachments.push(a);
-        }
-        Ok(Self {
-            attachment_statuses: spx_attachments,
-            configs_synced: rpc::SyncState::try_from(status.configs_synced)? as i32,
-        })
-    }
 }
 
 impl InstanceSpxStatus {
@@ -135,29 +117,4 @@ pub struct InstanceSpxAttachmentStatus {
     pub virtual_function_id: u32,
     pub attachment_type: SpxAttachmentType,
     pub spx_partition_id: SpxPartitionId,
-}
-
-impl TryFrom<InstanceSpxAttachmentStatus> for rpc::InstanceSpxAttachmentStatus {
-    type Error = RpcDataConversionError;
-    fn try_from(status: InstanceSpxAttachmentStatus) -> Result<Self, Self::Error> {
-        Ok(Self {
-            mac_addr: Some(status.mac_address),
-            virtual_function_id: status.virtual_function_id,
-            attachment_type: status.attachment_type as i32,
-            spx_partition_id: Some(status.spx_partition_id),
-            ip_address: None,
-        })
-    }
-}
-
-impl TryFrom<rpc::InstanceSpxAttachmentStatus> for InstanceSpxAttachmentStatus {
-    type Error = RpcDataConversionError;
-    fn try_from(status: rpc::InstanceSpxAttachmentStatus) -> Result<Self, Self::Error> {
-        Ok(Self {
-            mac_address: status.mac_addr.unwrap_or_default(),
-            virtual_function_id: status.virtual_function_id,
-            attachment_type: SpxAttachmentType::try_from(status.attachment_type)?,
-            spx_partition_id: status.spx_partition_id.unwrap_or_default(),
-        })
-    }
 }
