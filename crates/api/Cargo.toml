@@ -42,6 +42,7 @@ carbide-secrets = { path = "../secrets" }
 carbide-version = { path = "../version" }
 carbide-firmware = { path = "../firmware" }
 carbide-health-report = { path = "../health-report" }
+carbide-health-metrics = { path = "../health-metrics" }
 carbide-ib-fabric = { path = "../ib-fabric" }
 carbide-ipxe-renderer = { path = "../ipxe-renderer" }
 carbide-ipmi = { path = "../ipmi" }
