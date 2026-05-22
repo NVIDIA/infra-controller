@@ -24,10 +24,10 @@ use model::StateSla;
 use model::controller_outcome::PersistentStateHandlerOutcome;
 use model::network_segment::{self, NetworkSegment, NetworkSegmentControllerState};
 use sqlx::PgConnection;
+use state_controller::io::StateControllerIO;
 
-use crate::state_controller::io::StateControllerIO;
-use crate::state_controller::network_segment::context::NetworkSegmentStateHandlerContextObjects;
-use crate::state_controller::network_segment::metrics::NetworkSegmentMetricsEmitter;
+use crate::context::NetworkSegmentStateHandlerContextObjects;
+use crate::metrics::NetworkSegmentMetricsEmitter;
 
 /// State Controller IO implementation for network segments
 #[derive(Default, Debug)]

@@ -20,16 +20,15 @@
 use std::sync::Arc;
 
 use carbide_uuid::network::NetworkSegmentId;
-use db::{self};
 use model::network_segment::{
     NetworkSegment, NetworkSegmentControllerState, NetworkSegmentDeletionState, NetworkSegmentType,
 };
 use model::resource_pool::ResourcePool;
-
-use crate::state_controller::network_segment::context::NetworkSegmentStateHandlerContextObjects;
-use crate::state_controller::state_handler::{
+use state_controller::state_handler::{
     StateHandler, StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
+
+use crate::context::NetworkSegmentStateHandlerContextObjects;
 
 /// The actual Network Segment State handler
 #[derive(Debug, Clone)]

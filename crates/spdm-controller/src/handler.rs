@@ -15,11 +15,10 @@
  * limitations under the License.
  */
 
-//! State Handler implementation for Dpa Interfaces
-
 use std::sync::Arc;
 
 use carbide_redfish::libredfish::conv::IntoModel;
+use carbide_redfish::libredfish::error::state_handler_redfish_error as redfish_error;
 use itertools::Itertools;
 use libredfish::Redfish;
 use libredfish::model::task::TaskState;
@@ -29,14 +28,11 @@ use model::attestation::spdm::{
 };
 use model::bmc_info::BmcInfo;
 use nras::{DeviceAttestationInfo, EvidenceCertificate, RawAttestationOutcome, VerifierClient};
-
-use crate::state_controller::external_service_error::{
-    redfish_client_creation_error, redfish_error,
-};
-use crate::state_controller::spdm::context::SpdmStateHandlerContextObjects;
-use crate::state_controller::state_handler::{
+use state_controller::state_handler::{
     StateHandler, StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
+
+use crate::context::SpdmStateHandlerContextObjects;
 
 #[derive(Debug, Clone)]
 pub struct SpdmAttestationStateHandler {
@@ -74,7 +70,7 @@ async fn redfish_client(
             &ctx.services.db_pool,
         )
         .await
-        .map_err(redfish_client_creation_error)
+        .map_err(StateHandlerError::from)
 }
 
 #[async_trait::async_trait]

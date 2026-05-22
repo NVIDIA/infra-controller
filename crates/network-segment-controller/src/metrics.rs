@@ -19,11 +19,10 @@
 
 use std::collections::HashMap;
 
-use ::carbide_utils::metrics::SharedMetricsHolder;
+use carbide_utils::metrics::SharedMetricsHolder;
 use opentelemetry::KeyValue;
 use opentelemetry::metrics::Meter;
-
-use crate::state_controller::metrics::MetricsEmitter;
+use state_controller::metrics::MetricsEmitter;
 
 #[derive(Debug, Default, Clone)]
 pub struct NetworkSegmentMetrics {

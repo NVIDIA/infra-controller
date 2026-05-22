@@ -19,6 +19,8 @@ use std::net::IpAddr;
 use std::str::FromStr;
 
 use ::rpc::forge as rpc;
+use db::WithTransaction;
+use futures_util::FutureExt;
 use itertools::Itertools;
 use model::machine_interface::InterfaceType;
 use tonic::{Request, Response, Status};
@@ -143,5 +145,73 @@ pub(crate) async fn find_mac_address_by_bmc_ip(
     Ok(Response::new(rpc::MacAddressBmcIp {
         bmc_ip,
         mac_address: interface.mac_address.to_string(),
+    }))
+}
+
+pub(crate) async fn find_bmc_ips(
+    api: &Api,
+    request: Request<rpc::FindBmcIpsRequest>,
+) -> Result<Response<rpc::BmcIpList>, Status> {
+    use rpc::find_bmc_ips_request::LookupBy;
+
+    log_request_data(&request);
+
+    let req = request.into_inner();
+
+    let bmc_ips = match req.lookup_by {
+        Some(LookupBy::MacAddress(mac_address)) => {
+            db::machine_interface::lookup_bmc_ip_by_mac_address(
+                &api.database_connection,
+                mac_address.parse().map_err(|e| {
+                    CarbideError::InvalidArgument(format!("Invalid MAC address: {e}"))
+                })?,
+            )
+            .await?
+        }
+        Some(LookupBy::Serial(serial)) => {
+            // Get the machine ID for this serial
+            let machine_ids =
+                db::machine_topology::find_by_serial(&api.database_connection, &serial).await?;
+            if machine_ids.len() > 1 {
+                tracing::warn!(
+                    serial,
+                    "Multiple machines match serial number, cannot resolve to BMC IP"
+                );
+                return Ok(Response::new(rpc::BmcIpList::default()));
+            }
+            let Some(machine_id) = machine_ids.into_iter().next() else {
+                return Ok(Response::new(rpc::BmcIpList::default()));
+            };
+
+            // Get the machine topology for this machine
+            let Some(machine_topology) = api
+                .with_txn(|txn| {
+                    async move {
+                        db::machine_topology::find_latest_by_machine_ids(txn, &[machine_id]).await
+                    }
+                    .boxed()
+                })
+                .await??
+                .into_values()
+                .next()
+            else {
+                return Ok(Response::new(rpc::BmcIpList::default()));
+            };
+
+            // Get the BMC IP out of the machine topology
+            let bmc_ip = match machine_topology.topology.bmc_info.ip.map(|ip| ip.parse()) {
+                Some(Ok(ip)) => ip,
+                None | Some(Err(_)) => {
+                    return Ok(Response::new(rpc::BmcIpList::default()));
+                }
+            };
+
+            vec![bmc_ip]
+        }
+        None => return Err(CarbideError::MissingArgument("lookup_by").into()),
+    };
+
+    Ok(Response::new(rpc::BmcIpList {
+        bmc_ips: bmc_ips.into_iter().map(|ip| ip.to_string()).collect(),
     }))
 }

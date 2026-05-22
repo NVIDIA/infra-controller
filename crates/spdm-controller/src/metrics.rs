@@ -19,8 +19,7 @@
 
 use ::carbide_utils::metrics::SharedMetricsHolder;
 use opentelemetry::metrics::Meter;
-
-use crate::state_controller::metrics::MetricsEmitter;
+use state_controller::metrics::MetricsEmitter;
 
 #[derive(Debug, Default, Clone)]
 pub struct AttestationMetrics {}

@@ -31,7 +31,6 @@ use sqlx::PgPool;
 use crate::cfg::file::CarbideConfig;
 use crate::dpa::handler::DpaInfo;
 use crate::rack::rms_client::SwitchSystemImageRmsClient;
-use crate::state_controller::external_service_error::redfish_client_creation_error;
 use crate::state_controller::state_handler::StateHandlerError;
 
 /// Services that are accessible to all statehandlers within carbide-core
@@ -80,6 +79,6 @@ impl CommonStateHandlerServices {
         self.redfish_client_pool
             .create_client_from_machine(machine, &self.db_pool)
             .await
-            .map_err(redfish_client_creation_error)
+            .map_err(StateHandlerError::from)
     }
 }
