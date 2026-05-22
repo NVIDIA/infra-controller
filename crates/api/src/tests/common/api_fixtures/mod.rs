@@ -1309,6 +1309,7 @@ pub fn get_config() -> CarbideConfig {
         dpf: crate::cfg::file::DpfConfig::default(),
         x86_pxe_boot_url_override: None,
         arm_pxe_boot_url_override: None,
+        set_http_boot_uri_for_vendors: vec![],
         external_api_url: None,
         external_pxe_url: None,
         external_static_pxe_url: None,

@@ -553,6 +553,20 @@ pub struct CarbideConfig {
     #[serde(default)]
     pub arm_pxe_boot_url_override: Option<String>,
 
+    /// Vendors for which the state controller should pin the UEFI HTTP boot
+    /// URL on the BMC (via Redfish `HttpBootUri`) in addition to the existing
+    /// DHCP option 67 path. Machines whose BMC vendor is NOT in this list
+    /// continue to rely on carbide-dhcp's option 67 for the URL.
+    ///
+    /// Empty by default — no machines get the BMC-pinned URL until vendors
+    /// are explicitly added here (typically after per-vendor verification on
+    /// real hardware). Adding a vendor that libredfish doesn't yet implement
+    /// (e.g., `Dell` / `Lenovo` until their libredfish impls land) will
+    /// surface a runtime `NotSupported` error; carbide-dhcp option 67 is the
+    /// fallback URL source.
+    #[serde(default)]
+    pub set_http_boot_uri_for_vendors: Vec<BMCVendor>,
+
     /// Alternate API URL for external hosts that cannot resolve
     /// https://carbide-pxe.forge. This be an IP (e.g., "https://10.0.0.1:1079"),
     /// or an externally resolvable hostname (e.g.,
