@@ -415,14 +415,14 @@ jobs:
             if [[ "${{ inputs.arch }}" == "x86_64" ]]; then
               EXPECTED_FILES=(
                 "pxe/static/blobs/internal/x86_64/scout.efi"
-                "pxe/static/blobs/internal/x86_64/scout.cpio.zst"
+                "pxe/static/blobs/internal/x86_64/scout.squashfs"
                 "pxe/static/blobs/internal/x86_64/qcow-imager.efi"
                 # target/debs/* checked separately
               )
             else
               EXPECTED_FILES=(
                 "pxe/static/blobs/internal/aarch64/scout.efi"
-                "pxe/static/blobs/internal/aarch64/scout.cpio.zst"
+                "pxe/static/blobs/internal/aarch64/scout.squashfs"
                 "pxe/static/blobs/internal/aarch64/qcow-imager.efi"
                 # pxe/mkosi.profiles/scout-x86_64/mkosi.extra/build-output/* checked separately
                 # target/debs/* checked separately
@@ -502,9 +502,9 @@ jobs:
             fi
           else
             if [[ "${{ inputs.arch }}" == "x86_64" ]]; then
-              ARTIFACTS='["pxe/static/blobs/internal/x86_64/scout.efi", "pxe/static/blobs/internal/x86_64/scout.cpio.zst", "pxe/static/blobs/internal/x86_64/qcow-imager.efi", "target/debs/*"]'
+              ARTIFACTS='["pxe/static/blobs/internal/x86_64/scout.efi", "pxe/static/blobs/internal/x86_64/scout.squashfs", "pxe/static/blobs/internal/x86_64/qcow-imager.efi", "target/debs/*"]'
             else
-              ARTIFACTS='["pxe/static/blobs/internal/aarch64/scout.efi", "pxe/static/blobs/internal/aarch64/scout.cpio.zst", "pxe/static/blobs/internal/aarch64/qcow-imager.efi", "pxe/mkosi.profiles/scout-x86_64/mkosi.extra/build-output/*", "target/debs/*"]'
+              ARTIFACTS='["pxe/static/blobs/internal/aarch64/scout.efi", "pxe/static/blobs/internal/aarch64/scout.squashfs", "pxe/static/blobs/internal/aarch64/qcow-imager.efi", "pxe/mkosi.profiles/scout-x86_64/mkosi.extra/build-output/*", "target/debs/*"]'
             fi
           fi
 
