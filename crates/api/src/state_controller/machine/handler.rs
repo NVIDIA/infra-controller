@@ -6839,6 +6839,68 @@ impl std::fmt::Debug for HostUpgradeState {
     }
 }
 
+/// If the machine's parent rack is in `RackState::Error`, clear
+/// `host_reprovisioning_requested` and short-circuit back to the machine's
+/// pre-reprovisioning steady state (`Ready`, or `Assigned { instance_state:
+/// Ready }` if currently assigned). The rack will never advance the
+/// remaining `HostReprovision` sub-states once it has bailed out.
+///
+/// Only applies to rack-level reprovisioning requests; non-rack-initiated
+/// reprovisions are independent of the rack's lifecycle.
+async fn rack_failed_abort_host_reprovision_outcome(
+    state: &ManagedHostStateSnapshot,
+    ctx: &mut StateHandlerContext<'_, MachineStateHandlerContextObjects>,
+    machine_id: &MachineId,
+) -> Result<Option<StateHandlerOutcome<ManagedHostState>>, StateHandlerError> {
+    if !is_rack_level_reprovisioning(state) {
+        return Ok(None);
+    }
+
+    let Some(rack_id) = state.host_snapshot.rack_id.as_ref() else {
+        return Ok(None);
+    };
+
+    let mut conn = ctx.services.db_pool.acquire().await?;
+    let racks = db::rack::find_by(
+        conn.as_mut(),
+        db::ObjectColumnFilter::One(db::rack::IdColumn, rack_id),
+    )
+    .await?;
+    drop(conn);
+    let Some(rack) = racks.into_iter().next() else {
+        return Ok(None);
+    };
+    if !matches!(
+        rack.controller_state.value,
+        model::rack::RackState::Error { .. }
+    ) {
+        return Ok(None);
+    }
+
+    let target_state = match &state.managed_state {
+        ManagedHostState::Assigned {
+            instance_state: InstanceState::HostReprovision { .. },
+        } => ManagedHostState::Assigned {
+            instance_state: InstanceState::Ready,
+        },
+        _ => ManagedHostState::Ready,
+    };
+
+    tracing::info!(
+        machine_id = %machine_id,
+        rack_id = %rack_id,
+        from = ?state.managed_state,
+        to = ?target_state,
+        "Rack is in Error; aborting machine HostReprovision and returning to Ready",
+    );
+
+    let mut txn = ctx.services.db_pool.begin().await?;
+    db::host_machine_update::clear_host_reprovisioning_request(txn.as_mut(), machine_id).await?;
+    Ok(Some(
+        StateHandlerOutcome::transition(target_state).with_txn(txn),
+    ))
+}
+
 impl HostUpgradeState {
     // Handles when in HostReprovisioning or when entering it
     async fn handle_host_reprovision(
@@ -6848,6 +6910,12 @@ impl HostUpgradeState {
         machine_id: &MachineId,
         scenario: HostFirmwareScenario,
     ) -> Result<StateHandlerOutcome<ManagedHostState>, StateHandlerError> {
+        if let Some(outcome) =
+            rack_failed_abort_host_reprovision_outcome(state, ctx, machine_id).await?
+        {
+            return Ok(outcome);
+        }
+
         // Treat Ready (but flagged to do updates) the same as HostReprovisionState/CheckingFirmware
         let original_state = &state.managed_state.clone();
         let (mut host_reprovision_state, retry_count) = match &state.managed_state {
