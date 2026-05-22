@@ -731,29 +731,28 @@ async fn process_object<IO: StateControllerIO>(
             txn.commit().await.map_err(StateHandlerError::from)?;
         }
 
+        // Emit the state changed event to registered hooks while `snapshot`
+        // is still in scope, so the IO can attach per-object attributes.
+        if let Some(next_state) = &next_state {
+            let attributes = io.state_change_attributes(&snapshot);
+            state_change_emitter.emit(StateChangeEvent {
+                object_id: &object_id,
+                attributes: &attributes,
+                #[cfg(any(test, feature = "test-support"))]
+                previous_state: metrics.common.initial_state.as_ref(),
+                new_state: next_state,
+                timestamp: chrono::Utc::now(),
+            });
+        }
+
         // Only emit the next state as metric if the transaction was actually
         // committed and we are sure we reached the next state
-        if next_state.is_some() {
-            metrics.common.state_change_attributes = io.state_change_attributes(&snapshot);
-        }
         metrics.common.next_state = next_state;
 
         handler_outcome
     })
     .await;
     metrics.common.handler_latency = start.elapsed();
-
-    // Emit the state changed event to registered hooks
-    if let Some(next_state) = &metrics.common.next_state {
-        state_change_emitter.emit(StateChangeEvent {
-            object_id: &object_id,
-            attributes: &metrics.common.state_change_attributes,
-            #[cfg(any(test, feature = "test-support"))]
-            previous_state: metrics.common.initial_state.as_ref(),
-            new_state: next_state,
-            timestamp: chrono::Utc::now(),
-        });
-    }
 
     // Emit the object handling metrics for this state handler invocation
     if let Some(emitter) = metrics_emitter {

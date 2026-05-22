@@ -15,7 +15,6 @@
  * limitations under the License.
  */
 
-use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -44,8 +43,6 @@ pub struct CommonObjectHandlerMetrics<IO: StateControllerIO> {
     /// When a state transition occured and `initial_state` was exited during state handling,
     /// this field tracks the next state
     pub next_state: Option<IO::ControllerState>,
-    /// Additional attributes captured from the object state at transition time.
-    pub state_change_attributes: BTreeMap<String, String>,
     /// The time the object was in `initial_state` at the start of the iteration
     pub time_in_state: Duration,
     /// Whether the object was in `initial_state` for longer than allowed by the SLA
@@ -61,7 +58,6 @@ impl<IO: StateControllerIO> Default for CommonObjectHandlerMetrics<IO> {
         Self {
             initial_state: None,
             next_state: None,
-            state_change_attributes: BTreeMap::new(),
             handler_latency: Duration::from_secs(0),
             time_in_state: Duration::from_secs(0),
             time_in_state_above_sla: false,

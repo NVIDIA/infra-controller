@@ -223,25 +223,6 @@ mod tests {
         }
     }
 
-    fn new_test_hook<P: MqttPublisher>(
-        client: P,
-        join_set: &mut JoinSet<()>,
-        publish_timeout: Duration,
-        topic_prefix: String,
-        queue_capacity: usize,
-        cancel_token: CancellationToken,
-    ) -> MqttStateChangeHook {
-        MqttStateChangeHook::new(
-            client,
-            join_set,
-            publish_timeout,
-            topic_prefix,
-            queue_capacity,
-            &test_meter(),
-            cancel_token,
-        )
-    }
-
     /// Publisher that signals via channel when publish completes.
     struct SignalingPublisher {
         sender: tokio::sync::mpsc::UnboundedSender<(String, Vec<u8>)>,
@@ -270,12 +251,13 @@ mod tests {
         let (publisher, mut receiver) = SignalingPublisher::new();
         let mut join_set = JoinSet::new();
         let cancel_token = CancellationToken::new();
-        let hook = new_test_hook(
+        let hook = MqttStateChangeHook::new(
             publisher,
             &mut join_set,
             Duration::from_secs(1),
             "NICO/v1/machine".to_string(),
             16,
+            &test_meter(),
             cancel_token.clone(),
         );
 
@@ -334,12 +316,13 @@ mod tests {
 
         let mut join_set = JoinSet::new();
         let cancel_token = CancellationToken::new();
-        let hook = new_test_hook(
+        let hook = MqttStateChangeHook::new(
             publisher,
             &mut join_set,
             Duration::from_millis(1),
             "NICO/v1/machine".to_string(),
             16,
+            &test_meter(),
             cancel_token.clone(),
         );
 
@@ -386,12 +369,13 @@ mod tests {
 
         let mut join_set = JoinSet::new();
         let cancel_token = CancellationToken::new();
-        let hook = new_test_hook(
+        let hook = MqttStateChangeHook::new(
             publisher,
             &mut join_set,
             Duration::from_secs(10),
             "NICO/v1/machine".to_string(),
             QUEUE_SIZE,
+            &test_meter(),
             cancel_token.clone(),
         );
 
@@ -428,12 +412,13 @@ mod tests {
         let (publisher, mut receiver) = SignalingPublisher::new();
         let mut join_set = JoinSet::new();
         let cancel_token = CancellationToken::new();
-        let hook = new_test_hook(
+        let hook = MqttStateChangeHook::new(
             publisher,
             &mut join_set,
             Duration::from_secs(1),
             "custom/prefix".to_string(),
             16,
+            &test_meter(),
             cancel_token.clone(),
         );
 
