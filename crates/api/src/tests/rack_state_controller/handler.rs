@@ -20,7 +20,8 @@ use carbide_uuid::rack::{RackId, RackProfileId};
 use carbide_uuid::switch::SwitchId;
 use db::db_read::DbReader;
 use db::{
-    ObjectColumnFilter, expected_rack as db_expected_rack, rack as db_rack, switch as db_switch,
+    ObjectColumnFilter, expected_rack as db_expected_rack, machine as db_machine, rack as db_rack,
+    switch as db_switch,
 };
 use forge_secrets::credentials::{BmcCredentialType, CredentialKey, Credentials};
 use librms::protos::rack_manager as rms;
@@ -280,6 +281,47 @@ async fn create_two_compute_rack(
     .await?;
 
     Ok((rack_id, host_a, host_b))
+}
+
+/// Force a machine into the given controller state. The host fixtures bring
+/// machines all the way to `Ready`; rack-level firmware-upgrade tests use this
+/// to drive the rack handler's DB-derived counters into the desired
+/// in-progress / failed shape.
+async fn set_machine_controller_state(
+    pool: &sqlx::PgPool,
+    machine_id: &MachineId,
+    new_state: &model::machine::ManagedHostState,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut txn = pool.begin().await?;
+    db_machine::update_state(txn.as_mut(), machine_id, new_state).await?;
+    txn.commit().await?;
+    Ok(())
+}
+
+/// Convenience wrapper: a non-terminal controller state used when a machine
+/// is mid firmware-upgrade. Any non-`Ready`, non-`Failed` state would do for
+/// the rack handler's DB classifier, but `HostReprovision/WaitingForRackFirmwareUpgrade`
+/// is the natural state during a rack-driven firmware upgrade.
+fn machine_in_firmware_upgrade_state() -> model::machine::ManagedHostState {
+    model::machine::ManagedHostState::HostReprovision {
+        reprovision_state: model::machine::HostReprovisionState::WaitingForRackFirmwareUpgrade,
+        retry_count: 0,
+    }
+}
+
+/// Convenience wrapper: a `Failed` controller state for a host machine.
+fn machine_failed_state(machine_id: MachineId) -> model::machine::ManagedHostState {
+    model::machine::ManagedHostState::Failed {
+        details: model::machine::FailureDetails {
+            cause: model::machine::FailureCause::Discovery {
+                err: "test-induced firmware upgrade failure".to_string(),
+            },
+            failed_at: chrono::Utc::now(),
+            source: model::machine::FailureSource::Scout,
+        },
+        machine_id,
+        retry_count: 0,
+    }
 }
 
 async fn attach_switch_with_nvos_credentials(
@@ -1560,8 +1602,10 @@ async fn test_firmware_upgrade_start_transitions_to_wait_for_complete(
 }
 
 /// test_firmware_upgrade_wait_for_complete_waits_while_jobs_running verifies
-/// that WaitForComplete remains in a wait state while RMS child jobs are still
-/// running and writes in-progress rack firmware status back to the machine.
+/// that WaitForComplete keeps the rack in `Wait` while a tracked machine has
+/// not yet transitioned to its post-firmware controller state, and that the
+/// per-machine `rack_fw_details` is updated to `InProgress` from the live RMS
+/// snapshot.
 #[crate::sqlx_test]
 async fn test_firmware_upgrade_wait_for_complete_waits_while_jobs_running(
     pool: sqlx::PgPool,
@@ -1575,6 +1619,12 @@ async fn test_firmware_upgrade_wait_for_complete_waits_while_jobs_running(
     )
     .await;
     let (rack_id, host) = create_single_compute_rack(&env, &pool).await?;
+    set_machine_controller_state(
+        &pool,
+        &host.host_snapshot.id,
+        &machine_in_firmware_upgrade_state(),
+    )
+    .await?;
     env.rms_sim
         .set_firmware_job_status(librms::protos::rack_manager::GetFirmwareJobStatusResponse {
             status: librms::protos::rack_manager::ReturnCode::Success as i32,
@@ -1628,7 +1678,7 @@ async fn test_firmware_upgrade_wait_for_complete_waits_while_jobs_running(
 
     assert!(
         matches!(outcome, StateHandlerOutcome::Wait { .. }),
-        "Expected Wait while RMS job is running"
+        "Expected Wait while machine is still in mid-upgrade controller state"
     );
 
     let machine = db::machine::find_one(
@@ -1648,8 +1698,11 @@ async fn test_firmware_upgrade_wait_for_complete_waits_while_jobs_running(
 }
 
 /// test_firmware_upgrade_wait_for_complete_transitions_to_error_on_job_failure
-/// verifies that a failed RMS child job writes failed machine status and moves
-/// the rack into Error.
+/// verifies that once the machine state controller has parked the host in its
+/// `Failed` controller state (the DB-side ground truth used by the rack
+/// handler), the rack-level firmware-upgrade activity transitions to Error and
+/// the per-machine `rack_fw_details` is updated to `Failed` from the RMS
+/// snapshot.
 #[crate::sqlx_test]
 async fn test_firmware_upgrade_wait_for_complete_transitions_to_error_on_job_failure(
     pool: sqlx::PgPool,
@@ -1663,6 +1716,12 @@ async fn test_firmware_upgrade_wait_for_complete_transitions_to_error_on_job_fai
     )
     .await;
     let (rack_id, host) = create_single_compute_rack(&env, &pool).await?;
+    set_machine_controller_state(
+        &pool,
+        &host.host_snapshot.id,
+        &machine_failed_state(host.host_snapshot.id),
+    )
+    .await?;
     env.rms_sim
         .set_firmware_job_status(librms::protos::rack_manager::GetFirmwareJobStatusResponse {
             status: librms::protos::rack_manager::ReturnCode::Success as i32,
@@ -1749,9 +1808,10 @@ async fn test_firmware_upgrade_wait_for_complete_transitions_to_error_on_job_fai
 }
 
 /// test_firmware_upgrade_wait_for_complete_waits_for_all_nodes_to_be_terminal_before_error
-/// verifies that the rack keeps polling when a mixed result contains both
-/// failed and in-progress devices, then errors only after all tracked devices
-/// reach a terminal state.
+/// verifies that the rack keeps waiting while any tracked machine has not yet
+/// reached a terminal controller state (Ready / Failed), and only transitions
+/// to Error once every machine is terminal and at least one of them is in
+/// `Failed`.
 #[crate::sqlx_test]
 async fn test_firmware_upgrade_wait_for_complete_waits_for_all_nodes_to_be_terminal_before_error(
     pool: sqlx::PgPool,
@@ -1765,6 +1825,20 @@ async fn test_firmware_upgrade_wait_for_complete_waits_for_all_nodes_to_be_termi
     )
     .await;
     let (rack_id, host_a, host_b) = create_two_compute_rack(&env, &pool).await?;
+    // Host A landed in `Failed`; host B is still mid-upgrade so the rack must
+    // continue to `Wait` until B reaches a terminal controller state.
+    set_machine_controller_state(
+        &pool,
+        &host_a.host_snapshot.id,
+        &machine_failed_state(host_a.host_snapshot.id),
+    )
+    .await?;
+    set_machine_controller_state(
+        &pool,
+        &host_b.host_snapshot.id,
+        &machine_in_firmware_upgrade_state(),
+    )
+    .await?;
 
     env.rms_sim
         .set_firmware_job_status(librms::protos::rack_manager::GetFirmwareJobStatusResponse {
@@ -1885,6 +1959,14 @@ async fn test_firmware_upgrade_wait_for_complete_waits_for_all_nodes_to_be_termi
             ..Default::default()
         })
         .await;
+    // Simulate the machine state controller transitioning host_b to Ready
+    // after its firmware upgrade completed; host A remains in Failed.
+    set_machine_controller_state(
+        &pool,
+        &host_b.host_snapshot.id,
+        &model::machine::ManagedHostState::Ready,
+    )
+    .await?;
 
     let mut rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
     let mut outcome = handler_instance
@@ -1898,7 +1980,7 @@ async fn test_firmware_upgrade_wait_for_complete_waits_for_all_nodes_to_be_termi
         StateHandlerOutcome::Transition { next_state, .. } => {
             assert!(
                 matches!(next_state, RackState::Error { .. }),
-                "Expected rack to transition to Error after all tracked devices are terminal, got {:?}",
+                "Expected rack to transition to Error after every machine is terminal and at least one is in Failed, got {:?}",
                 next_state
             );
         }
@@ -1929,7 +2011,9 @@ async fn test_firmware_upgrade_wait_for_complete_waits_for_all_nodes_to_be_termi
 
 /// test_firmware_upgrade_wait_for_complete_retries_when_job_lookup_fails
 /// verifies that a response-level lookup failure from GetFirmwareJobStatus does
-/// not mark the device failed and instead keeps the rack waiting.
+/// not mark the device failed: the rack-level decision is driven by the
+/// machine's controller state (still mid-upgrade here) and the per-device
+/// `error_message` from the failed lookup is persisted on the firmware job.
 #[crate::sqlx_test]
 async fn test_firmware_upgrade_wait_for_complete_retries_when_job_lookup_fails(
     pool: sqlx::PgPool,
@@ -1943,6 +2027,12 @@ async fn test_firmware_upgrade_wait_for_complete_retries_when_job_lookup_fails(
     )
     .await;
     let (rack_id, host) = create_single_compute_rack(&env, &pool).await?;
+    set_machine_controller_state(
+        &pool,
+        &host.host_snapshot.id,
+        &machine_in_firmware_upgrade_state(),
+    )
+    .await?;
     env.rms_sim
         .set_firmware_job_status(librms::protos::rack_manager::GetFirmwareJobStatusResponse {
             status: librms::protos::rack_manager::ReturnCode::Failure as i32,
@@ -1995,7 +2085,7 @@ async fn test_firmware_upgrade_wait_for_complete_retries_when_job_lookup_fails(
 
     assert!(
         matches!(outcome, StateHandlerOutcome::Wait { .. }),
-        "Expected Wait while RMS job lookup is unavailable"
+        "Expected Wait while machine is still mid firmware upgrade"
     );
 
     let persisted_rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
@@ -2014,7 +2104,9 @@ async fn test_firmware_upgrade_wait_for_complete_retries_when_job_lookup_fails(
 
 /// test_firmware_upgrade_wait_for_complete_retries_on_transient_poll_error
 /// verifies that transport-level polling failures do not immediately fail the
-/// rack upgrade.
+/// rack upgrade: the rack-level decision is driven by the machine's controller
+/// state (still mid-upgrade here) and the transport error is persisted on the
+/// per-device entry of the firmware job.
 #[crate::sqlx_test]
 async fn test_firmware_upgrade_wait_for_complete_retries_on_transient_poll_error(
     pool: sqlx::PgPool,
@@ -2028,6 +2120,12 @@ async fn test_firmware_upgrade_wait_for_complete_retries_on_transient_poll_error
     )
     .await;
     let (rack_id, host) = create_single_compute_rack(&env, &pool).await?;
+    set_machine_controller_state(
+        &pool,
+        &host.host_snapshot.id,
+        &machine_in_firmware_upgrade_state(),
+    )
+    .await?;
     env.rms_sim
         .set_firmware_job_error("child-job-1", "mock transport failure")
         .await;
@@ -2074,7 +2172,7 @@ async fn test_firmware_upgrade_wait_for_complete_retries_on_transient_poll_error
 
     assert!(
         matches!(outcome, StateHandlerOutcome::Wait { .. }),
-        "Expected Wait while RMS polling has a transport error"
+        "Expected Wait while machine is still mid firmware upgrade"
     );
 
     let persisted_rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
