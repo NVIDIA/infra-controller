@@ -18,8 +18,7 @@
 use carbide_health_metrics::{HealthIterationMetrics, HealthObjectMetrics, register_health_gauges};
 use carbide_utils::metrics::SharedMetricsHolder;
 use opentelemetry::metrics::Meter;
-
-use crate::state_controller::metrics::MetricsEmitter;
+use state_controller::metrics::MetricsEmitter;
 
 #[derive(Debug, Default)]
 pub struct PowerShelfMetrics {

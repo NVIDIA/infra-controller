@@ -54,6 +54,7 @@ use regex::Regex;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::state_controller::config::IterationConfig;
+use crate::state_controller::rack::config::{RackValidationConfig, RmsConfig};
 
 static BF2_NIC: &str = "24.47.2682";
 static BF2_BMC: &str = "BF-25.10-20";
@@ -1740,30 +1741,6 @@ fn default_max_database_connections() -> u32 {
     1000
 }
 
-fn default_rms_enforce_tls() -> bool {
-    true
-}
-
-/// Rack Manager Service (RMS) configuration for API connectivity and mTLS.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-pub struct RmsConfig {
-    /// URL of the RMS API for rack-level firmware upgrades and power sequencing.
-    pub api_url: Option<String>,
-
-    /// Path to the root CA certificate for TLS verification when connecting to RMS.
-    pub root_ca_path: Option<String>,
-
-    /// Path to the client certificate PEM for mTLS with RMS.
-    pub client_cert: Option<String>,
-
-    /// Path to the client private key PEM for mTLS with RMS.
-    pub client_key: Option<String>,
-
-    /// Enforce TLS when connecting to RMS. Defaults to true.
-    #[serde(default = "default_rms_enforce_tls")]
-    pub enforce_tls: bool,
-}
-
 /// DpuConfig related internal configuration
 #[derive(Clone, Debug, Serialize)]
 pub struct DpuConfig {
@@ -2334,35 +2311,6 @@ pub struct MachineValidationTestConfig {
 }
 
 impl MachineValidationConfig {
-    const fn default_run_interval() -> std::time::Duration {
-        std::time::Duration::from_secs(60)
-    }
-}
-
-/// Configuration for rack-level validation (partition-based
-/// multi-node tests run after firmware upgrade / maintenance).
-///
-/// Example:
-/// ```toml
-/// [rack_validation_config]
-/// enabled = true
-/// run_interval = "60s"
-/// ```
-#[derive(Default, Clone, Debug, Deserialize, Serialize)]
-pub struct RackValidationConfig {
-    /// Enables rack validation testing.
-    #[serde(default)]
-    pub enabled: bool,
-
-    #[serde(
-        default = "RackValidationConfig::default_run_interval",
-        deserialize_with = "deserialize_duration",
-        serialize_with = "as_std_duration"
-    )]
-    pub run_interval: std::time::Duration,
-}
-
-impl RackValidationConfig {
     const fn default_run_interval() -> std::time::Duration {
         std::time::Duration::from_secs(60)
     }
