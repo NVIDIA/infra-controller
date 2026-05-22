@@ -47,6 +47,7 @@ carbide-ipxe-renderer = { path = "../ipxe-renderer" }
 carbide-ipmi = { path = "../ipmi" }
 carbide-redfish = { path = "../redfish" }
 carbide-site-explorer = { path = "../site-explorer" }
+carbide-spdm-controller = { path = "../spdm-controller" }
 carbide-preingestion-manager = { path = "../preingestion-manager" }
 carbide-nvlink-manager = { path = "../nvlink-manager" }
 dns-record = { path = "../dns-record" }

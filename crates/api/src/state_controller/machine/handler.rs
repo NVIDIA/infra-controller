@@ -31,6 +31,7 @@ use carbide_firmware::{FirmwareConfig, FirmwareConfigSnapshot, FirmwareDownloade
 use carbide_redfish::libredfish::conv::{
     IntoLibredfish, IntoModel, machine_last_reboot_requested_mode,
 };
+use carbide_redfish::libredfish::error::state_handler_redfish_error as redfish_error;
 use carbide_uuid::machine::MachineId;
 use carbide_uuid::vpc::VpcId;
 use chrono::{DateTime, Duration, Utc};
@@ -101,7 +102,6 @@ use crate::redfish::{
     self, host_power_control, host_power_control_with_location, set_host_uefi_password,
 };
 use crate::state_controller::common_services::CommonStateHandlerServices;
-use crate::state_controller::external_service_error::redfish_error;
 use crate::state_controller::machine::context::MachineStateHandlerContextObjects;
 use crate::state_controller::machine::{
     MeasuringOutcome, get_measuring_prerequisites, handle_measuring_state,

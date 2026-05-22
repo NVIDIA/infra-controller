@@ -24,10 +24,10 @@ use model::StateSla;
 use model::attestation::spdm::{SpdmAttestationState, SpdmDeviceAttestation, SpdmObjectId};
 use model::controller_outcome::PersistentStateHandlerOutcome;
 use sqlx::PgConnection;
+use state_controller::io::StateControllerIO;
 
-use crate::state_controller::io::StateControllerIO;
-use crate::state_controller::spdm::context::SpdmStateHandlerContextObjects;
-use crate::state_controller::spdm::metrics::SpdmMetricsEmitter;
+use crate::context::SpdmStateHandlerContextObjects;
+use crate::metrics::SpdmMetricsEmitter;
 
 /// State Controller IO implementation for dpa interfaces
 #[derive(Default, Debug)]

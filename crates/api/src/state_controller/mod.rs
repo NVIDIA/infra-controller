@@ -24,7 +24,6 @@ pub mod machine;
 pub mod network_segment;
 pub mod power_shelf;
 pub mod rack;
-pub mod spdm;
 pub mod switch;
 
 pub use ::state_controller::{

@@ -1192,6 +1192,7 @@ dependencies = [
  "carbide-rpc-utils",
  "carbide-secrets",
  "carbide-site-explorer",
+ "carbide-spdm-controller",
  "carbide-sqlx-testing",
  "carbide-ssh",
  "carbide-tls",
@@ -2333,6 +2334,7 @@ dependencies = [
  "reqwest 0.13.3",
  "serde_json",
  "sqlx",
+ "state-controller",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -2548,6 +2550,25 @@ dependencies = [
  "tokio-util",
  "tracing",
  "version-compare 0.2.1",
+]
+
+[[package]]
+name = "carbide-spdm-controller"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "carbide-api-db",
+ "carbide-api-model",
+ "carbide-redfish",
+ "carbide-utils",
+ "config-version",
+ "itertools 0.14.0",
+ "libredfish",
+ "nras",
+ "opentelemetry",
+ "sqlx",
+ "state-controller",
+ "tracing",
 ]
 
 [[package]]

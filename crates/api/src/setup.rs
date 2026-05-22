@@ -31,6 +31,9 @@ use carbide_preingestion_manager::PreingestionManager;
 use carbide_redfish::libredfish::RedfishClientPool;
 use carbide_redfish::nv_redfish::NvRedfishClientPool;
 use carbide_site_explorer::SiteExplorer;
+use carbide_spdm_controller::context::SpdmStateHandlerServices;
+use carbide_spdm_controller::handler::SpdmAttestationStateHandler;
+use carbide_spdm_controller::io::SpdmStateControllerIO;
 use carbide_utils::HostPortPair;
 use db::machine::update_dpu_asns;
 use db::resource_pool::DefineResourcePoolError;
@@ -90,8 +93,6 @@ use crate::state_controller::power_shelf::handler::PowerShelfStateHandler;
 use crate::state_controller::power_shelf::io::PowerShelfStateControllerIO;
 use crate::state_controller::rack::handler::RackStateHandler;
 use crate::state_controller::rack::io::RackStateControllerIO;
-use crate::state_controller::spdm::handler::SpdmAttestationStateHandler;
-use crate::state_controller::spdm::io::SpdmStateControllerIO;
 use crate::state_controller::state_change_emitter::StateChangeEmitterBuilder;
 use crate::state_controller::switch::handler::SwitchStateHandler;
 use crate::state_controller::switch::io::SwitchStateControllerIO;
@@ -1163,7 +1164,13 @@ pub async fn initialize_and_start_controllers<'a>(
             .database(db_pool.clone(), work_lock_manager_handle.clone())
             .meter("carbide_spdm_attestation", meter.clone())
             .processor_id(state_controller_id.clone())
-            .services(handler_services.clone())
+            .services(
+                SpdmStateHandlerServices {
+                    db_pool: handler_services.db_pool.clone(),
+                    redfish_client_pool: handler_services.redfish_client_pool.clone(),
+                }
+                .into(),
+            )
             .iteration_config((&carbide_config.spdm_state_controller.controller).into())
             .state_handler(Arc::new(SpdmAttestationStateHandler::new(
                 verifier,

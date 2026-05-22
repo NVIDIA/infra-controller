@@ -36,6 +36,9 @@ use carbide_nvlink_manager::nvlink::test_support::NmxcSimClient;
 use carbide_redfish::libredfish::test_support::{RedfishSim, RedfishSimTestOverrides};
 use carbide_site_explorer::SiteExplorer;
 use carbide_site_explorer::config::{SiteExplorerConfig, SiteExplorerExploreMode};
+use carbide_spdm_controller::context::SpdmStateHandlerServices;
+use carbide_spdm_controller::handler::SpdmAttestationStateHandler;
+use carbide_spdm_controller::io::SpdmStateControllerIO;
 use carbide_utils::test_support::test_meter::TestMeter;
 use carbide_uuid::instance::InstanceId;
 use carbide_uuid::instance_type::InstanceTypeId;
@@ -127,8 +130,6 @@ use crate::state_controller::power_shelf::handler::PowerShelfStateHandler;
 use crate::state_controller::power_shelf::io::PowerShelfStateControllerIO;
 use crate::state_controller::rack::handler::RackStateHandler;
 use crate::state_controller::rack::io::RackStateControllerIO;
-use crate::state_controller::spdm::handler::SpdmAttestationStateHandler;
-use crate::state_controller::spdm::io::SpdmStateControllerIO;
 use crate::state_controller::state_handler::{
     StateHandler, StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
@@ -1711,7 +1712,13 @@ pub async fn create_test_env_with_overrides(
         .database(db_pool.clone(), work_lock_manager_handle.clone())
         .meter("spdm", test_meter.meter())
         .processor_id(state_controller_id.clone())
-        .services(handler_services.clone())
+        .services(
+            SpdmStateHandlerServices {
+                db_pool: handler_services.db_pool.clone(),
+                redfish_client_pool: handler_services.redfish_client_pool.clone(),
+            }
+            .into(),
+        )
         .state_handler(Arc::new(spdm_swap.clone()))
         .io(Arc::new(SpdmStateControllerIO {}))
         .build_for_manual_iterations(cancel_token.clone())
