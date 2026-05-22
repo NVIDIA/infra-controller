@@ -1,23 +1,25 @@
-# BGP Peering Between Tenant Hosts and the DPU
+# BGP Peering
 
-This page describes the BGP peering relationship that NICo supports between a tenant's host operating system and the DPU that fronts the host on the overlay network. It covers the intended use cases, how ownership is divided between the tenant and the platform, what operators must configure on the site to permit a tenant to use the feature, the discovery mechanism by which a tenant learns the peer ASN, and an end-to-end example.
+This page describes the BGP peering relationship that NICo supports between a tenant's host operating system and the DPU that fronts the host on the overlay network. The following topics are covered:
 
-It is intended for operations engineers running a NICo-managed site as well as platform engineers writing tenant runbooks. The peering session itself is owned by the tenant; this page describes the surface the platform exposes to that tenant and the configuration controls available to the site operator.
+* Intended use cases
+* How ownership is divided between the tenant and the platform
+* What operators must configure on the site to permit a tenant to use the feature
+* The discovery mechanism by which a tenant learns the peer ASN
+* An end-to-end example of BGP peering
 
----
+This page is intended for operations engineers running a NICo-managed site, as well as platform engineers writing tenant runbooks. The peering session itself is owned by the tenant; this page describes the surface the platform exposes to that tenant and the configuration controls available to the site operator.
 
 ## Feature Overview
 
 A tenant instance can establish a BGP session from its host OS to the DPU and use that session to advertise routes for prefixes that the tenant chooses to announce on the overlay. The session is point-to-point between the host OS and the DPU directly attached to that host; it is not a session to a remote route reflector or to the fabric.
 
-This unlocks two primary use cases:
+The BGP session unlocks two primary use cases:
 
-- **Anycast service VIPs.** A tenant can run a BGP-aware load balancer (for example, MetalLB in BGP mode for a Kubernetes cluster) and announce a service VIP from every host that should receive traffic for that VIP. The fabric ECMPs traffic across all announcing hosts. The VIP is reachable from any host on the overlay without per-host application configuration.
-- **Bring-your-own-IP (BYOIP).** A tenant can advertise prefixes that the platform did not assign to the instance — for example, a prefix the tenant owns externally — and have them treated as reachable through the announcing host.
+- **Anycast service Virtual IPs (VIPs)**: A tenant can run a BGP-aware load balancer (for example, MetalLB in BGP mode for a Kubernetes cluster) and announce a service VIP from every host that should receive traffic for that VIP. The fabric equal-cost multi-path routings (ECMPs) traffic across all announcing hosts. The VIP is reachable from any host on the overlay without per-host application configuration.
+- **Bring-your-own-IP (BYOIP)**: A tenant can advertise prefixes that the platform did not assign to the instance (for example, a prefix the tenant owns externally) and have them treated as reachable through the announcing host.
 
-Both use cases require the platform to permit the announced prefix at the site and routing-profile level. See [Operator Prerequisites](#operator-prerequisites) below.
-
----
+Both use cases require the platform to permit the announced prefix at the site and routing-profile level. Refer to the [Operator Prerequisites](#operator-prerequisites) section below for more details.
 
 ## Architecture and Ownership
 
@@ -33,46 +35,44 @@ Both use cases require the platform to permit the announced prefix at the site a
 
 | Boundary | Owner | Responsibility |
 |---|---|---|
-| BGP speaker process on the host OS | Tenant | Choose, install, and configure the speaker. Hold the host-side ASN. Choose which prefixes to announce. |
-| Peer endpoint on the DPU | Platform (NICo) | Materialize the BGP listener on the tenant-facing DPU interface as part of the per-host network configuration. Apply prefix filters derived from the VPC's routing profile. Inject accepted routes into the VPC overlay. |
-| Site fabric / route servers | Platform (NICo + network team) | Carry routes between DPUs and out to the overlay or external routing domain, according to the VPC routing profile's route-target imports and exports. |
+| BGP speaker process on the host OS | Tenant | Choose, install, and configure the speaker. Hold the host-side autonomous system number (ASN). Choose which prefixes to announce. |
+| Peer endpoint on the DPU | Platform (NICo) | Materialize the BGP listener on the tenant-facing DPU interface as part of the per-host network configuration. Apply prefix filters derived from the routing profile of the VPC. Inject accepted routes into the VPC overlay. |
+| Site fabric / route servers | Platform (NICo + network team) | Carry routes between DPUs and out to the overlay or external routing domain according to the VPC routing profile's route-target imports and exports. |
 
 NICo does not configure or operate the host-side BGP speaker. The tenant chooses the software, installs it inside the instance OS, and supplies its configuration. The platform does configure the DPU to accept the session and to filter and redistribute the prefixes the tenant announces.
 
-The session is **eBGP**: the tenant's ASN and the DPU's ASN are different administrative domains. The tenant peers with the DPU using the IP address the DPU has on the tenant interface, which is the same address the tenant's host already receives as its default gateway via DHCP. No additional address discovery is required for the peer endpoint.
-
----
+The session uses the external Border Gateway Protocol (eBGP): The tenant ASN and the DPU ASN are different administrative domains. The tenant peers with the DPU using the IP address the DPU has on the tenant interface, which is the same address the tenant's host already receives as its default gateway via DHCP. No additional address discovery is required for the peer endpoint.
 
 ## Operator Prerequisites
 
 Before a tenant can peer successfully, the operator must ensure the following are in place on the site.
 
-### 1. Tenant Host ASN Policy
+### 1. Tenant Host Autonomous Serial Number (ASN) Policy
 
-The site configuration controls whether tenants may choose any host-side ASN or must use a single common value:
+The site configuration controls whether tenants may choose any host-side ASN or must use a single common value.
 
 | Config field | Effect |
 |---|---|
 | `common_tenant_host_asn` unset | Any ASN is accepted from the tenant. Each tenant may choose its own. |
-| `common_tenant_host_asn = <ASN>` | Only sessions whose tenant-side ASN equals this value are accepted. Useful for sites that want predictable peering behavior or that re-use the same operator-provided tenant ASN across all hosts. |
+| `common_tenant_host_asn = <ASN>` | Only sessions with a tenant-side ASN that equals this value are accepted. This is useful for sites that require predictable peering behavior or that re-use the same operator-provided tenant ASN across all hosts. |
 
 If a site enforces a `common_tenant_host_asn`, the value of that ASN must be communicated to tenants out of band; it is not currently advertised through the metadata service.
 
 ### 2. Allowed Anycast Prefixes (per Routing Profile)
 
-The set of prefixes a tenant may announce is governed by the **routing profile** assigned to the VPC. Each FNN routing profile has an `allowed_anycast_prefixes` list. A tenant's BGP advertisement is accepted only if the announced prefix falls inside one of the routing profile's allowed entries.
+The set of prefixes a tenant may announce is governed by the *routing profile* assigned to the VPC. Each FNN routing profile has an `allowed_anycast_prefixes` list. A tenant's BGP advertisement is accepted only if the announced prefix falls inside one of the allowed entries in the routing profile.
 
-This list lives under `fnn.routing_profiles.<name>.allowed_anycast_prefixes` in the API server configuration. The list is per-routing-profile, so two VPCs at the same site can have different prefix-announcement policies. See the [VPC Routing Profiles](../vpc/vpc_routing_profiles.md) page for the broader routing-profile configuration model.
+This list lives under `fnn.routing_profiles.<name>.allowed_anycast_prefixes` in the API server configuration. The list is per-routing-profile, so two VPCs at the same site can have different prefix-announcement policies. Refer to the [VPC Routing Profiles](../vpc/vpc_routing_profiles.md) page for the broader routing-profile configuration model.
 
 If `allowed_anycast_prefixes` is empty for the VPC's routing profile, no tenant advertisements will be accepted on that VPC. A tenant's BGP session may still come up, but no routes will be installed.
 
-> **Availability.** The per-routing-profile `allowed_anycast_prefixes` field landed on `main` in PR #1780 (commit `baae1d7dd`). The most recent tagged release that does **not** include it is `v0.9.0-rc06`; the first release tagged after that point is the cutover. Sites running an older build must rely on the predecessor configuration described below.
+- **Availability**: The per-routing-profile `allowed_anycast_prefixes` field landed on `main` in PR #1780 (commit `baae1d7dd`). The most recent tagged release that does **not** include it is `v0.9.0-rc06`; the first release tagged after that point is the cutover. Sites running an older build must rely on the predecessor configuration described below.
 
-> **Predecessor: `anycast_site_prefixes` (deprecated).** Before PR #1780, the allow-list was a single site-wide list at the top level of the API server configuration: `anycast_site_prefixes`. That field is still recognized for backwards compatibility but is **deprecated** and should not be used on new sites. It applied uniformly to every VPC and could not express per-routing-profile policy. Sites that previously relied on `anycast_site_prefixes` should migrate to `fnn.routing_profiles.<name>.allowed_anycast_prefixes`: copy the existing prefix list into the `allowed_anycast_prefixes` entry of each routing profile that should be permitted to announce those prefixes, then remove the top-level field.
+- **Predecessor: `anycast_site_prefixes` (deprecated)**: Before PR #1780, the allow-list was a single site-wide list at the top level of the API server configuration: `anycast_site_prefixes`. That field is still recognized for backwards compatibility but is **deprecated** and should not be used on new sites. It applied uniformly to every VPC and could not express per-routing-profile policy. Sites that previously relied on `anycast_site_prefixes` should migrate to `fnn.routing_profiles.<name>.allowed_anycast_prefixes`: copy the existing prefix list into the `allowed_anycast_prefixes` entry of each routing profile that should be permitted to announce those prefixes, then remove the top-level field.
 
 ### 3. Allowed Tenant Leak Communities (Optional)
 
-By default, a prefix advertised by the tenant and accepted on the DPU is reachable only through the VPC overlay. A site can additionally permit the tenant to control two extra DPU behaviors per prefix by attaching well-known BGP communities to its advertisements. The communities are honored only when the VPC's routing profile sets `tenant_leak_communities_accepted = true`.
+By default, a prefix advertised by the tenant and accepted on the DPU is reachable only through the VPC overlay. A site can additionally permit the tenant to control two extra DPU behaviors per prefix by attaching well-known BGP communities to its advertisements. The communities are honored only when the VPC routing profile is set to `tenant_leak_communities_accepted = true`.
 
 | Community | Tenant intent | DPU behavior when honored |
 |---|---|---|
@@ -81,19 +81,17 @@ By default, a prefix advertised by the tenant and accepted on the DPU is reachab
 
 If `tenant_leak_communities_accepted` is `false` (the default), communities attached by the tenant are ignored. The prefix may still be accepted on the overlay if it lies inside `allowed_anycast_prefixes`, but neither leak-to-underlay nor drop-from-overlay will take effect.
 
-These communities are a per-prefix control: tenants attach the community in their BGP speaker to exactly the prefixes that should leak or be dropped from the overlay, and omit it from prefixes that should remain overlay-only. The DPU strips any tenant-attached communities after using them, so they are not re-exported to the fabric.
+These communities are a per-prefix control: Tenants attach the community in their BGP speaker to exactly the prefixes that should leak or be dropped from the overlay, and omit it from prefixes that should remain overlay-only. The DPU strips any tenant-attached communities after using them, so they are not re-exported to the fabric.
 
 ### 4. Route Targets for Reachability
 
-Permitting a tenant to announce a prefix only causes the route to enter the VPC's local routing table on that DPU. For the announced prefix to be reachable from other hosts in the VPC, or to be reachable from outside the VPC, the VPC's routing profile must export the prefix on appropriate route targets and importing VRFs must be configured to import them. This is part of normal routing-profile design and is not specific to host-DPU BGP. See [VPC Routing Profiles](../vpc/vpc_routing_profiles.md) for guidance.
-
----
+Permitting a tenant to announce a prefix only causes the route to enter the VPC local routing table on that DPU. For the announced prefix to be reachable from other hosts in the VPC, or to be reachable from outside the VPC, the VPC routing profile must export the prefix on appropriate route targets and importing VRFs must be configured to import them. This is part of normal routing-profile design and is not specific to host-DPU BGP. Refer to the [VPC Routing Profiles](../vpc/vpc_routing_profiles.md) page for guidance.
 
 ## How the Tenant Discovers the Peer ASN
 
-Every DPU at the site is allocated its own unique ASN from a site-managed pool. There is **no single shared "DPU ASN"** that a tenant can hard-code: the peer ASN a host sees depends on which DPU fronts that host, and two instances on different hosts will generally peer with different ASNs. Tenants must therefore look up the ASN dynamically, per host.
+Every DPU at the site is allocated its own unique ASN from a site-managed pool. There is *no single shared "DPU ASN"* that a tenant can hard-code: The peer ASN that a host can see depends on which DPU fronts that host, and two instances on different hosts will generally peer with different ASNs. Tenants must therefore look up the ASN dynamically, per host.
 
-The DPU's BGP ASN is exposed to the tenant through the cloud-init-compatible Instance Metadata Service that runs on the DPU at the standard link-local address `169.254.169.254`.
+The DPU BGP ASN is exposed to the tenant through the `cloud-init-compatible` Instance Metadata Service that runs on the DPU at the standard link-local address `169.254.169.254`.
 
 A tenant retrieves the peer ASN with a plain HTTP GET:
 
@@ -103,17 +101,15 @@ GET http://169.254.169.254/latest/meta-data/asn
 
 The response body is the ASN as a decimal integer. There is no authentication on the metadata endpoint; access is controlled by the link-local route inside the instance.
 
-The value returned reflects the ASN assigned to the DPU that fronts the host. It is the peer ASN the tenant must configure into the BGP speaker for **that** host; tenants that operate fleets of hosts must query the endpoint on each host rather than assuming a single value.
+The value returned reflects the ASN assigned to the DPU that fronts the host. It is the peer ASN the tenant must configure into the BGP speaker *for that host*; tenants that operate fleets of hosts must query the endpoint on each host rather than assuming a single value.
 
-The tenant's own ASN is whatever the site policy permits (see [Tenant Host ASN Policy](#1-tenant-host-asn-policy) above).
-
----
+The tenant's own ASN is whatever the site policy permits (refer to the [Tenant Host ASN Policy](#1-tenant-host-asn-policy) section above for more details).
 
 ## Tenant Configuration Steps
 
-The following steps are performed by the tenant inside their host OS. NICo does not perform them; they are listed here so that operators and runbook authors have a complete picture of the end-to-end flow.
+The following steps are performed by the tenant inside their host OS. NICo does not perform these steps; they are listed here so that operators and runbook authors have a complete picture of the end-to-end flow.
 
-1. **Install a BGP speaker.** Any standard BGP speaker is supported. Common choices include:
+1. **Install a BGP speaker.** Any standard BGP speaker is supported. Common choices include the following:
    - FRRouting (`frr`)
    - BIRD
    - ExaBGP
@@ -122,29 +118,27 @@ The following steps are performed by the tenant inside their host OS. NICo does 
    ```
    curl http://169.254.169.254/latest/meta-data/asn
    ```
-3. **Determine the peer IP address.** This is the host's existing default gateway (assigned via DHCP from the DPU's tenant-facing interface). It can be discovered with:
+3. **Determine the peer IP address.** This is the host's existing default gateway (assigned via DHCP from the DPU tenant-facing interface). It can be discovered with the following command:
    ```
    ip route show default
    ```
-4. **Determine the tenant-side ASN.** This is either the tenant's own choice, or — if the site has set `common_tenant_host_asn` — the operator-provided value.
-5. **Configure the BGP speaker** with the peer IP, the peer ASN, and the local ASN. Configure the speaker to announce only the prefixes the tenant intends to advertise, and to either accept no inbound routes or to filter inbound routes according to the tenant's own policy. The DPU side will filter outbound advertisements against the VPC's `allowed_anycast_prefixes`; any prefix outside that list will be silently dropped by the platform.
-6. **(Optional) Attach leak communities** to specific advertisements that should leak to the underlay (`65100:01`) or be reachable via the underlay instead of the overlay (`65100:02`). These communities take effect only when the VPC's routing profile sets `tenant_leak_communities_accepted = true`; see [Allowed Tenant Leak Communities](#3-allowed-tenant-leak-communities-optional).
-7. **Bring up the session.** The session should establish within a few seconds. If it does not, see [Troubleshooting](#troubleshooting) below.
+4. **Determine the tenant-side ASN.** This is either the tenant's own choice, or--if the site has set `common_tenant_host_asn`--the operator-provided value.
+5. **Configure the BGP speaker** with the peer IP, the peer ASN, and the local ASN. Configure the speaker to announce only the prefixes the tenant intends to advertise, and to either accept no inbound routes or to filter inbound routes according to the tenant's own policy. The DPU side will filter outbound advertisements against the `allowed_anycast_prefixes` list set for the VPC; any prefix outside that list will be silently dropped by the platform.
+6. **(Optional) Attach leak communities** to specific advertisements that should leak to the underlay (`65100:01`) or be reachable via the underlay instead of the overlay (`65100:02`). These communities take effect only when the VPC routing profile sets `tenant_leak_communities_accepted = true`; refer to the [Allowed Tenant Leak Communities](#3-allowed-tenant-leak-communities-optional) section for more details.
+7. **Bring up the session.** The session should establish within a few seconds. If it does not, refer to the [Troubleshooting](#troubleshooting) section below.
 
 The tenant must ensure that the prefixes the speaker announces are actually present on the host (for example, bound to a loopback interface) so that traffic forwarded to the announcing host has a place to land.
-
----
 
 ## Example: MetalLB Announcing a Kubernetes Service VIP
 
 The following example shows a tenant using MetalLB in BGP mode to announce a Kubernetes `LoadBalancer` service VIP from every node in a Kubernetes cluster running on a NICo-provided VPC.
 
-**Assumptions:**
+**Assumptions**
 
-- The site permits the prefix `203.0.113.0/24` in the VPC's routing profile (`allowed_anycast_prefixes`).
+- The site permits the prefix `203.0.113.0/24` in the VPC routing profile (`allowed_anycast_prefixes`).
 - The tenant has chosen `65010` as its host-side ASN; the site does not pin `common_tenant_host_asn`.
-- The VPC's DPU ASN, retrieved from the metadata service, is `65000`.
-- The host's default gateway is `10.0.0.1`.
+- The VPC DPU ASN, retrieved from the metadata service, is `65000`.
+- The default gateway of the host is `10.0.0.1`.
 
 **Step 1 — Confirm the peer ASN on one node.**
 
@@ -191,7 +185,7 @@ MetalLB allocates `203.0.113.10` to the service and advertises `203.0.113.10/32`
 
 **Step 4 — Verify on the host.**
 
-Verify that the session is established and the prefix is being advertised. With FRR this looks like:
+Verify that the session is established and the prefix is being advertised. With FRRouting (FRR), the following commands are used:
 
 ```
 $ vtysh -c "show bgp summary"
@@ -200,7 +194,6 @@ $ vtysh -c "show bgp ipv4 unicast advertised-routes neighbor 10.0.0.1"
 
 Other speakers expose equivalent commands.
 
----
 
 ## Troubleshooting
 
@@ -216,23 +209,23 @@ Other speakers expose equivalent commands.
 
 ### The session is up but no routes are visible from other hosts
 
-1. Confirm that the announced prefix is fully contained in one of the routing profile's `allowed_anycast_prefixes` entries. Prefixes outside the allow-list are silently dropped on the DPU.
-2. Confirm that the VPC's routing profile exports the relevant route-targets and that downstream VRFs import them. Without correct route-target plumbing, the prefix lives only in the announcing DPU's local table and is not visible elsewhere. See [VPC Routing Profiles](../vpc/vpc_routing_profiles.md).
+1. Confirm that the announced prefix is fully contained in one of the `allowed_anycast_prefixes` entries in the routing profile. Prefixes outside the allow-list are silently dropped on the DPU.
+2. Confirm that the VPC routing profile exports the relevant route-targets and that downstream VRFs import them. Without correct route-target plumbing, the prefix lives only in the local table of the announcing DPU and is not visible elsewhere. Refer to the [VPC Routing Profiles](../vpc/vpc_routing_profiles.md) page for more details.
 3. Confirm that traffic forwarded to the announcing host actually lands somewhere. The host must have the prefix bound to an interface (typically a loopback) so that the kernel does not drop the inbound packets.
 
 ### A specific prefix the tenant wants to announce is being rejected
 
-The prefix is not present in the VPC routing profile's `allowed_anycast_prefixes`. Either an operator must add the prefix to that profile, or the tenant must announce a different prefix that is permitted. The platform does not negotiate this dynamically; it is a configuration decision made at the routing-profile level.
+The prefix is not present in the `allowed_anycast_prefixes` list of the VPC routing profile. Either an operator must add the prefix to that profile, or the tenant must announce a different prefix that is permitted. The platform does not negotiate this dynamically; it is a configuration decision made at the routing-profile level.
 
 ### A prefix is tagged with `65100:01` or `65100:02` but is not leaking to the underlay
 
-Confirm that the VPC's routing profile has `tenant_leak_communities_accepted = true`. When the flag is `false`, the DPU strips the community without acting on it; the prefix may still be accepted on the overlay, but no leak or drop will occur. The setting is per routing profile, so different VPCs at the same site can have different policies.
-
----
+Confirm that the VPC routing profile has `tenant_leak_communities_accepted = true`. When the flag is `false`, the DPU strips the community without acting on it; the prefix may still be accepted on the overlay, but no leak or drop will occur. The setting is per routing profile, so different VPCs at the same site can have different policies.
 
 ## Summary
 
-| Concern | Owner | Where it lives |
+The following is a summary of essential BGP settings, the ownership of each settings, and where each setting lives.
+
+| Concern | Owner | Location |
 |---|---|---|
 | BGP speaker on the host OS | Tenant | Inside the instance OS |
 | Peer IP address | Platform | DPU tenant interface; delivered to the host as the DHCP default gateway |
