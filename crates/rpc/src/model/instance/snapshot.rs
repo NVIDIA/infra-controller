@@ -19,6 +19,7 @@ use std::collections::HashMap;
 
 use carbide_uuid::machine::MachineId;
 use config_version::Versioned;
+use model::health::HealthReportSources;
 use model::instance::snapshot::InstanceSnapshot;
 use model::instance::status::InstanceStatus;
 use model::machine::infiniband::MachineInfinibandStatusObservation;
@@ -26,7 +27,6 @@ use model::machine::nvlink::MachineNvLinkStatusObservation;
 use model::machine::{ManagedHostState, ReprovisionRequest};
 
 use crate::errors::RpcDataConversionError;
-use model::health::HealthReportSources;
 use crate::model::instance::status::instance_status_from_config_and_observation;
 
 /// Derives the tenant and site-admin facing [`InstanceStatus`] from the

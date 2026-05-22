@@ -194,6 +194,7 @@ mod tests {
 
     use config_version::ConfigVersion;
     use health_report::{HealthReport, REPAIR_REQUEST_MERGE_SOURCE};
+    use model::health::HealthReportSources;
     use model::instance::config::InstanceConfig;
     use model::instance::config::extension_services::InstanceExtensionServicesConfig;
     use model::instance::config::infiniband::InstanceInfinibandConfig;
@@ -208,7 +209,6 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use model::health::HealthReportSources;
 
     fn minimal_instance_config() -> InstanceConfig {
         InstanceConfig {

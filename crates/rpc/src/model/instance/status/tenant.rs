@@ -145,14 +145,14 @@ mod tests {
     use carbide_uuid::machine::MachineId;
     use chrono::Utc;
     use health_report::{HealthReport, REPAIR_REQUEST_MERGE_SOURCE};
-
-    use super::*;
     use model::health::HealthReportSources;
     use model::instance::status::SyncState;
     use model::machine::{
         DpuReprovisionStates, FailureCause, FailureDetails, FailureSource, InstanceState,
         ManagedHostState,
     };
+
+    use super::*;
 
     #[test]
     fn repair_merge_active_detects_merge_sources() {
