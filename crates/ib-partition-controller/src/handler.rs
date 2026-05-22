@@ -19,12 +19,12 @@ use carbide_ib_fabric::ib::{GetPartitionOptions, IBFabricManagerConfig};
 use carbide_uuid::infiniband::IBPartitionId;
 use model::ib::{DEFAULT_IB_FABRIC_NAME, IBQosConf};
 use model::ib_partition::{IBPartition, IBPartitionControllerState, IBPartitionStatus};
-
-use crate::state_controller::external_service_error::ufm_error;
-use crate::state_controller::ib_partition::context::IBPartitionStateHandlerContextObjects;
-use crate::state_controller::state_handler::{
+use state_controller::state_handler::{
     StateHandler, StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
+
+use crate::context::IBPartitionStateHandlerContextObjects;
+use crate::ufm_error;
 
 /// The actual IBPartition State handler
 #[derive(Debug, Default, Clone)]

@@ -1178,6 +1178,7 @@ dependencies = [
  "carbide-health-report",
  "carbide-host-support",
  "carbide-ib-fabric",
+ "carbide-ib-partition-controller",
  "carbide-ipmi",
  "carbide-ipxe-renderer",
  "carbide-libmlx",
@@ -1994,6 +1995,22 @@ dependencies = [
  "tokio-util",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "carbide-ib-partition-controller"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "carbide-api-db",
+ "carbide-api-model",
+ "carbide-ib-fabric",
+ "carbide-uuid",
+ "config-version",
+ "eyre",
+ "sqlx",
+ "state-controller",
+ "tracing",
 ]
 
 [[package]]
