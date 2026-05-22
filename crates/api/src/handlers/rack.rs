@@ -505,22 +505,46 @@ pub(crate) async fn on_demand_rack_maintenance(
         .activities
         .iter()
         .map(|entry| match &entry.activity {
-            Some(ProtoActivity::FirmwareUpgrade(fw)) => Ok(MaintenanceActivity::FirmwareUpgrade {
-                firmware_version: if fw.firmware_version.is_empty() {
+            Some(ProtoActivity::FirmwareUpgrade(fw)) => {
+                let firmware_version = if fw.firmware_version.trim().is_empty() {
                     None
                 } else {
                     Some(fw.firmware_version.clone())
-                },
-                components: fw.components.clone(),
-                access_token: fw.access_token.as_ref().and_then(|token| {
+                };
+                let access_token = fw.access_token.as_ref().and_then(|token| {
                     if token.trim().is_empty() {
                         None
                     } else {
                         Some(token.clone())
                     }
-                }),
-                force_update: fw.force_update,
-            }),
+                });
+
+                if firmware_version.is_none() {
+                    return Err(CarbideError::InvalidArgument(
+                        "firmware-upgrade rack maintenance requires SOT JSON in firmware_version"
+                            .into(),
+                    ));
+                }
+                if access_token.is_none() {
+                    return Err(CarbideError::InvalidArgument(
+                        "firmware-upgrade rack maintenance requires access_token".into(),
+                    ));
+                }
+                if let Some(config_json) = firmware_version.as_deref() {
+                    serde_json::from_str::<serde_json::Value>(config_json).map_err(|error| {
+                        CarbideError::InvalidArgument(format!(
+                            "firmware-upgrade firmware_version must contain valid SOT JSON: {error}"
+                        ))
+                    })?;
+                }
+
+                Ok(MaintenanceActivity::FirmwareUpgrade {
+                    firmware_version,
+                    components: fw.components.clone(),
+                    access_token,
+                    force_update: fw.force_update,
+                })
+            }
             Some(ProtoActivity::NvosUpdate(nvos)) => Ok(MaintenanceActivity::NvosUpdate {
                 firmware_object_id: if nvos.firmware_object_id.is_empty() {
                     None

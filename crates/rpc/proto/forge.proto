@@ -5810,7 +5810,8 @@ message MachineValidationOnDemandResponse {
 
 message FirmwareUpgradeActivity {
   // SOT JSON passed to RMS ApplyFirmwareObjectFromJSON.
-  // If access_token is unset, rack maintenance skips the firmware update.
+  // Explicit firmware-upgrade maintenance requests must set this and access_token.
+  // Implicit all-activity maintenance skips firmware update when no JSON is configured.
   string firmware_version = 1;
   // Firmware components to update (e.g. "BMC", "CPLD", "BIOS").
   // When empty, all components are updated.
@@ -8007,6 +8008,7 @@ message UpdateComponentFirmwareRequest {
   oneof target {
     UpdateComputeTrayFirmwareTarget compute_trays = 1;
     UpdateSwitchFirmwareTarget switches = 2;
+    // powershelf firmware update currently not implemented by state machine and rms backend
     UpdatePowerShelfFirmwareTarget power_shelves = 3;
     UpdateFirmwareObjectTarget racks = 5;
   }
@@ -8015,7 +8017,7 @@ message UpdateComponentFirmwareRequest {
   // For targets routed through rack maintenance, this carries SOT JSON for
   // RMS ApplyFirmwareObjectFromJSON.
   string target_version = 4;
-  // Required for targets routed through rack maintenance.
+  // Required for firmware targets routed through rack maintenance.
   // Rejected for direct dispatch paths and currently unsupported for power shelves.
   optional string access_token = 6;
   bool force_update = 7;

@@ -461,9 +461,9 @@ async fn test_on_demand_rack_maintenance_schedules_firmware_and_nvos_scope(
                         activity: Some(
                             rpc::forge::maintenance_activity_config::Activity::FirmwareUpgrade(
                                 rpc::forge::FirmwareUpgradeActivity {
-                                    firmware_version: "fw-mixed".to_string(),
+                                    firmware_version: r#"{"Id":"fw-mixed"}"#.to_string(),
                                     components: vec!["BMC".to_string()],
-                                    access_token: None,
+                                    access_token: Some("token".to_string()),
                                     force_update: false,
                                 },
                             ),
@@ -497,7 +497,7 @@ async fn test_on_demand_rack_maintenance_schedules_firmware_and_nvos_scope(
             firmware_version: Some(id),
             components,
             ..
-        } if id == "fw-mixed" && components == &vec!["BMC".to_string()]
+        } if id == r#"{"Id":"fw-mixed"}"# && components == &vec!["BMC".to_string()]
     ));
     assert!(matches!(
         &scope.activities[1],
@@ -505,6 +505,45 @@ async fn test_on_demand_rack_maintenance_schedules_firmware_and_nvos_scope(
             firmware_object_id: Some(id)
         } if id == "fw-mixed"
     ));
+
+    Ok(())
+}
+
+#[crate::sqlx_test]
+async fn test_on_demand_rack_maintenance_rejects_firmware_without_access_token(
+    pool: sqlx::PgPool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let env = create_test_env_with_overrides(pool.clone(), TestEnvOverrides::default()).await;
+    let (rack_id, switch_id) = create_ready_rack_with_switch(&env, &pool).await?;
+
+    let err = crate::handlers::rack::on_demand_rack_maintenance(
+        env.api.as_ref(),
+        Request::new(rpc::forge::RackMaintenanceOnDemandRequest {
+            rack_id: Some(rack_id.clone()),
+            scope: Some(rpc::forge::RackMaintenanceScope {
+                machine_ids: vec![],
+                switch_ids: vec![switch_id.to_string()],
+                power_shelf_ids: vec![],
+                activities: vec![rpc::forge::MaintenanceActivityConfig {
+                    activity: Some(
+                        rpc::forge::maintenance_activity_config::Activity::FirmwareUpgrade(
+                            rpc::forge::FirmwareUpgradeActivity {
+                                firmware_version: r#"{"Id":"fw-mixed"}"#.to_string(),
+                                components: vec!["BMC".to_string()],
+                                access_token: None,
+                                force_update: false,
+                            },
+                        ),
+                    ),
+                }],
+            }),
+        }),
+    )
+    .await
+    .expect_err("firmware-upgrade should require access_token");
+
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert!(err.message().contains("access_token"));
 
     Ok(())
 }

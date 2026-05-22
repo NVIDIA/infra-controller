@@ -646,15 +646,16 @@ impl MachineRvLabels {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MaintenanceActivity {
     FirmwareUpgrade {
-        /// Target firmware version. `None` means RMS uses its default/latest.
+        /// SOT JSON for RMS ApplyFirmwareObjectFromJSON.
+        /// `None` is only valid for implicit all-activity maintenance skips.
         #[serde(default)]
         firmware_version: Option<String>,
         /// Firmware components to update (e.g. "BMC", "CPLD", "BIOS").
         /// Empty means all components.
         #[serde(default)]
         components: Vec<String>,
-        /// RMS artifact-download token. When set, `firmware_version` contains
-        /// SOT JSON for ApplyFirmwareObjectFromJSON.
+        /// RMS artifact-download token for ApplyFirmwareObjectFromJSON.
+        /// Required when firmware upgrade is explicitly requested.
         #[serde(default)]
         access_token: Option<String>,
         #[serde(default)]

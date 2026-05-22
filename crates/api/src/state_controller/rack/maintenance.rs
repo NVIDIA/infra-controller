@@ -226,6 +226,13 @@ fn requested_firmware_object_id(scope: &MaintenanceScope) -> Option<String> {
     })
 }
 
+fn explicit_firmware_upgrade_requested(scope: &MaintenanceScope) -> bool {
+    scope
+        .activities
+        .iter()
+        .any(|activity| matches!(activity, MaintenanceActivity::FirmwareUpgrade { .. }))
+}
+
 fn requested_firmware_object_json_upgrade(
     scope: &MaintenanceScope,
 ) -> Option<(Option<String>, Vec<String>, String, bool)> {
@@ -1055,6 +1062,15 @@ pub async fn handle_maintenance(
                 let Some((config_json, components, access_token, force_update)) =
                     requested_firmware_object_json_upgrade(scope)
                 else {
+                    if explicit_firmware_upgrade_requested(scope) {
+                        return transition_to_rack_error(
+                            id,
+                            state,
+                            "firmware-upgrade rack maintenance requires SOT JSON and access token",
+                            ctx,
+                        )
+                        .await;
+                    }
                     return Ok(skip_firmware_upgrade_outcome(
                         id,
                         "firmware object JSON source is not configured for rack maintenance; skipping firmware update",
@@ -1074,14 +1090,26 @@ pub async fn handle_maintenance(
                     return transition_to_rack_error(id, state, "RMS client not configured", ctx)
                         .await;
                 };
-                let profile = super::resolve_profile(id, rack_profile_id, ctx);
-                let rack_hardware_type = profile
-                    .map(profile_hardware_type_wire_value)
-                    .unwrap_or_default();
-                let firmware_type = profile
-                    .map(firmware_type_for_profile)
-                    .unwrap_or("prod")
-                    .to_string();
+                let Some(profile) = super::resolve_profile(id, rack_profile_id, ctx) else {
+                    return transition_to_rack_error(
+                        id,
+                        state,
+                        "rack profile is missing or unknown; cannot resolve firmware type for firmware object JSON apply",
+                        ctx,
+                    )
+                    .await;
+                };
+                if profile.rack_hardware_class.is_none() {
+                    return transition_to_rack_error(
+                        id,
+                        state,
+                        "rack profile does not define rack_hardware_class; cannot resolve firmware type for firmware object JSON apply",
+                        ctx,
+                    )
+                    .await;
+                }
+                let rack_hardware_type = profile_hardware_type_wire_value(profile);
+                let firmware_type = firmware_type_for_profile(profile).to_string();
                 let inventory = load_rack_firmware_inventory(
                     &ctx.services.db_pool,
                     ctx.services.credential_manager.as_ref(),

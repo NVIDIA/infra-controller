@@ -24,6 +24,12 @@ use crate::rpc::ApiClient;
 fn resolve_firmware_upgrade_source(
     args: &MaintenanceOptions,
 ) -> CarbideCliResult<(String, Option<String>)> {
+    let explicit_firmware_upgrade = args.activities.as_ref().is_some_and(|activities| {
+        activities
+            .iter()
+            .any(|activity| activity == "firmware-upgrade")
+    });
+
     if args.firmware_version.is_some() && args.sot_json_file.is_some() {
         return Err(CarbideCliError::ChooseOneError(
             "--firmware-version",
@@ -50,6 +56,32 @@ fn resolve_firmware_upgrade_source(
     if args.sot_json_file.is_some() && access_token.is_none() {
         return Err(CarbideCliError::GenericError(
             "--access-token is required with --sot-json-file".to_string(),
+        ));
+    }
+    if explicit_firmware_upgrade && firmware_version.trim().is_empty() {
+        return Err(CarbideCliError::GenericError(
+            "--activities firmware-upgrade requires SOT JSON from --sot-json-file or --firmware-version"
+                .to_string(),
+        ));
+    }
+    if explicit_firmware_upgrade && access_token.is_none() {
+        return Err(CarbideCliError::GenericError(
+            "--activities firmware-upgrade requires --access-token".to_string(),
+        ));
+    }
+    if !explicit_firmware_upgrade && args.sot_json_file.is_some() {
+        return Err(CarbideCliError::GenericError(
+            "--sot-json-file requires --activities firmware-upgrade".to_string(),
+        ));
+    }
+    if !explicit_firmware_upgrade && args.firmware_version.is_some() {
+        return Err(CarbideCliError::GenericError(
+            "--firmware-version requires --activities firmware-upgrade".to_string(),
+        ));
+    }
+    if !explicit_firmware_upgrade && args.access_token.is_some() {
+        return Err(CarbideCliError::GenericError(
+            "--access-token requires --activities firmware-upgrade".to_string(),
         ));
     }
     if args.access_token.is_some() && firmware_version.trim().is_empty() {
