@@ -348,8 +348,21 @@ REST API entry points:
 | Single tray | `PATCH /v2/org/{org}/nico/tray/{id}/firmware` | Update firmware for one compute tray. |
 | Tray batch | `PATCH /v2/org/{org}/nico/tray/firmware` | Update firmware for trays selected by filter, or all trays in the site when no filter is supplied. |
 
-See the [NVIDIA Forge API rack firmware update schema](https://schema.stg.forge.ngc.nvidia.com/#tag/Rack/operation/firmware-update-racks)
-for the current request and response contract.
+Request fields:
+
+| Field | Required | Use |
+|---|---|---|
+| `siteId` | Yes | Site that owns the rack or tray targets. |
+| `version` | No | Target firmware version. Omit only when the site workflow selects the target version. |
+| `filter` | Batch only | Selects the batch targets. Rack batch filters by rack name. Tray batch filters by rack ID, rack name, tray ID, component ID, or tray type. |
+
+Batch tray filters follow these constraints:
+
+- Use either `rackId` or `rackName`, not both.
+- Do not combine a rack filter with `ids` or `componentIds`.
+- Use `type` when filtering by `componentIds`.
+
+The API requires provider-admin authorization and returns task IDs for tracking.
 
 Single-rack example:
 
