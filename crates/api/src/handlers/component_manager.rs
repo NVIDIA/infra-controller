@@ -20,7 +20,9 @@ use std::net::IpAddr;
 
 use ::rpc::common::SystemPowerControl;
 use ::rpc::forge::{self as rpc};
+use carbide_uuid::machine::MachineId;
 use carbide_uuid::power_shelf::PowerShelfId;
+use carbide_uuid::rack::RackId;
 use carbide_uuid::switch::SwitchId;
 use component_manager::component_manager::ComponentManager;
 use component_manager::compute_tray_manager::{ComputeTrayEndpoint, ComputeTrayVendor};
@@ -458,6 +460,221 @@ fn map_power_shelf_components(raw: &[i32]) -> Result<Vec<PowerShelfComponent>, S
             ))),
         })
         .collect()
+}
+
+fn normalize_access_token(access_token: Option<String>) -> Option<String> {
+    access_token.and_then(|token| {
+        if token.trim().is_empty() {
+            None
+        } else {
+            Some(token)
+        }
+    })
+}
+
+fn validate_firmware_object_json_request(target_version: &str) -> Result<(), Status> {
+    if target_version.trim().is_empty() {
+        return Err(Status::invalid_argument(
+            "target_version must contain SOT JSON for firmware updates routed through rack maintenance",
+        ));
+    }
+    Ok(())
+}
+
+fn reject_power_shelf_firmware_object_json(access_token: &Option<String>) -> Result<(), Status> {
+    if access_token.is_some() {
+        Err(Status::unimplemented(
+            "firmware object JSON updates for power shelves are not implemented",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn missing_firmware_object_json_status(target: &str) -> Status {
+    Status::invalid_argument(format!(
+        "access_token is required for {target} firmware updates routed through rack maintenance"
+    ))
+}
+
+fn require_firmware_object_json_for_rack_maintenance(
+    target: &str,
+    access_token: &Option<String>,
+    target_version: &str,
+) -> Result<String, Status> {
+    let Some(token) = access_token.clone() else {
+        return Err(missing_firmware_object_json_status(target));
+    };
+
+    validate_firmware_object_json_request(target_version)?;
+    Ok(token)
+}
+
+fn reject_firmware_object_json_for_direct_dispatch(
+    target: &str,
+    access_token: &Option<String>,
+) -> Result<(), Status> {
+    if access_token.is_some() {
+        Err(Status::invalid_argument(format!(
+            "access_token is only supported for {target} firmware updates routed through rack maintenance"
+        )))
+    } else {
+        Ok(())
+    }
+}
+
+struct RackFirmwareMaintenanceTarget {
+    rack_id: RackId,
+    machine_ids: Vec<String>,
+    switch_ids: Vec<String>,
+}
+
+fn push_rack_firmware_target(
+    targets: &mut Vec<RackFirmwareMaintenanceTarget>,
+    rack_id: RackId,
+    machine_id: Option<String>,
+    switch_id: Option<String>,
+) {
+    let target = match targets.iter_mut().find(|target| target.rack_id == rack_id) {
+        Some(target) => target,
+        None => {
+            targets.push(RackFirmwareMaintenanceTarget {
+                rack_id,
+                machine_ids: Vec::new(),
+                switch_ids: Vec::new(),
+            });
+            targets.last_mut().expect("target was just pushed")
+        }
+    };
+
+    if let Some(machine_id) = machine_id {
+        target.machine_ids.push(machine_id);
+    }
+    if let Some(switch_id) = switch_id {
+        target.switch_ids.push(switch_id);
+    }
+}
+
+async fn group_machine_ids_by_rack(
+    api: &Api,
+    machine_ids: &[MachineId],
+) -> Result<Vec<RackFirmwareMaintenanceTarget>, Status> {
+    let machines = db::machine::find(
+        api.db_reader().as_mut(),
+        db::ObjectFilter::List(machine_ids),
+        MachineSearchConfig::default(),
+    )
+    .await
+    .map_err(|e| Status::internal(format!("failed to look up machines: {e}")))?;
+    let machines_by_id: HashMap<_, _> = machines
+        .into_iter()
+        .map(|machine| (machine.id, machine))
+        .collect();
+
+    let mut targets = Vec::new();
+    for machine_id in machine_ids {
+        let machine = machines_by_id
+            .get(machine_id)
+            .ok_or_else(|| Status::not_found(format!("machine {machine_id} not found")))?;
+        let rack_id = machine.rack_id.clone().ok_or_else(|| {
+            Status::failed_precondition(format!(
+                "machine {machine_id} is not associated with a rack"
+            ))
+        })?;
+        push_rack_firmware_target(&mut targets, rack_id, Some(machine_id.to_string()), None);
+    }
+
+    Ok(targets)
+}
+
+async fn group_switch_ids_by_rack(
+    api: &Api,
+    switch_ids: &[SwitchId],
+) -> Result<Vec<RackFirmwareMaintenanceTarget>, Status> {
+    let mut txn = api
+        .database_connection
+        .begin()
+        .await
+        .map_err(|e| Status::internal(format!("failed to begin transaction: {e}")))?;
+    let switches = db::switch::find_by(
+        &mut txn,
+        db::ObjectColumnFilter::List(db::switch::IdColumn, switch_ids),
+    )
+    .await
+    .map_err(|e| Status::internal(format!("failed to look up switches: {e}")))?;
+    drop(txn);
+
+    let switches_by_id: HashMap<_, _> = switches
+        .into_iter()
+        .map(|switch| (switch.id, switch))
+        .collect();
+
+    let mut targets = Vec::new();
+    for switch_id in switch_ids {
+        let switch = switches_by_id
+            .get(switch_id)
+            .ok_or_else(|| Status::not_found(format!("switch {switch_id} not found")))?;
+        let rack_id = switch.rack_id.clone().ok_or_else(|| {
+            Status::failed_precondition(format!("switch {switch_id} is not associated with a rack"))
+        })?;
+        push_rack_firmware_target(&mut targets, rack_id, None, Some(switch_id.to_string()));
+    }
+
+    Ok(targets)
+}
+
+async fn submit_rack_firmware_maintenance_requests(
+    api: &Api,
+    targets: Vec<RackFirmwareMaintenanceTarget>,
+    firmware_version: String,
+    components: Vec<String>,
+    access_token: Option<String>,
+    force_update: bool,
+) -> Result<Vec<rpc::ComponentResult>, Status> {
+    if targets.is_empty() {
+        return Err(Status::invalid_argument(
+            "no devices specified for firmware upgrade",
+        ));
+    }
+
+    let mut results = Vec::new();
+    for target in targets {
+        let affected_ids: Vec<_> = target
+            .machine_ids
+            .iter()
+            .chain(target.switch_ids.iter())
+            .cloned()
+            .collect();
+        let maintenance_req = Request::new(rpc::RackMaintenanceOnDemandRequest {
+            rack_id: Some(target.rack_id),
+            scope: Some(rpc::RackMaintenanceScope {
+                machine_ids: target.machine_ids,
+                switch_ids: target.switch_ids,
+                power_shelf_ids: vec![],
+                activities: vec![rpc::MaintenanceActivityConfig {
+                    activity: Some(rpc::maintenance_activity_config::Activity::FirmwareUpgrade(
+                        rpc::FirmwareUpgradeActivity {
+                            firmware_version: firmware_version.clone(),
+                            components: components.clone(),
+                            access_token: access_token.clone(),
+                            force_update,
+                        },
+                    )),
+                }],
+            }),
+        });
+
+        match crate::handlers::rack::on_demand_rack_maintenance(api, maintenance_req).await {
+            Ok(_) => results.extend(affected_ids.iter().map(|id| success_result(id))),
+            Err(status) => results.extend(
+                affected_ids
+                    .iter()
+                    .map(|id| status_result(id, status.clone())),
+            ),
+        }
+    }
+
+    Ok(results)
 }
 
 // ---- Endpoint resolution helpers ----
@@ -1286,17 +1503,18 @@ pub(crate) async fn update_component_firmware(
     let target = req
         .target
         .ok_or_else(|| Status::invalid_argument("target is required"))?;
+    let access_token = normalize_access_token(req.access_token);
 
-    let mut rack_machine_ids: Vec<String> = Vec::new();
-    let mut rack_switch_ids: Vec<String> = Vec::new();
-    let mut rack_id: Option<carbide_uuid::rack::RackId> = None;
+    let target_version = req.target_version.clone();
+    let force_update = req.force_update;
+    let mut rack_maintenance_targets: Vec<RackFirmwareMaintenanceTarget> = Vec::new();
     let mut power_shelf_results: Option<Vec<rpc::ComponentResult>> = None;
     let mut rack_results: Option<Vec<rpc::ComponentResult>> = None;
     let mut component_names: Vec<String> = Vec::new();
+    let mut maintenance_access_token: Option<String> = None;
 
     match target {
         rpc::update_component_firmware_request::Target::Switches(t) => {
-            let cm = require_component_manager(api)?;
             let list = t
                 .switch_ids
                 .ok_or_else(|| Status::invalid_argument("switch_ids is required"))?;
@@ -1304,30 +1522,17 @@ pub(crate) async fn update_component_firmware(
                 return Err(Status::invalid_argument("switch_ids must not be empty"));
             }
 
+            let cm = require_component_manager(api)?;
             if cm.nv_switch_use_state_controller {
+                maintenance_access_token = Some(require_firmware_object_json_for_rack_maintenance(
+                    "switch",
+                    &access_token,
+                    &req.target_version,
+                )?);
                 component_names = map_nv_switch_component_names(&t.components)?;
-
-                let mut txn =
-                    api.database_connection.begin().await.map_err(|e| {
-                        Status::internal(format!("failed to begin transaction: {e}"))
-                    })?;
-                let switch = db::switch::find_by_id(&mut txn, &list.ids[0])
-                    .await
-                    .map_err(|e| Status::internal(format!("failed to look up switch: {e}")))?
-                    .ok_or_else(|| {
-                        Status::not_found(format!("switch {} not found", list.ids[0]))
-                    })?;
-                drop(txn);
-
-                rack_id = Some(switch.rack_id.ok_or_else(|| {
-                    Status::failed_precondition(format!(
-                        "switch {} is not associated with a rack",
-                        list.ids[0]
-                    ))
-                })?);
-                rack_switch_ids = list.ids.iter().map(|id| id.to_string()).collect();
+                rack_maintenance_targets = group_switch_ids_by_rack(api, &list.ids).await?;
             } else {
-                // Directly dispatch to backend
+                reject_firmware_object_json_for_direct_dispatch("switch", &access_token)?;
                 let components = map_nv_switch_components(&t.components)?;
                 let endpoints = resolve_switch_endpoints(api, &list.ids).await?;
 
@@ -1361,7 +1566,6 @@ pub(crate) async fn update_component_firmware(
             }
         }
         rpc::update_component_firmware_request::Target::ComputeTrays(t) => {
-            let cm = require_component_manager(api)?;
             let list = t
                 .machine_ids
                 .ok_or_else(|| Status::invalid_argument("machine_ids is required"))?;
@@ -1369,28 +1573,18 @@ pub(crate) async fn update_component_firmware(
                 return Err(Status::invalid_argument("machine_ids must not be empty"));
             }
 
+            let cm = require_component_manager(api)?;
             if cm.compute_tray_use_state_controller {
+                maintenance_access_token = Some(require_firmware_object_json_for_rack_maintenance(
+                    "compute tray",
+                    &access_token,
+                    &req.target_version,
+                )?);
                 component_names = map_compute_tray_component_names(&t.components)?;
-
-                let machine = db::machine::find_one(
-                    api.db_reader().as_mut(),
-                    &list.machine_ids[0],
-                    Default::default(),
-                )
-                .await
-                .map_err(|e| Status::internal(format!("failed to look up machine: {e}")))?
-                .ok_or_else(|| {
-                    Status::not_found(format!("machine {} not found", list.machine_ids[0]))
-                })?;
-
-                rack_id = Some(machine.rack_id.ok_or_else(|| {
-                    Status::failed_precondition(format!(
-                        "machine {} is not associated with a rack",
-                        list.machine_ids[0]
-                    ))
-                })?);
-                rack_machine_ids = list.machine_ids.iter().map(|id| id.to_string()).collect();
+                rack_maintenance_targets =
+                    group_machine_ids_by_rack(api, &list.machine_ids).await?;
             } else {
+                reject_firmware_object_json_for_direct_dispatch("compute tray", &access_token)?;
                 let components = map_compute_tray_components(&t.components)?;
                 let resolved = resolve_compute_tray_endpoints(api, &list.machine_ids).await?;
 
@@ -1423,10 +1617,17 @@ pub(crate) async fn update_component_firmware(
             }
         }
         rpc::update_component_firmware_request::Target::PowerShelves(t) => {
-            let cm = require_component_manager(api)?;
             let list = t
                 .power_shelf_ids
                 .ok_or_else(|| Status::invalid_argument("power_shelf_ids is required"))?;
+            if list.ids.is_empty() {
+                return Err(Status::invalid_argument(
+                    "power_shelf_ids must not be empty",
+                ));
+            }
+
+            reject_power_shelf_firmware_object_json(&access_token)?;
+            let cm = require_component_manager(api)?;
             let components = map_power_shelf_components(&t.components)?;
             let endpoints = resolve_power_shelf_endpoints(api, &list.ids).await?;
 
@@ -1462,6 +1663,11 @@ pub(crate) async fn update_component_firmware(
             if list.rack_ids.is_empty() {
                 return Err(Status::invalid_argument("rack_ids must not be empty"));
             }
+            let token = require_firmware_object_json_for_rack_maintenance(
+                "rack",
+                &access_token,
+                &req.target_version,
+            )?;
 
             let mut results = Vec::new();
             for rack_id in list.rack_ids {
@@ -1478,6 +1684,8 @@ pub(crate) async fn update_component_firmware(
                                     rpc::FirmwareUpgradeActivity {
                                         firmware_version: req.target_version.clone(),
                                         components: vec![],
+                                        access_token: Some(token.clone()),
+                                        force_update: req.force_update,
                                     },
                                 ),
                             ),
@@ -1507,34 +1715,15 @@ pub(crate) async fn update_component_firmware(
         }));
     }
 
-    let rack_id = rack_id.ok_or_else(|| {
-        Status::invalid_argument("no machines or switches specified for firmware upgrade")
-    })?;
-
-    let maintenance_req = Request::new(rpc::RackMaintenanceOnDemandRequest {
-        rack_id: Some(rack_id),
-        scope: Some(rpc::RackMaintenanceScope {
-            machine_ids: rack_machine_ids.clone(),
-            switch_ids: rack_switch_ids.clone(),
-            power_shelf_ids: vec![],
-            activities: vec![rpc::MaintenanceActivityConfig {
-                activity: Some(rpc::maintenance_activity_config::Activity::FirmwareUpgrade(
-                    rpc::FirmwareUpgradeActivity {
-                        firmware_version: req.target_version,
-                        components: component_names,
-                    },
-                )),
-            }],
-        }),
-    });
-
-    crate::handlers::rack::on_demand_rack_maintenance(api, maintenance_req).await?;
-
-    let results: Vec<_> = rack_machine_ids
-        .iter()
-        .chain(rack_switch_ids.iter())
-        .map(|id| success_result(id))
-        .collect();
+    let results = submit_rack_firmware_maintenance_requests(
+        api,
+        rack_maintenance_targets,
+        target_version,
+        component_names,
+        maintenance_access_token,
+        force_update,
+    )
+    .await?;
 
     Ok(Response::new(rpc::UpdateComponentFirmwareResponse {
         results,
@@ -2030,6 +2219,74 @@ mod tests {
     }
 
     #[test]
+    fn firmware_object_json_request_requires_sot_json_in_target_version() {
+        let err = validate_firmware_object_json_request("").unwrap_err();
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("target_version"));
+
+        validate_firmware_object_json_request("{}").unwrap();
+    }
+
+    #[test]
+    fn rack_firmware_targets_are_grouped_by_rack() {
+        let rack_a = RackId::new("rack-a".to_string());
+        let rack_b = RackId::new("rack-b".to_string());
+        let mut targets = Vec::new();
+
+        push_rack_firmware_target(&mut targets, rack_a.clone(), Some("machine-a".into()), None);
+        push_rack_firmware_target(&mut targets, rack_b.clone(), None, Some("switch-b".into()));
+        push_rack_firmware_target(&mut targets, rack_a.clone(), Some("machine-c".into()), None);
+
+        assert_eq!(targets.len(), 2);
+        assert_eq!(targets[0].rack_id, rack_a);
+        assert_eq!(targets[0].machine_ids, vec!["machine-a", "machine-c"]);
+        assert!(targets[0].switch_ids.is_empty());
+        assert_eq!(targets[1].rack_id, rack_b);
+        assert_eq!(targets[1].switch_ids, vec!["switch-b"]);
+        assert!(targets[1].machine_ids.is_empty());
+    }
+
+    #[test]
+    fn power_shelf_firmware_object_json_is_unimplemented() {
+        let access_token = Some("token".to_string());
+
+        let err = reject_power_shelf_firmware_object_json(&access_token).unwrap_err();
+
+        assert_eq!(err.code(), Code::Unimplemented);
+        assert!(err.message().contains("power shelves"));
+    }
+
+    #[test]
+    fn rack_maintenance_firmware_update_requires_firmware_object_json() {
+        let err = missing_firmware_object_json_status("rack");
+
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("access_token"));
+    }
+
+    #[test]
+    fn rack_maintenance_firmware_update_returns_access_token_when_valid() {
+        let token = require_firmware_object_json_for_rack_maintenance(
+            "switch",
+            &Some("token".to_string()),
+            "{}",
+        )
+        .unwrap();
+
+        assert_eq!(token, "token");
+    }
+
+    #[test]
+    fn direct_firmware_update_rejects_access_token() {
+        let err =
+            reject_firmware_object_json_for_direct_dispatch("switch", &Some("token".to_string()))
+                .unwrap_err();
+
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("rack maintenance"));
+    }
+
+    #[test]
     fn power_action_on() {
         let action = map_power_action(SystemPowerControl::On as i32).unwrap();
         assert!(matches!(action, PowerAction::On));
@@ -2209,6 +2466,8 @@ mod tests {
             activities: vec![MaintenanceActivity::FirmwareUpgrade {
                 firmware_version: None,
                 components: vec![],
+                access_token: None,
+                force_update: false,
             }],
             ..Default::default()
         });
@@ -2230,6 +2489,8 @@ mod tests {
             activities: vec![MaintenanceActivity::FirmwareUpgrade {
                 firmware_version: None,
                 components: vec![],
+                access_token: None,
+                force_update: false,
             }],
             ..Default::default()
         });

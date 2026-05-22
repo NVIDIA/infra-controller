@@ -41,6 +41,8 @@ pub async fn on_demand_rack_maintenance(
                      rpc::FirmwareUpgradeActivity {
                          firmware_version: firmware_version.clone(),
                          components: components.clone(),
+                         access_token: None,
+                         force_update: false,
                      },
                  )),
                  "nvos-update" => Ok(ProtoActivity::NvosUpdate(

@@ -226,6 +226,27 @@ fn requested_firmware_object_id(scope: &MaintenanceScope) -> Option<String> {
     })
 }
 
+fn requested_firmware_object_json_upgrade(
+    scope: &MaintenanceScope,
+) -> Option<(Option<String>, Vec<String>, String, bool)> {
+    scope.activities.iter().find_map(|activity| match activity {
+        MaintenanceActivity::FirmwareUpgrade {
+            firmware_version,
+            components,
+            access_token,
+            force_update,
+        } => access_token.as_ref().map(|token| {
+            (
+                firmware_version.clone(),
+                components.clone(),
+                token.clone(),
+                *force_update,
+            )
+        }),
+        _ => None,
+    })
+}
+
 fn nvos_update_start_state(scope: &MaintenanceScope) -> RackMaintenanceState {
     RackMaintenanceState::NVOSUpdate {
         nvos_update: NvosUpdateState::Start {
@@ -276,6 +297,8 @@ pub(crate) fn first_maintenance_state(scope: &MaintenanceScope) -> RackMaintenan
     if scope.should_run(&MaintenanceActivity::FirmwareUpgrade {
         firmware_version: None,
         components: vec![],
+        access_token: None,
+        force_update: false,
     }) {
         RackMaintenanceState::FirmwareUpgrade {
             rack_firmware_upgrade: FirmwareUpgradeState::Start,
@@ -285,9 +308,9 @@ pub(crate) fn first_maintenance_state(scope: &MaintenanceScope) -> RackMaintenan
     }
 }
 
-/// Filters a full-rack firmware inventory down to only the devices listed in
-/// the maintenance scope. When `scope.is_full_rack()` the inventory is
-/// returned unchanged.
+/// Filters a full-rack firmware inventory down to compute/switch devices listed
+/// in the maintenance scope. Power-shelf firmware-object JSON apply is not
+/// implemented yet.
 fn filter_inventory_by_scope(
     mut inventory: RackFirmwareInventory,
     scope: &MaintenanceScope,
@@ -384,89 +407,186 @@ fn build_switch_device_info_request(
     }
 }
 
-/// Submit compute and switch firmware-update batches to RMS and persist the
-/// per-device child job IDs returned by ApplyFirmwareObject.
-async fn rms_start_firmware_upgrade(
+fn rms_component_filters_from_components(
+    components: &[String],
+    include_machines: bool,
+    include_switches: bool,
+) -> std::collections::HashMap<i32, rms::FirmwareObjectComponentFilter> {
+    if components.is_empty() {
+        return std::collections::HashMap::new();
+    }
+
+    let mut filters = std::collections::HashMap::new();
+    if include_machines {
+        filters.insert(
+            rms::NodeType::Compute as i32,
+            rms::FirmwareObjectComponentFilter {
+                components: components.to_vec(),
+            },
+        );
+    }
+    if include_switches {
+        filters.insert(
+            rms::NodeType::Switch as i32,
+            rms::FirmwareObjectComponentFilter {
+                components: components.to_vec(),
+            },
+        );
+    }
+    filters
+}
+
+fn firmware_device_status(
+    device: FirmwareUpgradeDeviceInfo,
+    parent_job_id: Option<String>,
+    child_jobs: &std::collections::HashMap<String, String>,
+    node_errors: &std::collections::HashMap<String, String>,
+) -> FirmwareUpgradeDeviceStatus {
+    let mut status = FirmwareUpgradeDeviceStatus {
+        node_id: device.node_id.clone(),
+        mac: device.mac,
+        bmc_ip: device.bmc_ip,
+        status: "in_progress".into(),
+        job_id: None,
+        parent_job_id,
+        error_message: None,
+    };
+
+    if let Some(error_message) = node_errors.get(&device.node_id) {
+        status.status = "failed".into();
+        status.error_message = Some(error_message.clone());
+    } else if let Some(job_id) = child_jobs.get(&device.node_id) {
+        status.job_id = Some(job_id.clone());
+    } else {
+        status.status = "failed".into();
+        status.error_message =
+            Some("RMS did not return a child firmware job for this device".into());
+    }
+
+    status
+}
+
+async fn rms_start_firmware_upgrade_from_json(
     rms_client: &dyn librms::RmsApi,
-    request: rms::ApplyFirmwareObjectRequest,
-    inventory: &RackFirmwareInventory,
+    rack_id: &RackId,
+    config_json: &str,
+    access_token: &str,
+    firmware_type: &str,
+    hardware_type: &str,
+    force_update: bool,
+    components: &[String],
+    machines: Vec<FirmwareUpgradeDeviceInfo>,
+    switches: Vec<FirmwareUpgradeDeviceInfo>,
 ) -> Result<model::rack::FirmwareUpgradeJob, StateHandlerError> {
     let started_at = chrono::Utc::now();
+    let machine_count = machines.len();
+    let switch_count = switches.len();
+    let mut devices = Vec::with_capacity(machine_count + switch_count);
+    devices.extend(
+        machines
+            .iter()
+            .map(|device| build_new_node_info(rack_id, device, rms::NodeType::Compute)),
+    );
+    devices.extend(
+        switches
+            .iter()
+            .map(|device| build_new_node_info(rack_id, device, rms::NodeType::Switch)),
+    );
+
     let response = rms_client
-        .apply_firmware_object(request)
+        .apply_firmware_object_from_json(rms::ApplyFirmwareObjectFromJsonRequest {
+            metadata: None,
+            rack_id: rack_id.to_string(),
+            config_json: config_json.to_string(),
+            access_token: access_token.to_string(),
+            firmware_type: firmware_type.to_string(),
+            hardware_type: hardware_type.to_string(),
+            nodes: Some(rms::NodeSet { devices }),
+            force_update,
+            component_filters: rms_component_filters_from_components(
+                components,
+                machine_count > 0,
+                switch_count > 0,
+            ),
+        })
         .await
         .map_err(|error| {
             StateHandlerError::GenericError(eyre::eyre!(
-                "failed to submit firmware object apply to RMS: {}",
-                rack_manager_error("apply_firmware_object", error)
+                "failed to submit firmware object JSON apply to RMS: {}",
+                error
             ))
         })?;
 
     let batch_response = response.response.as_ref();
-    let parent_job_id = batch_response.and_then(|batch_response| {
-        (!batch_response.job_id.is_empty()).then(|| batch_response.job_id.clone())
-    });
+    let batch_status = batch_response
+        .map(|batch_response| batch_response.status)
+        .unwrap_or(rms::ReturnCode::Failure as i32);
+    let batch_job_id = batch_response
+        .map(|batch_response| batch_response.job_id.as_str())
+        .unwrap_or_default();
+    if batch_status != rms::ReturnCode::Success as i32
+        && batch_job_id.is_empty()
+        && response.node_jobs.is_empty()
+    {
+        let message = batch_response
+            .map(|batch_response| batch_response.message.as_str())
+            .unwrap_or_default();
+        let message = if message.is_empty() {
+            "RMS returned failure for ApplyFirmwareObjectFromJSON".to_string()
+        } else {
+            message.to_string()
+        };
+        return Err(StateHandlerError::GenericError(eyre::eyre!(message)));
+    }
+
+    let parent_job_id = (!batch_job_id.is_empty()).then(|| batch_job_id.to_string());
     let child_jobs = response
         .node_jobs
         .iter()
         .map(|child| (child.node_id.clone(), child.job_id.clone()))
         .collect::<std::collections::HashMap<_, _>>();
-    let batch_failed = batch_response
-        .map(|batch_response| batch_response.status != rms::ReturnCode::Success as i32)
-        .unwrap_or(true);
-    let batch_error = batch_response
-        .map(|batch_response| batch_response.message.clone())
-        .filter(|message| !message.is_empty());
-    if batch_failed && parent_job_id.is_none() && response.node_jobs.is_empty() {
-        let message = batch_error
-            .as_deref()
-            .unwrap_or("RMS rejected firmware object apply");
-        return Err(StateHandlerError::GenericError(eyre::eyre!("{message}")));
-    }
+    let node_errors = batch_response
+        .map(|batch_response| {
+            batch_response
+                .node_results
+                .iter()
+                .filter(|result| {
+                    result.status != rms::ReturnCode::Success as i32
+                        || !result.error_message.is_empty()
+                })
+                .map(|result| (result.node_id.clone(), result.error_message.clone()))
+                .collect::<std::collections::HashMap<_, _>>()
+        })
+        .unwrap_or_default();
 
     let mut job = model::rack::FirmwareUpgradeJob {
-        firmware_id: Some(response.object_id.clone()),
         job_id: parent_job_id.clone(),
-        batch_job_ids: parent_job_id.iter().cloned().collect(),
+        firmware_id: Some(response.object_id),
         started_at: Some(started_at),
+        batch_job_ids: parent_job_id.iter().cloned().collect(),
+        machines: machines
+            .into_iter()
+            .map(|device| {
+                firmware_device_status(device, parent_job_id.clone(), &child_jobs, &node_errors)
+            })
+            .collect(),
+        switches: switches
+            .into_iter()
+            .map(|device| {
+                firmware_device_status(device, parent_job_id.clone(), &child_jobs, &node_errors)
+            })
+            .collect(),
         ..Default::default()
     };
 
-    let build_status = |device: &FirmwareUpgradeDeviceInfo| {
-        let mut status = FirmwareUpgradeDeviceStatus {
-            node_id: device.node_id.clone(),
-            mac: device.mac.clone(),
-            bmc_ip: device.bmc_ip.clone(),
-            status: "in_progress".into(),
-            job_id: None,
-            parent_job_id: parent_job_id.clone(),
-            error_message: None,
-        };
-
-        if let Some(job_id) = child_jobs.get(&device.node_id) {
-            status.job_id = Some(job_id.clone());
-        } else {
-            status.status = "failed".into();
-            status.error_message = Some(
-                batch_error
-                    .clone()
-                    .unwrap_or_else(|| "RMS did not return a child firmware job".into()),
-            );
-        }
-
-        if batch_failed && status.job_id.is_none() {
-            status.status = "failed".into();
-        }
-
-        status
-    };
-
-    for device in &inventory.machines {
-        job.machines.push(build_status(device));
-    }
-    for device in &inventory.switches {
-        job.switches.push(build_status(device));
-    }
+    tracing::info!(
+        rack_id = %rack_id,
+        parent_job_id = ?job.job_id,
+        object_id = ?job.firmware_id,
+        machine_count,
+        switch_count,
+        "RMS firmware object JSON apply submitted",
+    );
 
     let all_devices: Vec<_> = job.all_devices().collect();
     let failed = all_devices
@@ -899,63 +1019,36 @@ pub async fn handle_maintenance(
             rack_firmware_upgrade,
         } => match rack_firmware_upgrade {
             FirmwareUpgradeState::Start => {
-                let Some(profile) = super::resolve_profile(id, rack_profile_id, ctx) else {
+                let Some((config_json, components, access_token, force_update)) =
+                    requested_firmware_object_json_upgrade(scope)
+                else {
                     return Ok(skip_firmware_upgrade_outcome(
                         id,
-                        "rack profile is missing or unknown",
+                        "firmware object JSON source is not configured for rack maintenance; skipping firmware update",
                         scope,
                     ));
                 };
-                let rack_hardware_type = profile_hardware_type_wire_value(profile);
-                let (requested_fw_version, requested_components) = scope
-                    .activities
-                    .iter()
-                    .find_map(|a| match a {
-                        MaintenanceActivity::FirmwareUpgrade {
-                            firmware_version,
-                            components,
-                        } => Some((firmware_version.as_deref(), components.as_slice())),
-                        _ => None,
-                    })
-                    .unwrap_or((None, &[]));
-
-                let Some(rms_client) = ctx.services.rms_client.as_ref() else {
-                    return transition_to_rack_error_with_firmware_job(
+                let Some(config_json) = config_json.filter(|json| !json.trim().is_empty()) else {
+                    return transition_to_rack_error(
                         id,
                         state,
-                        requested_fw_version.unwrap_or_default(),
-                        "RMS client not configured",
+                        "firmware object JSON source is configured but target firmware version does not contain SOT JSON",
                         ctx,
                     )
                     .await;
                 };
-
-                if requested_fw_version.is_none() {
-                    let default_available = rms_client
-                        .list_firmware_objects(rms::ListFirmwareObjectsRequest {
-                            metadata: None,
-                            only_available: true,
-                            hardware_type: rack_hardware_type.clone(),
-                        })
-                        .await
-                        .map_err(|error| {
-                            StateHandlerError::GenericError(eyre::eyre!(
-                                "failed to list RMS firmware objects: {}",
-                                rack_manager_error("list_firmware_objects", error)
-                            ))
-                        })?
-                        .objects
-                        .iter()
-                        .any(|object| object.is_default);
-                    if !default_available {
-                        return Ok(skip_firmware_upgrade_outcome(
-                            id,
-                            "no default firmware object configured in RMS",
-                            scope,
-                        ));
-                    }
-                }
-
+                let Some(rms_client) = ctx.services.rms_client.as_ref() else {
+                    return transition_to_rack_error(id, state, "RMS client not configured", ctx)
+                        .await;
+                };
+                let profile = super::resolve_profile(id, rack_profile_id, ctx);
+                let rack_hardware_type = profile
+                    .map(profile_hardware_type_wire_value)
+                    .unwrap_or_default();
+                let firmware_type = profile
+                    .map(firmware_type_for_profile)
+                    .unwrap_or("prod")
+                    .to_string();
                 let inventory = load_rack_firmware_inventory(
                     &ctx.services.db_pool,
                     ctx.services.credential_manager.as_ref(),
@@ -969,7 +1062,7 @@ pub async fn handle_maintenance(
                     ))
                 })?;
                 let inventory = filter_inventory_by_scope(inventory, scope);
-                let firmware_type = firmware_type_for_profile(profile);
+
                 if inventory.machines.is_empty() && inventory.switches.is_empty() {
                     return Ok(skip_firmware_upgrade_outcome(
                         id,
@@ -978,57 +1071,36 @@ pub async fn handle_maintenance(
                     ));
                 }
 
-                let mut devices =
-                    Vec::with_capacity(inventory.machines.len() + inventory.switches.len());
-                devices.extend(
-                    inventory
-                        .machines
-                        .iter()
-                        .map(|device| build_new_node_info(id, device, rms::NodeType::Compute)),
-                );
-                devices.extend(
-                    inventory
-                        .switches
-                        .iter()
-                        .map(|device| build_new_node_info(id, device, rms::NodeType::Switch)),
-                );
-                let request = rms::ApplyFirmwareObjectRequest {
-                    metadata: None,
-                    rack_id: id.to_string(),
-                    object_id: requested_fw_version.unwrap_or_default().to_string(),
-                    firmware_type: firmware_type.to_string(),
-                    hardware_type: rack_hardware_type.clone(),
-                    components: requested_components.to_vec(),
-                    nodes: Some(rms::NodeSet { devices }),
-                    force_update: false,
-                    component_filters: std::collections::HashMap::new(),
-                };
-
                 tracing::info!(
                     rack_id = %id,
-                    rack_hardware_type = %rack_hardware_type,
-                    firmware_id = %request.object_id,
-                    firmware_type,
+                    firmware_type = %firmware_type,
+                    hardware_type = %rack_hardware_type,
+                    force_update,
                     machine_count = inventory.machines.len(),
                     switch_count = inventory.switches.len(),
-                    "Rack firmware upgrade starting"
+                    "Rack firmware object JSON apply starting",
                 );
-                let mut job = match rms_start_firmware_upgrade(
+
+                let mut job = match rms_start_firmware_upgrade_from_json(
                     rms_client.as_ref(),
-                    request,
-                    &inventory,
+                    id,
+                    &config_json,
+                    &access_token,
+                    &firmware_type,
+                    &rack_hardware_type,
+                    force_update,
+                    &components,
+                    inventory.machines.clone(),
+                    inventory.switches.clone(),
                 )
                 .await
                 {
                     Ok(job) => job,
-                    Err(error) if requested_fw_version.is_none() => {
-                        return Ok(skip_firmware_upgrade_outcome(id, error.to_string(), scope));
-                    }
                     Err(error) => {
                         return transition_to_rack_error_with_firmware_job(
                             id,
                             state,
-                            requested_fw_version.unwrap_or_default(),
+                            "firmware-object-json",
                             error.to_string(),
                             ctx,
                         )
@@ -1772,40 +1844,14 @@ pub async fn handle_maintenance(
 #[cfg(test)]
 mod tests {
     use model::rack::{
-        ConfigureNmxClusterState, FirmwareUpgradeDeviceInfo, FirmwareUpgradeState,
-        MaintenanceActivity, MaintenanceScope, NvosUpdateState, RackMaintenanceState,
-        RackPowerState,
+        ConfigureNmxClusterState, FirmwareUpgradeState, MaintenanceActivity, MaintenanceScope,
+        NvosUpdateState, RackMaintenanceState, RackPowerState,
     };
 
     use super::{
-        filter_inventory_by_scope, first_maintenance_state, implicit_nvos_update_requested,
-        next_state_after_configure, next_state_after_firmware, next_state_after_nvos,
+        first_maintenance_state, implicit_nvos_update_requested, next_state_after_configure,
+        next_state_after_firmware, next_state_after_nvos,
     };
-    use crate::rack::firmware_update::RackFirmwareInventory;
-
-    fn test_machine_id(byte: u8) -> carbide_uuid::machine::MachineId {
-        use carbide_uuid::machine::{MachineIdSource, MachineType};
-        carbide_uuid::machine::MachineId::new(MachineIdSource::Tpm, [byte; 32], MachineType::Host)
-    }
-
-    fn test_switch_id(byte: u8) -> carbide_uuid::switch::SwitchId {
-        use carbide_uuid::switch::{SwitchIdSource, SwitchType};
-        carbide_uuid::switch::SwitchId::new(SwitchIdSource::Tpm, [byte; 32], SwitchType::NvLink)
-    }
-
-    fn test_device_info(node_id: &str) -> FirmwareUpgradeDeviceInfo {
-        FirmwareUpgradeDeviceInfo {
-            node_id: node_id.to_string(),
-            mac: "AA:BB:CC:DD:EE:FF".to_string(),
-            bmc_ip: "10.0.0.1".to_string(),
-            bmc_username: "admin".to_string(),
-            bmc_password: "pass".to_string(),
-            os_mac: None,
-            os_ip: None,
-            os_username: None,
-            os_password: None,
-        }
-    }
 
     // ── first_maintenance_state ─────────────────────────────────────────
 
@@ -1826,6 +1872,8 @@ mod tests {
             activities: vec![MaintenanceActivity::FirmwareUpgrade {
                 firmware_version: None,
                 components: vec![],
+                access_token: None,
+                force_update: false,
             }],
             ..Default::default()
         };
@@ -1911,6 +1959,8 @@ mod tests {
             activities: vec![MaintenanceActivity::FirmwareUpgrade {
                 firmware_version: None,
                 components: vec![],
+                access_token: None,
+                force_update: false,
             }],
             ..Default::default()
         };
@@ -1948,6 +1998,8 @@ mod tests {
                 MaintenanceActivity::FirmwareUpgrade {
                     firmware_version: None,
                     components: vec![],
+                    access_token: None,
+                    force_update: false,
                 },
                 MaintenanceActivity::PowerSequence,
             ],
@@ -1965,6 +2017,8 @@ mod tests {
             activities: vec![MaintenanceActivity::FirmwareUpgrade {
                 firmware_version: None,
                 components: vec![],
+                access_token: None,
+                force_update: false,
             }],
             ..Default::default()
         };
@@ -1981,6 +2035,8 @@ mod tests {
                 MaintenanceActivity::FirmwareUpgrade {
                     firmware_version: None,
                     components: vec![],
+                    access_token: None,
+                    force_update: false,
                 },
                 MaintenanceActivity::NvosUpdate {
                     firmware_object_id: Some("fw-nvos".into()),
@@ -2048,6 +2104,8 @@ mod tests {
                 MaintenanceActivity::FirmwareUpgrade {
                     firmware_version: None,
                     components: vec![],
+                    access_token: None,
+                    force_update: false,
                 },
                 MaintenanceActivity::ConfigureNmxCluster,
             ],
@@ -2057,99 +2115,5 @@ mod tests {
             next_state_after_configure(&scope),
             RackMaintenanceState::Completed,
         );
-    }
-
-    // ── filter_inventory_by_scope ───────────────────────────────────────
-
-    fn sample_inventory() -> RackFirmwareInventory {
-        let m1 = test_machine_id(1);
-        let m2 = test_machine_id(2);
-        let s1 = test_switch_id(1);
-        let s2 = test_switch_id(2);
-        RackFirmwareInventory {
-            machine_ids: vec![m1, m2],
-            switch_ids: vec![s1, s2],
-            machines: vec![
-                test_device_info(&m1.to_string()),
-                test_device_info(&m2.to_string()),
-            ],
-            switches: vec![
-                test_device_info(&s1.to_string()),
-                test_device_info(&s2.to_string()),
-            ],
-        }
-    }
-
-    #[test]
-    fn filter_inventory_full_rack_is_noop() {
-        let inventory = sample_inventory();
-        let scope = MaintenanceScope::default();
-        let filtered = filter_inventory_by_scope(inventory, &scope);
-        assert_eq!(filtered.machine_ids.len(), 2);
-        assert_eq!(filtered.switch_ids.len(), 2);
-        assert_eq!(filtered.machines.len(), 2);
-        assert_eq!(filtered.switches.len(), 2);
-    }
-
-    #[test]
-    fn filter_inventory_partial_machines_only() {
-        let inventory = sample_inventory();
-        let m1 = test_machine_id(1);
-        let scope = MaintenanceScope {
-            machine_ids: vec![m1],
-            ..Default::default()
-        };
-        let filtered = filter_inventory_by_scope(inventory, &scope);
-        assert_eq!(filtered.machine_ids, vec![m1]);
-        assert_eq!(filtered.machines.len(), 1);
-        assert_eq!(filtered.machines[0].node_id, m1.to_string());
-        assert!(filtered.switch_ids.is_empty());
-        assert!(filtered.switches.is_empty());
-    }
-
-    #[test]
-    fn filter_inventory_partial_switches_only() {
-        let inventory = sample_inventory();
-        let s2 = test_switch_id(2);
-        let scope = MaintenanceScope {
-            switch_ids: vec![s2],
-            ..Default::default()
-        };
-        let filtered = filter_inventory_by_scope(inventory, &scope);
-        assert!(filtered.machine_ids.is_empty());
-        assert!(filtered.machines.is_empty());
-        assert_eq!(filtered.switch_ids, vec![s2]);
-        assert_eq!(filtered.switches.len(), 1);
-        assert_eq!(filtered.switches[0].node_id, s2.to_string());
-    }
-
-    #[test]
-    fn filter_inventory_partial_both() {
-        let inventory = sample_inventory();
-        let m2 = test_machine_id(2);
-        let s1 = test_switch_id(1);
-        let scope = MaintenanceScope {
-            machine_ids: vec![m2],
-            switch_ids: vec![s1],
-            ..Default::default()
-        };
-        let filtered = filter_inventory_by_scope(inventory, &scope);
-        assert_eq!(filtered.machine_ids, vec![m2]);
-        assert_eq!(filtered.machines.len(), 1);
-        assert_eq!(filtered.switch_ids, vec![s1]);
-        assert_eq!(filtered.switches.len(), 1);
-    }
-
-    #[test]
-    fn filter_inventory_unknown_id_excluded() {
-        let inventory = sample_inventory();
-        let unknown = test_machine_id(99);
-        let scope = MaintenanceScope {
-            machine_ids: vec![unknown],
-            ..Default::default()
-        };
-        let filtered = filter_inventory_by_scope(inventory, &scope);
-        assert!(filtered.machine_ids.is_empty());
-        assert!(filtered.machines.is_empty());
     }
 }

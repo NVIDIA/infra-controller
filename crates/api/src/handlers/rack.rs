@@ -512,6 +512,14 @@ pub(crate) async fn on_demand_rack_maintenance(
                     Some(fw.firmware_version.clone())
                 },
                 components: fw.components.clone(),
+                access_token: fw.access_token.as_ref().and_then(|token| {
+                    if token.trim().is_empty() {
+                        None
+                    } else {
+                        Some(token.clone())
+                    }
+                }),
+                force_update: fw.force_update,
             }),
             Some(ProtoActivity::NvosUpdate(nvos)) => Ok(MaintenanceActivity::NvosUpdate {
                 firmware_object_id: if nvos.firmware_object_id.is_empty() {
@@ -661,6 +669,8 @@ pub(crate) async fn on_demand_rack_maintenance(
             scope.should_run(&MaintenanceActivity::FirmwareUpgrade {
                 firmware_version: None,
                 components: vec![],
+                access_token: None,
+                force_update: false,
             })
         })
     {

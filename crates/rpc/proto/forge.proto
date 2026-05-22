@@ -5809,11 +5809,16 @@ message MachineValidationOnDemandResponse {
 }
 
 message FirmwareUpgradeActivity {
-  // Target firmware version. When empty, RMS uses its default/latest version.
+  // Target firmware version for legacy paths. When access_token is set,
+  // this field carries the SOT JSON passed to RMS ApplyFirmwareObjectFromJSON.
   string firmware_version = 1;
   // Firmware components to update (e.g. "BMC", "CPLD", "BIOS").
   // When empty, all components are updated.
   repeated string components = 2;
+  // Used only for RMS artifact download when firmware_version contains SOT JSON.
+  // NICO does not persist it.
+  optional string access_token = 3;
+  bool force_update = 4;
 }
 
 message NvosUpdateActivity {
@@ -7992,9 +7997,8 @@ message UpdatePowerShelfFirmwareTarget {
   repeated PowerShelfComponent components = 2;
 }
 
-// Whole-rack firmware-object update target. All eligible devices in each
-// listed rack are updated according to the firmware object identified by
-// `target_version`.
+// Whole-rack firmware update target. All eligible compute and switch devices
+// in each listed rack are updated.
 message UpdateFirmwareObjectTarget {
   RackIdList rack_ids = 1;
 }
@@ -8006,7 +8010,10 @@ message UpdateComponentFirmwareRequest {
     UpdatePowerShelfFirmwareTarget power_shelves = 3;
     UpdateFirmwareObjectTarget racks = 5;
   }
+
   string target_version = 4;
+  optional string access_token = 6;
+  bool force_update = 7;
 }
 
 message UpdateComponentFirmwareResponse {

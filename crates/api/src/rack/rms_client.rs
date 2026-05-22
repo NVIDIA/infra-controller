@@ -69,6 +69,8 @@ pub mod test_support {
         submitted_firmware_object_apply_requests: Arc<Mutex<Vec<rms::ApplyFirmwareObjectRequest>>>,
         queued_firmware_object_apply_responses:
             Arc<Mutex<VecDeque<rms::ApplyFirmwareObjectResponse>>>,
+        submitted_firmware_object_from_json_apply_requests:
+            Arc<Mutex<Vec<rms::ApplyFirmwareObjectFromJsonRequest>>>,
         firmware_job_statuses: Arc<Mutex<HashMap<String, rms::GetFirmwareJobStatusResponse>>>,
         firmware_job_errors: Arc<Mutex<HashMap<String, String>>>,
         submitted_apply_switch_system_image_requests:
@@ -95,6 +97,9 @@ pub mod test_support {
                 queued_firmware_responses: Arc::new(Mutex::new(VecDeque::new())),
                 submitted_firmware_object_apply_requests: Arc::new(Mutex::new(Vec::new())),
                 queued_firmware_object_apply_responses: Arc::new(Mutex::new(VecDeque::new())),
+                submitted_firmware_object_from_json_apply_requests: Arc::new(
+                    Mutex::new(Vec::new()),
+                ),
                 firmware_job_statuses: Arc::new(Mutex::new(HashMap::new())),
                 firmware_job_errors: Arc::new(Mutex::new(HashMap::new())),
                 submitted_apply_switch_system_image_requests: Arc::new(Mutex::new(Vec::new())),
@@ -134,6 +139,9 @@ pub mod test_support {
                     .clone(),
                 queued_firmware_object_apply_responses: self
                     .queued_firmware_object_apply_responses
+                    .clone(),
+                submitted_firmware_object_from_json_apply_requests: self
+                    .submitted_firmware_object_from_json_apply_requests
                     .clone(),
                 firmware_job_statuses: self.firmware_job_statuses.clone(),
                 firmware_job_errors: self.firmware_job_errors.clone(),
@@ -228,6 +236,15 @@ pub mod test_support {
                 .clone()
         }
 
+        pub async fn submitted_apply_firmware_object_from_json_requests(
+            &self,
+        ) -> Vec<rms::ApplyFirmwareObjectFromJsonRequest> {
+            self.submitted_firmware_object_from_json_apply_requests
+                .lock()
+                .await
+                .clone()
+        }
+
         pub async fn set_switch_system_image_job_status(
             &self,
             response: rms::GetSwitchSystemImageJobStatusResponse,
@@ -305,6 +322,8 @@ pub mod test_support {
         submitted_firmware_object_apply_requests: Arc<Mutex<Vec<rms::ApplyFirmwareObjectRequest>>>,
         queued_firmware_object_apply_responses:
             Arc<Mutex<VecDeque<rms::ApplyFirmwareObjectResponse>>>,
+        submitted_firmware_object_from_json_apply_requests:
+            Arc<Mutex<Vec<rms::ApplyFirmwareObjectFromJsonRequest>>>,
         firmware_job_statuses: Arc<Mutex<HashMap<String, rms::GetFirmwareJobStatusResponse>>>,
         firmware_job_errors: Arc<Mutex<HashMap<String, String>>>,
         submitted_apply_switch_system_image_requests:
@@ -596,9 +615,18 @@ pub mod test_support {
         }
         async fn apply_firmware_object_from_json(
             &self,
-            _cmd: rms::ApplyFirmwareObjectFromJsonRequest,
+            cmd: rms::ApplyFirmwareObjectFromJsonRequest,
         ) -> Result<rms::ApplyFirmwareObjectResponse, RackManagerError> {
-            Ok(rms::ApplyFirmwareObjectResponse::default())
+            self.submitted_firmware_object_from_json_apply_requests
+                .lock()
+                .await
+                .push(cmd);
+            Ok(self
+                .queued_firmware_object_apply_responses
+                .lock()
+                .await
+                .pop_front()
+                .unwrap_or_default())
         }
         async fn apply_switch_system_image_from_json(
             &self,

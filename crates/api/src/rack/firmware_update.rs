@@ -15,7 +15,6 @@
  * limitations under the License.
  */
 
-use carbide_uuid::machine::MachineId;
 use carbide_uuid::rack::RackId;
 use carbide_uuid::switch::SwitchId;
 use db::{machine as db_machine, machine_topology as db_machine_topology, switch as db_switch};
@@ -31,9 +30,9 @@ use sqlx::PgPool;
 
 #[derive(Debug, Clone)]
 pub struct RackFirmwareInventory {
-    pub machine_ids: Vec<MachineId>,
-    pub switch_ids: Vec<SwitchId>,
+    pub machine_ids: Vec<carbide_uuid::machine::MachineId>,
     pub machines: Vec<FirmwareUpgradeDeviceInfo>,
+    pub switch_ids: Vec<SwitchId>,
     pub switches: Vec<FirmwareUpgradeDeviceInfo>,
 }
 
@@ -111,8 +110,8 @@ pub async fn load_rack_firmware_inventory(
 
     Ok(RackFirmwareInventory {
         machine_ids,
-        switch_ids,
         machines,
+        switch_ids,
         switches,
     })
 }

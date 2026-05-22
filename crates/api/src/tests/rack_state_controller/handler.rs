@@ -482,6 +482,8 @@ async fn test_on_demand_rack_maintenance_schedules_firmware_and_nvos_scope(
                                 rpc::forge::FirmwareUpgradeActivity {
                                     firmware_version: "fw-mixed".to_string(),
                                     components: vec!["BMC".to_string()],
+                                    access_token: None,
+                                    force_update: false,
                                 },
                             ),
                         ),
@@ -513,6 +515,7 @@ async fn test_on_demand_rack_maintenance_schedules_firmware_and_nvos_scope(
         MaintenanceActivity::FirmwareUpgrade {
             firmware_version: Some(id),
             components,
+            ..
         } if id == "fw-mixed" && components == &vec!["BMC".to_string()]
     ));
     assert!(matches!(
@@ -1363,10 +1366,11 @@ async fn test_firmware_upgrade_start_with_unavailable_default_advances_to_nvos_u
     Ok(())
 }
 
-/// test_firmware_upgrade_start_transitions_to_wait_for_complete verifies that
-/// Maintenance::FirmwareUpgrade(Start) transitions to WaitForComplete.
+/// test_firmware_upgrade_start_with_default_skips_without_json verifies that
+/// Maintenance::FirmwareUpgrade(Start) skips firmware flashing when no
+/// firmware object JSON source is configured for rack maintenance.
 #[crate::sqlx_test]
-async fn test_firmware_upgrade_start_transitions_to_wait_for_complete(
+async fn test_firmware_upgrade_start_with_default_skips_without_json(
     pool: sqlx::PgPool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let env = create_test_env_with_overrides(
@@ -1379,41 +1383,6 @@ async fn test_firmware_upgrade_start_transitions_to_wait_for_complete(
     .await;
     let (rack_id, host) = create_single_compute_rack(&env, &pool).await?;
     insert_default_firmware_object(&env, "fw-default", RackHardwareType::any(), true).await;
-    {
-        let mut txn = pool.begin().await?;
-        db::machine::update_rack_fw_details(
-            txn.as_mut(),
-            &host.host_snapshot.id,
-            Some(&model::rack::RackFirmwareUpgradeStatus {
-                task_id: "stale-rack-job".to_string(),
-                status: RackFirmwareUpgradeState::Completed,
-                started_at: Some(chrono::Utc::now() - chrono::Duration::minutes(10)),
-                ended_at: Some(chrono::Utc::now() - chrono::Duration::minutes(9)),
-            }),
-        )
-        .await?;
-        txn.commit().await?;
-    }
-    env.rms_sim
-        .queue_apply_firmware_object_response(
-            librms::protos::rack_manager::ApplyFirmwareObjectResponse {
-                response: Some(librms::protos::rack_manager::NodeBatchResponse {
-                    status: librms::protos::rack_manager::ReturnCode::Success as i32,
-                    message: "queued".to_string(),
-                    total_nodes: 1,
-                    successful_nodes: 1,
-                    failed_nodes: 0,
-                    job_id: "batch-job-1".to_string(),
-                    ..Default::default()
-                }),
-                node_jobs: vec![librms::protos::rack_manager::NodeFirmwareJobInfo {
-                    node_id: host.host_snapshot.id.to_string(),
-                    job_id: "child-job-1".to_string(),
-                }],
-                object_id: "fw-default".to_string(),
-            },
-        )
-        .await;
 
     let mut rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
 
@@ -1445,12 +1414,14 @@ async fn test_firmware_upgrade_start_transitions_to_wait_for_complete(
                 matches!(
                     next_state,
                     RackState::Maintenance {
-                        maintenance_state: RackMaintenanceState::FirmwareUpgrade {
-                            rack_firmware_upgrade: FirmwareUpgradeState::WaitForComplete,
+                        maintenance_state: RackMaintenanceState::NVOSUpdate {
+                            nvos_update: NvosUpdateState::Start {
+                                firmware_object_id: None,
+                            },
                         },
                     }
                 ),
-                "FirmwareUpgrade(Start) should transition to WaitForComplete, got {:?}",
+                "FirmwareUpgrade(Start) should skip firmware without JSON and advance to NVOSUpdate, got {:?}",
                 next_state
             );
         }
@@ -1461,20 +1432,10 @@ async fn test_firmware_upgrade_start_transitions_to_wait_for_complete(
     }
 
     let requests = env.rms_sim.submitted_apply_firmware_object_requests().await;
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].nodes.as_ref().unwrap().devices.len(), 1);
-    assert_eq!(
-        requests[0].nodes.as_ref().unwrap().devices[0].node_id,
-        host.host_snapshot.id.to_string()
+    assert!(
+        requests.is_empty(),
+        "firmware apply should not be submitted without a firmware object JSON source"
     );
-
-    let persisted_rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
-    let job = persisted_rack
-        .firmware_upgrade_job
-        .expect("rack firmware job should be persisted");
-    assert_eq!(job.batch_job_ids, vec!["batch-job-1".to_string()]);
-    assert_eq!(job.machines.len(), 1);
-    assert_eq!(job.machines[0].job_id.as_deref(), Some("child-job-1"));
 
     let machine = db::machine::find_one(
         &pool,
@@ -1483,22 +1444,7 @@ async fn test_firmware_upgrade_start_transitions_to_wait_for_complete(
     )
     .await?
     .expect("machine should exist");
-    assert!(machine.host_reprovision_requested.is_some());
-    assert!(
-        machine.rack_fw_details.is_none(),
-        "rack firmware details should be cleared at the start of a new rack firmware cycle"
-    );
-    assert!(
-        job.started_at.is_some_and(|started_at| {
-            started_at
-                >= machine
-                    .host_reprovision_requested
-                    .as_ref()
-                    .expect("rack reprovision request should exist")
-                    .requested_at
-        }),
-        "rack firmware job start time should be at or after the rack reprovision request"
-    );
+    assert!(machine.host_reprovision_requested.is_none());
 
     Ok(())
 }
