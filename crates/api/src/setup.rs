@@ -998,7 +998,6 @@ pub async fn initialize_and_start_controllers<'a>(
 
             emitter_builder = emitter_builder.hook(Box::new(MqttStateChangeHook::new(
                 client,
-                db_pool.clone(),
                 join_set,
                 config.publish_timeout,
                 config.topic_prefix.clone(),

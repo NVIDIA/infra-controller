@@ -17,6 +17,8 @@
 
 //! State Controller IO implementation for Machines
 
+use std::collections::BTreeMap;
+
 use carbide_uuid::machine::MachineId;
 use config_version::{ConfigVersion, Versioned};
 use db::{self, DatabaseError};
@@ -29,6 +31,7 @@ use model::machine::{
     MachineValidatingState, ManagedHostState, ManagedHostStateSnapshot, MeasuringState,
     SpdmMeasuringState, ValidationState,
 };
+use model::machine_interface::InterfaceType;
 use sqlx::PgConnection;
 
 use crate::state_controller::io::StateControllerIO;
@@ -116,6 +119,20 @@ impl StateControllerIO for MachineStateControllerIO {
         let current = state.host_snapshot.state.clone();
 
         Ok(Versioned::new(current.value, current.version))
+    }
+
+    fn state_change_attributes(&self, state: &Self::State) -> BTreeMap<String, String> {
+        let mut attributes = BTreeMap::new();
+        if let Some(bmc_mac_address) = state
+            .host_snapshot
+            .interfaces
+            .iter()
+            .find(|interface| interface.interface_type == InterfaceType::Bmc)
+            .map(|interface| interface.mac_address.to_string())
+        {
+            attributes.insert("bmc_mac_address".to_string(), bmc_mac_address);
+        }
+        attributes
     }
 
     async fn persist_controller_state(

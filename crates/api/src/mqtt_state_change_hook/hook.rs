@@ -21,7 +21,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use carbide_uuid::machine::MachineId;
-use chrono::{DateTime, Utc};
 use model::machine::ManagedHostState;
 use mqttea::{MqtteaClient, MqtteaClientError};
 use opentelemetry::metrics::Meter;
@@ -35,44 +34,12 @@ use crate::mqtt_state_change_hook::message::ManagedHostStateChangeMessage;
 use crate::mqtt_state_change_hook::metrics::MqttHookMetrics;
 use crate::state_controller::state_change_emitter::{StateChangeEvent, StateChangeHook};
 
-/// Internal queue item containing a state change message with deadline.
+/// Internal queue item containing pre-serialized MQTT message with deadline.
 struct QueuedMessage {
     topic: String,
-    machine_id: MachineId,
-    managed_host_state: ManagedHostState,
-    timestamp: DateTime<Utc>,
+    payload: Vec<u8>,
     /// Deadline by which this message must be published.
     deadline: Instant,
-}
-
-#[async_trait::async_trait]
-trait BmcMacAddressLookup: Send + Sync + 'static {
-    async fn lookup(&self, machine_id: MachineId) -> Result<Option<String>, sqlx::Error>;
-}
-
-struct DatabaseBmcMacAddressLookup {
-    db_pool: sqlx::PgPool,
-}
-
-#[async_trait::async_trait]
-impl BmcMacAddressLookup for DatabaseBmcMacAddressLookup {
-    async fn lookup(&self, machine_id: MachineId) -> Result<Option<String>, sqlx::Error> {
-        let row: Option<(String,)> = sqlx::query_as(
-            r#"
-            SELECT mac_address::text
-            FROM machine_interfaces
-            WHERE interface_type = 'Bmc'
-                AND machine_id = $1
-            ORDER BY mac_address
-            LIMIT 1
-            "#,
-        )
-        .bind(machine_id)
-        .fetch_optional(&self.db_pool)
-        .await?;
-
-        Ok(row.map(|(bmc_mac_address,)| bmc_mac_address))
-    }
 }
 
 /// Trait for MQTT publishing, enabling test mocks.
@@ -120,29 +87,6 @@ impl MqttStateChangeHook {
     /// - `forge_dsx_event_bus_queue_depth`: Current queue depth
     pub fn new<P: MqttPublisher>(
         client: P,
-        db_pool: sqlx::PgPool,
-        join_set: &mut JoinSet<()>,
-        publish_timeout: Duration,
-        topic_prefix: String,
-        queue_capacity: usize,
-        meter: &Meter,
-        cancel_token: CancellationToken,
-    ) -> Self {
-        Self::new_with_lookup(
-            client,
-            DatabaseBmcMacAddressLookup { db_pool },
-            join_set,
-            publish_timeout,
-            topic_prefix,
-            queue_capacity,
-            meter,
-            cancel_token,
-        )
-    }
-
-    fn new_with_lookup<P: MqttPublisher, L: BmcMacAddressLookup>(
-        client: P,
-        bmc_mac_lookup: L,
         join_set: &mut JoinSet<()>,
         publish_timeout: Duration,
         topic_prefix: String,
@@ -155,7 +99,6 @@ impl MqttStateChangeHook {
         join_set.spawn(process_events(
             receiver,
             client,
-            bmc_mac_lookup,
             metrics.clone(),
             cancel_token,
         ));
@@ -174,63 +117,49 @@ impl MqttStateChangeHook {
 
 impl StateChangeHook<MachineId, ManagedHostState> for MqttStateChangeHook {
     fn on_state_changed(&self, event: &StateChangeEvent<'_, MachineId, ManagedHostState>) {
+        let bmc_mac_address = event.attributes.get("bmc_mac_address").map(String::as_str);
+        let message = ManagedHostStateChangeMessage {
+            machine_id: event.object_id,
+            bmc_mac_address,
+            managed_host_state: event.new_state,
+            timestamp: event.timestamp,
+        };
         let topic = self.build_topic(event.object_id);
 
-        let deadline = Instant::now() + self.publish_timeout;
-        let queued = QueuedMessage {
-            topic,
-            machine_id: *event.object_id,
-            managed_host_state: event.new_state.clone(),
-            timestamp: event.timestamp,
-            deadline,
-        };
-        if let Err(e) = self.sender.try_send(queued) {
-            tracing::warn!("MQTT state change event dropped (queue full): {e}");
-            self.metrics.record_overflow();
+        match message.to_json_bytes() {
+            Ok(payload) => {
+                let deadline = Instant::now() + self.publish_timeout;
+                let queued = QueuedMessage {
+                    topic,
+                    payload,
+                    deadline,
+                };
+                if let Err(e) = self.sender.try_send(queued) {
+                    tracing::warn!("MQTT state change event dropped (queue full): {e}");
+                    self.metrics.record_overflow();
+                }
+            }
+            Err(e) => {
+                tracing::error!(
+                    machine_id = %event.object_id,
+                    error = %e,
+                    "Failed to serialize state change message"
+                );
+                self.metrics.record_serialization_error();
+            }
         }
     }
 }
 
 /// Background task that processes queued messages and publishes to MQTT.
-async fn process_events<P: MqttPublisher, L: BmcMacAddressLookup>(
+async fn process_events<P: MqttPublisher>(
     mut receiver: mpsc::Receiver<QueuedMessage>,
     client: P,
-    bmc_mac_lookup: L,
     metrics: MqttHookMetrics,
     cancel_token: CancellationToken,
 ) {
     while let Some(Some(msg)) = cancel_token.run_until_cancelled(receiver.recv()).await {
-        let bmc_mac_address = match bmc_mac_lookup.lookup(msg.machine_id).await {
-            Ok(bmc_mac_address) => bmc_mac_address,
-            Err(error) => {
-                tracing::warn!(
-                    machine_id = %msg.machine_id,
-                    %error,
-                    "Failed to look up BMC MAC address for state change MQTT message"
-                );
-                None
-            }
-        };
-        let message = ManagedHostStateChangeMessage {
-            machine_id: &msg.machine_id,
-            bmc_mac_address: bmc_mac_address.as_deref(),
-            managed_host_state: &msg.managed_host_state,
-            timestamp: msg.timestamp,
-        };
-        let payload = match message.to_json_bytes() {
-            Ok(payload) => payload,
-            Err(error) => {
-                tracing::error!(
-                    machine_id = %msg.machine_id,
-                    %error,
-                    "Failed to serialize state change message"
-                );
-                metrics.record_serialization_error();
-                continue;
-            }
-        };
-
-        match timeout_at(msg.deadline, client.publish(&msg.topic, payload)).await {
+        match timeout_at(msg.deadline, client.publish(&msg.topic, msg.payload)).await {
             Ok(Ok(())) => {
                 tracing::debug!(topic = %msg.topic, "Published state change to MQTT");
                 metrics.record_success();
@@ -257,6 +186,7 @@ async fn process_events<P: MqttPublisher, L: BmcMacAddressLookup>(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use opentelemetry::global;
@@ -282,21 +212,14 @@ mod tests {
     fn make_event<'a>(
         id: &'a MachineId,
         state: &'a ManagedHostState,
+        attributes: &'a BTreeMap<String, String>,
     ) -> StateChangeEvent<'a, MachineId, ManagedHostState> {
         StateChangeEvent {
             object_id: id,
+            attributes,
             previous_state: None,
             new_state: state,
             timestamp: chrono::Utc::now(),
-        }
-    }
-
-    struct StaticBmcMacAddressLookup(Option<&'static str>);
-
-    #[async_trait::async_trait]
-    impl BmcMacAddressLookup for StaticBmcMacAddressLookup {
-        async fn lookup(&self, _machine_id: MachineId) -> Result<Option<String>, sqlx::Error> {
-            Ok(self.0.map(str::to_string))
         }
     }
 
@@ -308,9 +231,8 @@ mod tests {
         queue_capacity: usize,
         cancel_token: CancellationToken,
     ) -> MqttStateChangeHook {
-        MqttStateChangeHook::new_with_lookup(
+        MqttStateChangeHook::new(
             client,
-            StaticBmcMacAddressLookup(Some(TEST_BMC_MAC_ADDRESS)),
             join_set,
             publish_timeout,
             topic_prefix,
@@ -359,7 +281,11 @@ mod tests {
 
         let id = test_machine_id();
         let state = ManagedHostState::Ready;
-        hook.on_state_changed(&make_event(&id, &state));
+        let attributes = BTreeMap::from([(
+            "bmc_mac_address".to_string(),
+            TEST_BMC_MAC_ADDRESS.to_string(),
+        )]);
+        hook.on_state_changed(&make_event(&id, &state, &attributes));
 
         // Wait for publish to complete
         let (topic, payload) = receiver.recv().await.expect("should receive message");
@@ -419,7 +345,8 @@ mod tests {
 
         let id = test_machine_id();
         let state = ManagedHostState::Ready;
-        hook.on_state_changed(&make_event(&id, &state));
+        let attributes = BTreeMap::new();
+        hook.on_state_changed(&make_event(&id, &state, &attributes));
 
         // Wait for publish to start
         started.wait().await;
@@ -470,10 +397,11 @@ mod tests {
 
         let id = test_machine_id();
         let state = ManagedHostState::Ready;
+        let attributes = BTreeMap::new();
 
         // Push more events than queue can hold
         for _ in 0..(QUEUE_SIZE + 10) {
-            hook.on_state_changed(&make_event(&id, &state));
+            hook.on_state_changed(&make_event(&id, &state, &attributes));
         }
 
         // Release the gate - processor will drain queue
@@ -511,7 +439,8 @@ mod tests {
 
         let id = test_machine_id();
         let state = ManagedHostState::Ready;
-        hook.on_state_changed(&make_event(&id, &state));
+        let attributes = BTreeMap::new();
+        hook.on_state_changed(&make_event(&id, &state, &attributes));
 
         let (topic, _payload) = receiver.recv().await.expect("should receive message");
 

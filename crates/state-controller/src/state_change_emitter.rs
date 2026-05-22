@@ -17,6 +17,8 @@
 
 //! Generic state change emitter for broadcasting state transitions to registered hooks.
 
+use std::collections::BTreeMap;
+
 use chrono::{DateTime, Utc};
 
 /// Event emitted when a state transition occurs.
@@ -27,6 +29,8 @@ use chrono::{DateTime, Utc};
 pub struct StateChangeEvent<'a, Id, S> {
     /// The ID of the object that changed state.
     pub object_id: &'a Id,
+    /// Additional attributes from the object state at transition time.
+    pub attributes: &'a BTreeMap<String, String>,
     /// The state before the transition (if known).
     #[cfg(any(test, feature = "test-support"))]
     // not used by any hooks yet, only used in tests
@@ -131,8 +135,10 @@ mod tests {
     fn emit_event(emitter: &StateChangeEmitter<String, TestState>) {
         let id = "test".to_string();
         let state = TestState::A;
+        let attributes = BTreeMap::new();
         emitter.emit(StateChangeEvent {
             object_id: &id,
+            attributes: &attributes,
             previous_state: None,
             new_state: &state,
             timestamp: Utc::now(),

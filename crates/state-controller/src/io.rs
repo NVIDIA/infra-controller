@@ -14,6 +14,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::collections::BTreeMap;
+
 use config_version::{ConfigVersion, Versioned};
 use db::DatabaseError;
 use model::StateSla;
@@ -86,6 +88,11 @@ pub trait StateControllerIO: Send + Sync + std::fmt::Debug + 'static + Default {
         object_id: &Self::ObjectId,
         state: &Self::State,
     ) -> Result<Versioned<Self::ControllerState>, DatabaseError>;
+
+    /// Returns attributes to attach to state change events for this object.
+    fn state_change_attributes(&self, _state: &Self::State) -> BTreeMap<String, String> {
+        BTreeMap::new()
+    }
 
     /// Persists the object state that is owned by the state controller.
     ///
