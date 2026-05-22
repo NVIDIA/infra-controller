@@ -21,3 +21,6 @@ rm -rf /var/log/journal/*
 
 # Remove unnecessary kernel files
 rm -f /boot/System.map-* /boot/config-* /boot/vmlinu* /lib/modules/*/vmlinuz /boot/EFI/Linux/*
+
+# Make sure /tmp is empty
+rm -rf /tmp/*
