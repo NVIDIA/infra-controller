@@ -84,13 +84,7 @@ fn resolve_firmware_upgrade_source(
             "--access-token requires --activities firmware-upgrade".to_string(),
         ));
     }
-    if args.access_token.is_some() && firmware_version.trim().is_empty() {
-        return Err(CarbideCliError::GenericError(
-            "--access-token requires SOT JSON from --sot-json-file or --firmware-version"
-                .to_string(),
-        ));
-    }
-    if access_token.is_some() {
+    if access_token.is_some() && args.firmware_version.is_some() {
         serde_json::from_str::<serde_json::Value>(&firmware_version)?;
     }
 
@@ -155,4 +149,95 @@ pub async fn on_demand_rack_maintenance(
         .await?;
     println!("On-demand rack maintenance scheduled successfully.");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use carbide_uuid::rack::RackId;
+
+    use super::*;
+
+    fn options() -> MaintenanceOptions {
+        MaintenanceOptions {
+            rack: RackId::new("rack-test"),
+            machine_ids: None,
+            switch_ids: None,
+            power_shelf_ids: None,
+            activities: None,
+            firmware_version: None,
+            sot_json_file: None,
+            access_token: None,
+            force_update: false,
+            components: None,
+            firmware_object_id: None,
+        }
+    }
+
+    #[test]
+    fn firmware_upgrade_requires_sot_json() {
+        let args = MaintenanceOptions {
+            activities: Some(vec!["firmware-upgrade".to_string()]),
+            access_token: Some("token".to_string()),
+            ..options()
+        };
+
+        let err = resolve_firmware_upgrade_source(&args).unwrap_err();
+
+        assert!(err.to_string().contains("requires SOT JSON"));
+    }
+
+    #[test]
+    fn firmware_upgrade_requires_access_token() {
+        let args = MaintenanceOptions {
+            activities: Some(vec!["firmware-upgrade".to_string()]),
+            firmware_version: Some(r#"{"Id":"fw"}"#.to_string()),
+            ..options()
+        };
+
+        let err = resolve_firmware_upgrade_source(&args).unwrap_err();
+
+        assert!(err.to_string().contains("requires --access-token"));
+    }
+
+    #[test]
+    fn firmware_upgrade_rejects_invalid_inline_json() {
+        let args = MaintenanceOptions {
+            activities: Some(vec!["firmware-upgrade".to_string()]),
+            firmware_version: Some("not-json".to_string()),
+            access_token: Some("token".to_string()),
+            ..options()
+        };
+
+        assert!(resolve_firmware_upgrade_source(&args).is_err());
+    }
+
+    #[test]
+    fn firmware_source_requires_firmware_upgrade_activity() {
+        let args = MaintenanceOptions {
+            firmware_version: Some(r#"{"Id":"fw"}"#.to_string()),
+            ..options()
+        };
+
+        let err = resolve_firmware_upgrade_source(&args).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("--firmware-version requires --activities firmware-upgrade")
+        );
+    }
+
+    #[test]
+    fn access_token_requires_firmware_upgrade_activity() {
+        let args = MaintenanceOptions {
+            access_token: Some("token".to_string()),
+            ..options()
+        };
+
+        let err = resolve_firmware_upgrade_source(&args).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("--access-token requires --activities firmware-upgrade")
+        );
+    }
 }

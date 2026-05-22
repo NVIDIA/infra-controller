@@ -30,8 +30,9 @@ use model::rack::{
     RackMaintenanceState, RackPowerState, RackState, RackValidationState, SwitchNvosUpdateState,
     SwitchNvosUpdateStatus,
 };
+use model::rack_type::RackProfile;
 
-use crate::rack::firmware_object::profile_hardware_type_wire_value;
+use crate::rack::firmware_object::{ANY_RACK_HARDWARE_TYPE, profile_hardware_type_wire_value};
 use crate::rack::firmware_update::{
     RackFirmwareInventory, RackSwitchFirmwareInventory, build_new_node_info,
     firmware_type_for_profile, load_rack_firmware_inventory, load_rack_switch_firmware_inventory,
@@ -231,6 +232,13 @@ fn explicit_firmware_upgrade_requested(scope: &MaintenanceScope) -> bool {
         .activities
         .iter()
         .any(|activity| matches!(activity, MaintenanceActivity::FirmwareUpgrade { .. }))
+}
+
+fn profile_hardware_type_or_any(profile: Option<&RackProfile>) -> String {
+    profile
+        .map(profile_hardware_type_wire_value)
+        .filter(|hardware_type| !hardware_type.trim().is_empty())
+        .unwrap_or_else(|| ANY_RACK_HARDWARE_TYPE.to_string())
 }
 
 fn requested_firmware_object_json_upgrade(
@@ -1077,6 +1085,7 @@ pub async fn handle_maintenance(
                         scope,
                     ));
                 };
+                // Defensive: older persisted maintenance state may predate API-side JSON validation.
                 let Some(config_json) = config_json.filter(|json| !json.trim().is_empty()) else {
                     return transition_to_rack_error(
                         id,
@@ -1090,26 +1099,12 @@ pub async fn handle_maintenance(
                     return transition_to_rack_error(id, state, "RMS client not configured", ctx)
                         .await;
                 };
-                let Some(profile) = super::resolve_profile(id, rack_profile_id, ctx) else {
-                    return transition_to_rack_error(
-                        id,
-                        state,
-                        "rack profile is missing or unknown; cannot resolve firmware type for firmware object JSON apply",
-                        ctx,
-                    )
-                    .await;
-                };
-                if profile.rack_hardware_class.is_none() {
-                    return transition_to_rack_error(
-                        id,
-                        state,
-                        "rack profile does not define rack_hardware_class; cannot resolve firmware type for firmware object JSON apply",
-                        ctx,
-                    )
-                    .await;
-                }
-                let rack_hardware_type = profile_hardware_type_wire_value(profile);
-                let firmware_type = firmware_type_for_profile(profile).to_string();
+                let profile = super::resolve_profile(id, rack_profile_id, ctx);
+                let rack_hardware_type = profile_hardware_type_or_any(profile);
+                let firmware_type = profile
+                    .map(firmware_type_for_profile)
+                    .unwrap_or("prod")
+                    .to_string();
                 let inventory = load_rack_firmware_inventory(
                     &ctx.services.db_pool,
                     ctx.services.credential_manager.as_ref(),
@@ -1395,9 +1390,7 @@ pub async fn handle_maintenance(
                         .await;
                 };
                 let profile = super::resolve_profile(id, rack_profile_id, ctx);
-                let rack_hardware_type = profile
-                    .map(profile_hardware_type_wire_value)
-                    .unwrap_or_default();
+                let rack_hardware_type = profile_hardware_type_or_any(profile);
                 let software_type = profile.map(firmware_type_for_profile).unwrap_or("prod");
 
                 let switch_inventory = load_rack_switch_firmware_inventory(
@@ -1913,11 +1906,12 @@ mod tests {
         MaintenanceActivity, MaintenanceScope, NvosUpdateState, RackMaintenanceState,
         RackPowerState,
     };
+    use model::rack_type::{RackHardwareType, RackProfile};
 
     use super::{
         filter_inventory_by_scope, firmware_device_status, first_maintenance_state,
         implicit_nvos_update_requested, next_state_after_configure, next_state_after_firmware,
-        next_state_after_nvos,
+        next_state_after_nvos, profile_hardware_type_or_any,
     };
     use crate::rack::firmware_update::RackFirmwareInventory;
 
@@ -1959,6 +1953,22 @@ mod tests {
             switch_ids: vec![switch_a, switch_b],
             switches: vec![test_device_info(switch_a), test_device_info(switch_b)],
         }
+    }
+
+    #[test]
+    fn profile_hardware_type_or_any_defaults_missing_values_to_any() {
+        assert_eq!(profile_hardware_type_or_any(None), "any");
+        assert_eq!(
+            profile_hardware_type_or_any(Some(&RackProfile::default())),
+            "any"
+        );
+
+        let profile = RackProfile {
+            rack_hardware_type: Some(RackHardwareType::from("gb200")),
+            ..Default::default()
+        };
+
+        assert_eq!(profile_hardware_type_or_any(Some(&profile)), "gb200");
     }
 
     #[test]
