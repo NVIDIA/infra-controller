@@ -46,6 +46,16 @@ pub struct HealthReportSources {
 }
 
 impl HealthReportSources {
+    /// True when a repair-related health merge override is active (`repair-request` or
+    /// `request-online-repair`).
+    pub fn repair_merge_active(&self) -> bool {
+        self.merges
+            .contains_key(health_report::REPAIR_REQUEST_MERGE_SOURCE)
+            || self
+                .merges
+                .contains_key(health_report::REQUEST_ONLINE_REPAIR_MERGE_SOURCE)
+    }
+
     #[allow(clippy::should_implement_trait)]
     pub fn iter(&self) -> impl Iterator<Item = (&HealthReport, HealthReportApplyMode)> {
         self.merges
