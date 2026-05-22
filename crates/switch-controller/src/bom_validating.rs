@@ -15,29 +15,35 @@
  * limitations under the License.
  */
 
-//! Handler for SwitchControllerState::Error.
+//! Handler for SwitchControllerState::BomValidating.
 
 use carbide_uuid::switch::SwitchId;
-use model::switch::{Switch, SwitchControllerState};
-
-use crate::state_controller::state_handler::{
+use model::switch::{BomValidatingState, Switch, SwitchControllerState};
+use state_controller::state_handler::{
     StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
-use crate::state_controller::switch::context::SwitchStateHandlerContextObjects;
 
-/// Handles the Error state for a switch.
-/// If marked for deletion, transition to Deleting; otherwise wait for manual intervention.
-pub async fn handle_error(
+use crate::context::SwitchStateHandlerContextObjects;
+
+/// Handles the BomValidating state for a switch.
+pub async fn handle_bom_validating(
     _switch_id: &SwitchId,
     state: &mut Switch,
     _ctx: &mut StateHandlerContext<'_, SwitchStateHandlerContextObjects>,
 ) -> Result<StateHandlerOutcome<SwitchControllerState>, StateHandlerError> {
-    tracing::info!("Switch is in error state {}", _switch_id.to_string());
-    if state.is_marked_as_deleted() {
-        Ok(StateHandlerOutcome::transition(
-            SwitchControllerState::Deleting,
-        ))
-    } else {
-        Ok(StateHandlerOutcome::do_nothing())
+    let bom_validating_state = match &state.controller_state.value {
+        SwitchControllerState::BomValidating {
+            bom_validating_state,
+        } => bom_validating_state,
+        _ => unreachable!("handle_bom_validating called with non-BomValidating state"),
+    };
+
+    match bom_validating_state {
+        BomValidatingState::BomValidationComplete => {
+            tracing::info!("BOM Validating Switch: BomValidationComplete, moving to Ready");
+            Ok(StateHandlerOutcome::transition(
+                SwitchControllerState::Ready,
+            ))
+        }
     }
 }

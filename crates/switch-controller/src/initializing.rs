@@ -21,11 +21,11 @@ use carbide_uuid::switch::SwitchId;
 use forge_secrets::credentials::{CredentialKey, Credentials};
 use model::machine_interface_address::MachineInterfaceAssociation;
 use model::switch::{ConfiguringState, InitializingState, Switch, SwitchControllerState};
-
-use crate::state_controller::state_handler::{
+use state_controller::state_handler::{
     StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
-use crate::state_controller::switch::context::SwitchStateHandlerContextObjects;
+
+use crate::context::SwitchStateHandlerContextObjects;
 
 /// Handles the Initializing state for a switch.
 pub async fn handle_initializing(

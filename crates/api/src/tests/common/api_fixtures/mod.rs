@@ -42,6 +42,9 @@ use carbide_site_explorer::config::{SiteExplorerConfig, SiteExplorerExploreMode}
 use carbide_spdm_controller::context::SpdmStateHandlerServices;
 use carbide_spdm_controller::handler::SpdmAttestationStateHandler;
 use carbide_spdm_controller::io::SpdmStateControllerIO;
+use carbide_switch_controller::context::SwitchStateHandlerServices;
+use carbide_switch_controller::handler::SwitchStateHandler;
+use carbide_switch_controller::io::SwitchStateControllerIO;
 use carbide_utils::test_support::test_meter::TestMeter;
 use carbide_uuid::instance::InstanceId;
 use carbide_uuid::instance_type::InstanceTypeId;
@@ -134,8 +137,6 @@ use crate::state_controller::rack::io::RackStateControllerIO;
 use crate::state_controller::state_handler::{
     StateHandler, StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
-use crate::state_controller::switch::handler::SwitchStateHandler;
-use crate::state_controller::switch::io::SwitchStateControllerIO;
 use crate::tests::common::api_fixtures::endpoint_explorer::MockEndpointExplorer;
 use crate::tests::common::api_fixtures::managed_host::ManagedHostConfig;
 use crate::tests::common::api_fixtures::network_segment::{
@@ -1776,7 +1777,14 @@ pub async fn create_test_env_with_overrides(
         .database(db_pool.clone(), work_lock_manager_handle.clone())
         .meter("carbide_switches", test_meter.meter())
         .processor_id(state_controller_id.clone())
-        .services(handler_services.clone())
+        .services(
+            SwitchStateHandlerServices {
+                db_pool: handler_services.db_pool.clone(),
+                rms_client: handler_services.rms_client.clone(),
+                credential_manager: handler_services.credential_manager.clone(),
+            }
+            .into(),
+        )
         .state_handler(Arc::new(SwitchStateHandler::default()))
         .build_for_manual_iterations(cancel_token.clone())
         .expect("Unable to build state controller");

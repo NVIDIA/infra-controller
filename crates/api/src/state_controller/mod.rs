@@ -22,7 +22,6 @@ pub mod ib_partition;
 pub mod machine;
 pub mod power_shelf;
 pub mod rack;
-pub mod switch;
 
 pub use ::state_controller::{
     config, controller, db_write_batch, io, metrics, state_change_emitter, state_handler,

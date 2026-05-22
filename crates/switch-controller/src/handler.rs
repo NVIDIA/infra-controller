@@ -19,21 +19,21 @@
 
 use carbide_uuid::switch::SwitchId;
 use model::switch::{Switch, SwitchControllerState, derive_switch_aggregate_health};
-use tracing::instrument;
-
-use crate::state_controller::state_handler::{
+use state_controller::state_handler::{
     StateHandler, StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
-use crate::state_controller::switch::bom_validating::handle_bom_validating;
-use crate::state_controller::switch::configuring::handle_configuring;
-use crate::state_controller::switch::context::SwitchStateHandlerContextObjects;
-use crate::state_controller::switch::created::handle_created;
-use crate::state_controller::switch::deleting::handle_deleting;
-use crate::state_controller::switch::error_state::handle_error;
-use crate::state_controller::switch::initializing::handle_initializing;
-use crate::state_controller::switch::ready::handle_ready;
-use crate::state_controller::switch::reprovisioning::handle_reprovisioning;
-use crate::state_controller::switch::validating::handle_validating;
+use tracing::instrument;
+
+use crate::bom_validating::handle_bom_validating;
+use crate::configuring::handle_configuring;
+use crate::context::SwitchStateHandlerContextObjects;
+use crate::created::handle_created;
+use crate::deleting::handle_deleting;
+use crate::error_state::handle_error;
+use crate::initializing::handle_initializing;
+use crate::ready::handle_ready;
+use crate::reprovisioning::handle_reprovisioning;
+use crate::validating::handle_validating;
 
 /// The actual Switch State handler (structure mirrors MachineStateHandler).
 #[derive(Debug, Default, Clone)]

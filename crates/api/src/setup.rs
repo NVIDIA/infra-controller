@@ -37,6 +37,9 @@ use carbide_site_explorer::SiteExplorer;
 use carbide_spdm_controller::context::SpdmStateHandlerServices;
 use carbide_spdm_controller::handler::SpdmAttestationStateHandler;
 use carbide_spdm_controller::io::SpdmStateControllerIO;
+use carbide_switch_controller::context::SwitchStateHandlerServices;
+use carbide_switch_controller::handler::SwitchStateHandler;
+use carbide_switch_controller::io::SwitchStateControllerIO;
 use carbide_utils::HostPortPair;
 use db::machine::update_dpu_asns;
 use db::resource_pool::DefineResourcePoolError;
@@ -95,8 +98,6 @@ use crate::state_controller::power_shelf::io::PowerShelfStateControllerIO;
 use crate::state_controller::rack::handler::RackStateHandler;
 use crate::state_controller::rack::io::RackStateControllerIO;
 use crate::state_controller::state_change_emitter::StateChangeEmitterBuilder;
-use crate::state_controller::switch::handler::SwitchStateHandler;
-use crate::state_controller::switch::io::SwitchStateControllerIO;
 use crate::{attestation, db_init, ethernet_virtualization, listener};
 
 /// The resolved set of network declarations passed from `start_api` into
@@ -1219,7 +1220,14 @@ pub async fn initialize_and_start_controllers<'a>(
         .database(db_pool.clone(), work_lock_manager_handle.clone())
         .meter("carbide_switches", meter.clone())
         .processor_id(state_controller_id.clone())
-        .services(handler_services.clone())
+        .services(
+            SwitchStateHandlerServices {
+                db_pool: handler_services.db_pool.clone(),
+                rms_client: handler_services.rms_client.clone(),
+                credential_manager: handler_services.credential_manager.clone(),
+            }
+            .into(),
+        )
         .iteration_config((&carbide_config.switch_state_controller.controller).into())
         .state_handler(Arc::new(SwitchStateHandler::default()))
         .build_and_spawn(join_set, cancel_token.clone())

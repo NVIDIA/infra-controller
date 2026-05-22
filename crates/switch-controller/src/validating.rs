@@ -15,34 +15,36 @@
  * limitations under the License.
  */
 
-//! Handler for SwitchControllerState::BomValidating.
+//! Handler for SwitchControllerState::Validating.
 
 use carbide_uuid::switch::SwitchId;
-use model::switch::{BomValidatingState, Switch, SwitchControllerState};
-
-use crate::state_controller::state_handler::{
+use model::switch::{BomValidatingState, Switch, SwitchControllerState, ValidatingState};
+use state_controller::state_handler::{
     StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
-use crate::state_controller::switch::context::SwitchStateHandlerContextObjects;
 
-/// Handles the BomValidating state for a switch.
-pub async fn handle_bom_validating(
-    _switch_id: &SwitchId,
+use crate::context::SwitchStateHandlerContextObjects;
+
+/// Handles the Validating state for a switch.
+/// TODO: Implement Switch validation logic.
+pub async fn handle_validating(
+    switch_id: &SwitchId,
     state: &mut Switch,
     _ctx: &mut StateHandlerContext<'_, SwitchStateHandlerContextObjects>,
 ) -> Result<StateHandlerOutcome<SwitchControllerState>, StateHandlerError> {
-    let bom_validating_state = match &state.controller_state.value {
-        SwitchControllerState::BomValidating {
-            bom_validating_state,
-        } => bom_validating_state,
-        _ => unreachable!("handle_bom_validating called with non-BomValidating state"),
+    tracing::info!("Validating Switch {:?}", switch_id);
+    let validating_state = match &state.controller_state.value {
+        SwitchControllerState::Validating { validating_state } => validating_state,
+        _ => unreachable!("handle_validating called with non-Validating state"),
     };
 
-    match bom_validating_state {
-        BomValidatingState::BomValidationComplete => {
-            tracing::info!("BOM Validating Switch: BomValidationComplete, moving to Ready");
+    match validating_state {
+        ValidatingState::ValidationComplete => {
+            tracing::info!("Validating Switch: ValidationComplete");
             Ok(StateHandlerOutcome::transition(
-                SwitchControllerState::Ready,
+                SwitchControllerState::BomValidating {
+                    bom_validating_state: BomValidatingState::BomValidationComplete,
+                },
             ))
         }
     }

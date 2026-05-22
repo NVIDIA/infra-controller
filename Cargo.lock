@@ -1197,6 +1197,7 @@ dependencies = [
  "carbide-spdm-controller",
  "carbide-sqlx-testing",
  "carbide-ssh",
+ "carbide-switch-controller",
  "carbide-tls",
  "carbide-utils",
  "carbide-uuid",
@@ -2701,6 +2702,28 @@ dependencies = [
  "tonic-prost-build",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "carbide-switch-controller"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "carbide-api-db",
+ "carbide-api-model",
+ "carbide-health-metrics",
+ "carbide-secrets",
+ "carbide-site-explorer",
+ "carbide-utils",
+ "carbide-uuid",
+ "config-version",
+ "eyre",
+ "librms",
+ "mac_address",
+ "opentelemetry",
+ "sqlx",
+ "state-controller",
+ "tracing",
 ]
 
 [[package]]
