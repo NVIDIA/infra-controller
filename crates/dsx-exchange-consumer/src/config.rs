@@ -112,14 +112,15 @@ pub struct MqttConfig {
     /// Messages are dropped when this limit is exceeded.
     pub queue_capacity: usize,
 
-    /// How long the MQTT event loop is allowed to stay disconnected from
-    /// the broker before the service exits, relying on Kubernetes to
-    /// restart the pod with a fresh MQTT session. Backstop for the
-    /// consumer stall described in NVBug 6191840 where the client stops
-    /// receiving messages even though the library is still attempting
-    /// to reconnect. Defaults to 30s.
+    /// How long the MQTT event loop is allowed to stay continuously
+    /// disconnected from the broker before mqttea tears down the
+    /// underlying rumqttc client and stands up a fresh one (replaying
+    /// tracked subscriptions on the new session). Recovery path for
+    /// NVBug 6191840, where after a broker outage the library left a
+    /// TCP socket established without ever re-issuing MQTT
+    /// CONNECT/SUBSCRIBE and the consumer sat idle. Defaults to 30s.
     #[serde(with = "humantime_serde")]
-    pub reconnect_exit_threshold: Duration,
+    pub reconnect_rebuild_threshold: Duration,
 
     #[serde(default)]
     pub auth: MqttAuthConfig,
@@ -133,7 +134,7 @@ impl Default for MqttConfig {
             client_id: "carbide-dsx-exchange-consumer".to_string(),
             topic_prefix: "BMS/v1".to_string(),
             queue_capacity: 1024,
-            reconnect_exit_threshold: Duration::from_secs(30),
+            reconnect_rebuild_threshold: Duration::from_secs(30),
             auth: MqttAuthConfig::default(),
         }
     }

@@ -47,12 +47,14 @@ pub enum MqttMessage {
 /// Sets up the MQTT client, registers message handlers, subscribes to topics,
 /// and connects. Returns a receiver that yields messages with drop-on-overflow.
 ///
-/// The underlying mqttea event loop is configured to call
-/// `std::process::exit(1)` if it stays continuously disconnected from the
-/// broker for `config.reconnect_exit_threshold` — backstop for the
-/// consumer stall described in NVBug 6191840 where the client stops
-/// receiving messages even though the library is still attempting to
-/// reconnect. Kubernetes then restarts the pod with a fresh session.
+/// The underlying mqttea event loop is configured to rebuild its
+/// rumqttc client (replaying tracked subscriptions on a fresh session)
+/// if it stays continuously disconnected from the broker for
+/// `config.reconnect_rebuild_threshold`. Recovery path for NVBug
+/// 6191840, where after a broker outage the library left a TCP
+/// socket established without ever re-issuing MQTT CONNECT/SUBSCRIBE
+/// and the pod sat 1/1 Ready consuming nothing until manually
+/// restarted.
 pub async fn connect(
     config: &MqttConfig,
     metrics: ConsumerMetrics,
@@ -65,7 +67,7 @@ pub async fn connect(
     let options = {
         let defaults = ClientOptions::default()
             .with_qos(QoS::AtMostOnce)
-            .with_exit_after_persistent_disconnect(config.reconnect_exit_threshold);
+            .with_rebuild_after_persistent_disconnect(config.reconnect_rebuild_threshold);
         if let Some(provider) =
             build_credentials_provider(config, credential_reader.clone()).await?
         {

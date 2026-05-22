@@ -84,12 +84,12 @@ pub async fn run_service(config: Config) -> Result<(), DsxConsumerError> {
     .map_err(|e| DsxConsumerError::Secrets(e.to_string()))?;
 
     // Connect to MQTT and get message receiver. The mqttea event loop
-    // is configured via `mqtt.reconnect_exit_threshold` to exit the
-    // process if it stays continuously disconnected from the broker
-    // past that duration; Kubernetes then restarts the pod with a
-    // fresh MQTT session. This is the backstop for the consumer stall
-    // described in NVBug 6191840 where the client stops receiving
-    // messages even though the library is still attempting to reconnect.
+    // is configured via `mqtt.reconnect_rebuild_threshold` to tear down
+    // the underlying rumqttc client and stand up a fresh one (replaying
+    // tracked subscriptions) if it stays continuously disconnected from
+    // the broker past that duration. Recovery path for NVBug 6191840,
+    // where after a broker outage the library left a TCP socket
+    // established without ever re-issuing MQTT CONNECT/SUBSCRIBE.
     let rx = mqtt_consumer::connect(
         &config.mqtt,
         consumer_metrics.clone(),
