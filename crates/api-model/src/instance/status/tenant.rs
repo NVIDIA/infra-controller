@@ -59,8 +59,9 @@ pub enum TenantState {
     Failed,
     /// Not sure what happened. Check log for more info
     Invalid,
-    /// Instance is undergoing repair while otherwise tenant-ready (see
-    /// [`crate::rpc_conv::instance::status::tenant::instance_status_tenant_state`]).
+    /// Instance is undergoing online repair while otherwise tenant-ready. Set by
+    /// `instance_status_tenant_state` in the RPC model layer when a repair health merge
+    /// is active and the instance would otherwise be [`Ready`].
     Repairing,
 }
 
