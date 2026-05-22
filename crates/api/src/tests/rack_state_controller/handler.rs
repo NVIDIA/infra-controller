@@ -36,7 +36,6 @@ use model::rack_type::{
     RackHardwareClass, RackHardwareType, RackProfile, RackProfileConfig,
 };
 use model::switch::{NewSwitch, SwitchConfig};
-use serde_json::json;
 use tonic::Request;
 
 use crate::state_controller::db_write_batch::DbWriteBatch;
@@ -157,24 +156,6 @@ pub(crate) fn config_with_rack_profiles() -> crate::cfg::file::CarbideConfig {
         .collect(),
     };
     config
-}
-
-async fn insert_default_firmware_object(
-    env: &TestEnv,
-    object_id: &str,
-    rack_hardware_type: RackHardwareType,
-    available: bool,
-) {
-    env.rms_sim
-        .insert_firmware_object(rms::FirmwareObject {
-            id: object_id.to_string(),
-            config_json: json!({ "Id": object_id }).to_string(),
-            available,
-            hardware_type: rack_hardware_type.to_string(),
-            is_default: true,
-            ..Default::default()
-        })
-        .await
 }
 
 async fn create_single_compute_rack(
@@ -1197,180 +1178,11 @@ async fn test_ready_with_no_labels_stays_ready(
     Ok(())
 }
 
-/// test_firmware_upgrade_start_without_default_advances_to_nvos_update
-/// verifies that maintenance skips firmware flashing when no default firmware
-/// exists for the rack hardware type and continues through NVOS update before
-/// ConfigureNmxCluster.
-#[crate::sqlx_test]
-async fn test_firmware_upgrade_start_without_default_advances_to_nvos_update(
-    pool: sqlx::PgPool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let env = create_test_env_with_overrides(
-        pool.clone(),
-        TestEnvOverrides {
-            config: Some(config_with_rack_profiles()),
-            ..Default::default()
-        },
-    )
-    .await;
-    let (rack_id, host) = create_single_compute_rack(&env, &pool).await?;
-    let mut rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
-
-    let handler_instance = RackStateHandler::default();
-    let mut services = env.state_handler_services();
-    let mut metrics = RackMetrics::default();
-    let mut db_writes = DbWriteBatch::default();
-    let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
-        services: &mut services,
-        metrics: &mut metrics,
-        pending_db_writes: &mut db_writes,
-    };
-
-    let fw_state = RackState::Maintenance {
-        maintenance_state: RackMaintenanceState::FirmwareUpgrade {
-            rack_firmware_upgrade: FirmwareUpgradeState::Start,
-        },
-    };
-    let mut outcome = handler_instance
-        .handle_object_state(&rack_id, &mut rack, &fw_state, &mut ctx)
-        .await?;
-    if let Some(txn) = outcome.take_transaction() {
-        txn.commit().await?;
-    }
-
-    match outcome {
-        StateHandlerOutcome::Transition { next_state, .. } => {
-            assert!(
-                matches!(
-                    next_state,
-                    RackState::Maintenance {
-                        maintenance_state: RackMaintenanceState::NVOSUpdate {
-                            nvos_update: NvosUpdateState::Start {
-                                firmware_object_id: None,
-                            },
-                        },
-                    }
-                ),
-                "FirmwareUpgrade(Start) should skip firmware and advance to NVOSUpdate, got {:?}",
-                next_state
-            );
-        }
-        other => panic!(
-            "Expected Transition, got {:?}",
-            std::mem::discriminant(&other)
-        ),
-    }
-
-    let requests = env.rms_sim.submitted_apply_firmware_object_requests().await;
-    assert!(
-        requests.is_empty(),
-        "firmware apply should not be submitted when no default firmware object is available"
-    );
-    let machine = db::machine::find_one(
-        &pool,
-        &host.host_snapshot.id,
-        model::machine::machine_search_config::MachineSearchConfig::default(),
-    )
-    .await?
-    .expect("machine should exist");
-    assert!(machine.host_reprovision_requested.is_none());
-
-    Ok(())
-}
-
-/// test_firmware_upgrade_start_with_unavailable_default_advances_to_nvos_update
-/// verifies that maintenance skips firmware flashing when a default firmware
-/// exists for the hardware type but is not yet available, then continues
-/// through NVOS update before ConfigureNmxCluster.
-#[crate::sqlx_test]
-async fn test_firmware_upgrade_start_with_unavailable_default_advances_to_nvos_update(
-    pool: sqlx::PgPool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let env = create_test_env_with_overrides(
-        pool.clone(),
-        TestEnvOverrides {
-            config: Some(config_with_rack_profiles()),
-            ..Default::default()
-        },
-    )
-    .await;
-    let (rack_id, host) = create_single_compute_rack(&env, &pool).await?;
-    insert_default_firmware_object(
-        &env,
-        "fw-default-unavailable",
-        RackHardwareType::any(),
-        false,
-    )
-    .await;
-    let mut rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
-
-    let handler_instance = RackStateHandler::default();
-    let mut services = env.state_handler_services();
-    let mut metrics = RackMetrics::default();
-    let mut db_writes = DbWriteBatch::default();
-    let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
-        services: &mut services,
-        metrics: &mut metrics,
-        pending_db_writes: &mut db_writes,
-    };
-
-    let fw_state = RackState::Maintenance {
-        maintenance_state: RackMaintenanceState::FirmwareUpgrade {
-            rack_firmware_upgrade: FirmwareUpgradeState::Start,
-        },
-    };
-    let mut outcome = handler_instance
-        .handle_object_state(&rack_id, &mut rack, &fw_state, &mut ctx)
-        .await?;
-    if let Some(txn) = outcome.take_transaction() {
-        txn.commit().await?;
-    }
-
-    match outcome {
-        StateHandlerOutcome::Transition { next_state, .. } => {
-            assert!(
-                matches!(
-                    next_state,
-                    RackState::Maintenance {
-                        maintenance_state: RackMaintenanceState::NVOSUpdate {
-                            nvos_update: NvosUpdateState::Start {
-                                firmware_object_id: None,
-                            },
-                        },
-                    }
-                ),
-                "FirmwareUpgrade(Start) should skip unavailable firmware and advance to NVOSUpdate, got {:?}",
-                next_state
-            );
-        }
-        other => panic!(
-            "Expected Transition, got {:?}",
-            std::mem::discriminant(&other)
-        ),
-    }
-
-    let requests = env.rms_sim.submitted_apply_firmware_object_requests().await;
-    assert!(
-        requests.is_empty(),
-        "firmware apply should not be submitted when the default firmware object is unavailable"
-    );
-    let machine = db::machine::find_one(
-        &pool,
-        &host.host_snapshot.id,
-        model::machine::machine_search_config::MachineSearchConfig::default(),
-    )
-    .await?
-    .expect("machine should exist");
-    assert!(machine.host_reprovision_requested.is_none());
-
-    Ok(())
-}
-
-/// test_firmware_upgrade_start_with_default_skips_without_json verifies that
+/// test_firmware_upgrade_start_skips_without_json verifies that
 /// Maintenance::FirmwareUpgrade(Start) skips firmware flashing when no
 /// firmware object JSON source is configured for rack maintenance.
 #[crate::sqlx_test]
-async fn test_firmware_upgrade_start_with_default_skips_without_json(
+async fn test_firmware_upgrade_start_skips_without_json(
     pool: sqlx::PgPool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let env = create_test_env_with_overrides(
@@ -1382,7 +1194,6 @@ async fn test_firmware_upgrade_start_with_default_skips_without_json(
     )
     .await;
     let (rack_id, host) = create_single_compute_rack(&env, &pool).await?;
-    insert_default_firmware_object(&env, "fw-default", RackHardwareType::any(), true).await;
 
     let mut rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
 

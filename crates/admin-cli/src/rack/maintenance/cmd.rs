@@ -18,8 +18,52 @@
 use ::rpc::forge as rpc;
 
 use super::args::MaintenanceOptions;
-use crate::errors::CarbideCliResult;
+use crate::errors::{CarbideCliError, CarbideCliResult};
 use crate::rpc::ApiClient;
+
+fn resolve_firmware_upgrade_source(
+    args: &MaintenanceOptions,
+) -> CarbideCliResult<(String, Option<String>)> {
+    if args.firmware_version.is_some() && args.sot_json_file.is_some() {
+        return Err(CarbideCliError::ChooseOneError(
+            "--firmware-version",
+            "--sot-json-file",
+        ));
+    }
+
+    let firmware_version = if let Some(path) = args.sot_json_file.as_ref() {
+        let config_json = std::fs::read_to_string(path)?;
+        serde_json::from_str::<serde_json::Value>(&config_json)?;
+        config_json
+    } else {
+        args.firmware_version.clone().unwrap_or_default()
+    };
+
+    let access_token = args.access_token.as_ref().and_then(|token| {
+        if token.trim().is_empty() {
+            None
+        } else {
+            Some(token.clone())
+        }
+    });
+
+    if args.sot_json_file.is_some() && access_token.is_none() {
+        return Err(CarbideCliError::GenericError(
+            "--access-token is required with --sot-json-file".to_string(),
+        ));
+    }
+    if args.access_token.is_some() && firmware_version.trim().is_empty() {
+        return Err(CarbideCliError::GenericError(
+            "--access-token requires SOT JSON from --sot-json-file or --firmware-version"
+                .to_string(),
+        ));
+    }
+    if access_token.is_some() {
+        serde_json::from_str::<serde_json::Value>(&firmware_version)?;
+    }
+
+    Ok((firmware_version, access_token))
+}
 
 pub async fn on_demand_rack_maintenance(
     api_client: &ApiClient,
@@ -27,9 +71,10 @@ pub async fn on_demand_rack_maintenance(
 ) -> CarbideCliResult<()> {
     use rpc::maintenance_activity_config::Activity as ProtoActivity;
 
-    let firmware_version = args.firmware_version.unwrap_or_default();
+    let (firmware_version, access_token) = resolve_firmware_upgrade_source(&args)?;
     let components = args.components.unwrap_or_default();
     let firmware_object_id = args.firmware_object_id.unwrap_or_default();
+    let force_update = args.force_update;
 
     let activities: Vec<rpc::MaintenanceActivityConfig> = args
          .activities
@@ -41,8 +86,8 @@ pub async fn on_demand_rack_maintenance(
                      rpc::FirmwareUpgradeActivity {
                          firmware_version: firmware_version.clone(),
                          components: components.clone(),
-                         access_token: None,
-                         force_update: false,
+                         access_token: access_token.clone(),
+                         force_update,
                      },
                  )),
                  "nvos-update" => Ok(ProtoActivity::NvosUpdate(
