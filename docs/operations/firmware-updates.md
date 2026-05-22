@@ -18,7 +18,6 @@ For related background, see:
 - [Architecture Overview](../architecture/overview.md#machine-update-manager)
 - [Managed Host State Diagrams](../architecture/state_machines/managedhost.md)
 - [DPU Lifecycle Management](../dpu-management/dpu-lifecycle-management.md#firmware-upgrades)
-- [Rack State Machine](../architecture/state_machines/rack.md)
 - [Redfish Workflow](../architecture/redfish_workflow.md)
 - [Core Metrics](../manuals/metrics/core_metrics.md)
 
@@ -34,10 +33,10 @@ updated.
 | DPU BMC, UEFI, CEC, ERoT, and related DPU firmware | DPU reprovisioning | Verification and update as part of the DPU lifecycle. |
 | NVIDIA platform procedures | Manual service procedure plus NICo completion gate | NVIDIA-managed platforms, such as GB200, that require a field procedure before NICo resumes automatic checks. |
 | OEM platform procedures | OEM instructions plus NICo scheduling or script handoff | Vendor-specific packages, such as SMC/Supermicro platforms, where the OEM procedure is the authority for platform-specific steps. |
-| Rack, compute tray, switch, and power shelf firmware | Rack maintenance, RMS, and component-manager workflows | Rack-level and component-level firmware outside host Machine Update Manager scheduling. |
+| Rack, compute tray, switch, and power shelf firmware | REST firmware APIs for rack and tray updates. Compute tray updates flow through Machine Update Manager and the managed-host lifecycle; switch and power shelf updates use component-manager. | Rack-level and component-level firmware updates. |
 
-Use `carbide-admin-cli` for the examples below. These commands talk to the NICo
-Core gRPC API:
+Use `carbide-admin-cli` for CLI examples. These commands talk to the NICo Core
+gRPC API:
 
 ```bash
 carbide-admin-cli -c <core-api-url> <command>
@@ -336,27 +335,63 @@ exact package, update order, activation requirements, and recovery steps.
 
 ## Rack and Component Firmware
 
-Rack, compute tray, switch, and power shelf firmware are handled separately
-from Machine Update Manager.
+Use the NVIDIA Forge REST API for rack and tray firmware updates. The API
+accepts a site ID and optional target firmware version, starts the update
+workflow, and returns task IDs for tracking.
 
-Use rack firmware records when applying a firmware bundle to a rack:
+REST API entry points:
+
+| Scope | Method and path | Use |
+|---|---|---|
+| Single rack | `PATCH /v2/org/{org}/nico/rack/{id}/firmware` | Update firmware for one rack. |
+| Rack batch | `PATCH /v2/org/{org}/nico/rack/firmware` | Update firmware for racks selected by filter, or all racks in the site when no filter is supplied. |
+| Single tray | `PATCH /v2/org/{org}/nico/tray/{id}/firmware` | Update firmware for one compute tray. |
+| Tray batch | `PATCH /v2/org/{org}/nico/tray/firmware` | Update firmware for trays selected by filter, or all trays in the site when no filter is supplied. |
+
+See the [NVIDIA Forge API rack firmware update schema](https://schema.stg.forge.ngc.nvidia.com/#tag/Rack/operation/firmware-update-racks)
+for the current request and response contract.
+
+Single-rack example:
 
 ```bash
-carbide-admin-cli -c <core-api-url> rack-firmware list
-carbide-admin-cli -c <core-api-url> rack-firmware apply <rack-id> <firmware-id> prod
-carbide-admin-cli -c <core-api-url> rack-firmware status <job-id>
-carbide-admin-cli -c <core-api-url> rack-firmware history
+curl -X PATCH "https://<api-url>/v2/org/<org>/nico/rack/<rack-id>/firmware" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "siteId": "<site-id>",
+    "version": "<target-version>"
+  }'
 ```
 
-Use component-manager firmware commands for targeted compute tray, switch,
-power shelf, or rack updates:
+Batch tray example for a rack:
 
 ```bash
-carbide-admin-cli -c <core-api-url> component-manager update-firmware compute-tray \
-  --machine-id <machine-id> \
-  --target-version <target-version> \
-  --component bmc,bios
+curl -X PATCH "https://<api-url>/v2/org/<org>/nico/tray/firmware" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "siteId": "<site-id>",
+    "version": "<target-version>",
+    "filter": {
+      "rackName": "<rack-name>"
+    }
+  }'
+```
 
+The response contains task IDs:
+
+```json
+{
+  "taskIds": [
+    "<task-id>"
+  ]
+}
+```
+
+Use component-manager only for lower-level switch and power shelf firmware
+workflows when a REST workflow is not available for that component:
+
+```bash
 carbide-admin-cli -c <core-api-url> component-manager update-firmware switch \
   --switch-id <switch-id> \
   --target-version <target-version> \
@@ -371,26 +406,8 @@ carbide-admin-cli -c <core-api-url> component-manager update-firmware power-shel
 Check component firmware status:
 
 ```bash
-carbide-admin-cli -c <core-api-url> component-manager get-firmware-update-status compute-tray --machine-id <machine-id>
 carbide-admin-cli -c <core-api-url> component-manager get-firmware-update-status switch --switch-id <switch-id>
 carbide-admin-cli -c <core-api-url> component-manager get-firmware-update-status power-shelf --power-shelf-id <power-shelf-id>
-```
-
-Rack maintenance can also run a firmware-upgrade activity for a full rack or a
-selected subset of machines, switches, or power shelves:
-
-```bash
-carbide-admin-cli -c <core-api-url> rack maintenance start \
-  --rack <rack-id> \
-  --activities firmware-upgrade \
-  --firmware-version <target-version>
-
-carbide-admin-cli -c <core-api-url> rack maintenance start \
-  --rack <rack-id> \
-  --machine-ids <machine-id-1>,<machine-id-2> \
-  --activities firmware-upgrade \
-  --firmware-version <target-version> \
-  --components BMC,BIOS
 ```
 
 ## Monitor Progress
@@ -404,8 +421,8 @@ is unclear.
 | Show machine details and health reports | `carbide-admin-cli -c <core-api-url> machine show <machine-id>` |
 | Show host firmware baseline entries | `carbide-admin-cli -c <core-api-url> firmware show` |
 | Show DPU firmware status | `carbide-admin-cli -c <core-api-url> dpu versions` |
-| Show rack firmware job status | `carbide-admin-cli -c <core-api-url> rack-firmware status <job-id>` |
-| Show component firmware status | `carbide-admin-cli -c <core-api-url> component-manager get-firmware-update-status <target> ...` |
+| Start rack or tray firmware update workflow | Use the rack and tray REST firmware endpoints. The response returns `taskIds`. |
+| Show switch or power shelf component firmware status | `carbide-admin-cli -c <core-api-url> component-manager get-firmware-update-status <target> ...` |
 
 Useful metrics:
 
@@ -424,10 +441,12 @@ Useful metrics:
 
 If a firmware update does not progress:
 
-1. Inspect the managed-host, rack, or component status for the failing object.
+1. Inspect the managed-host state, REST task IDs, or component status for the
+   failing object.
 2. Check the health reports and handler outcome for the reason NICo is waiting.
 3. Check `carbide-api` logs for Redfish task failures, BMC reachability errors,
-   script failures, or RMS/component-manager job errors.
+   script failures, REST firmware task failures, RMS backend errors, or
+   component-manager job errors.
 4. Follow the platform or OEM recovery procedure before retrying a failed
    firmware operation.
 5. Retry through the same NICo workflow after the underlying platform condition
@@ -436,8 +455,8 @@ If a firmware update does not progress:
 A host firmware failure can place the host in a failed firmware-upgrade state.
 NICo retries according to `firmware_global.host_firmware_upgrade_retry_interval`
 where retry is supported. A rack or component firmware failure should be
-tracked through the rack firmware job, rack state, or component-manager status
-for that target.
+tracked through the REST task IDs returned by the rack or tray firmware API,
+or through component-manager status for switch and power shelf targets.
 
 After the platform condition is corrected, reset a failed host reprovisioning
 flow only when the site runbook calls for it:
