@@ -15,13 +15,19 @@
  * limitations under the License.
  */
 
-use crate::state_controller::common_services::CommonStateHandlerServices;
-use crate::state_controller::network_segment::metrics::NetworkSegmentMetrics;
-use crate::state_controller::state_handler::StateHandlerContextObjects;
+use sqlx::PgPool;
+use state_controller::state_handler::StateHandlerContextObjects;
+
+use crate::metrics::NetworkSegmentMetrics;
 
 pub struct NetworkSegmentStateHandlerContextObjects {}
 
+#[derive(Clone)]
+pub struct NetworkSegmentStateHandlerServices {
+    pub db_pool: PgPool,
+}
+
 impl StateHandlerContextObjects for NetworkSegmentStateHandlerContextObjects {
-    type Services = CommonStateHandlerServices;
+    type Services = NetworkSegmentStateHandlerServices;
     type ObjectMetrics = NetworkSegmentMetrics;
 }

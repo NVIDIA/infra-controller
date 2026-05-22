@@ -26,6 +26,9 @@ use carbide_firmware::FirmwareDownloader;
 use carbide_ib_fabric::IbFabricMonitor;
 use carbide_ib_fabric::ib::{self, IBFabricManager};
 use carbide_ipmi::IPMITool;
+use carbide_network_segment_controller::context::NetworkSegmentStateHandlerServices;
+use carbide_network_segment_controller::handler::NetworkSegmentStateHandler;
+use carbide_network_segment_controller::io::NetworkSegmentStateControllerIO;
 use carbide_nvlink_manager::NvlPartitionMonitor;
 use carbide_preingestion_manager::PreingestionManager;
 use carbide_redfish::libredfish::RedfishClientPool;
@@ -87,8 +90,6 @@ use crate::state_controller::ib_partition::handler::IBPartitionStateHandler;
 use crate::state_controller::ib_partition::io::IBPartitionStateControllerIO;
 use crate::state_controller::machine::handler::MachineStateHandlerBuilder;
 use crate::state_controller::machine::io::MachineStateControllerIO;
-use crate::state_controller::network_segment::handler::NetworkSegmentStateHandler;
-use crate::state_controller::network_segment::io::NetworkSegmentStateControllerIO;
 use crate::state_controller::power_shelf::handler::PowerShelfStateHandler;
 use crate::state_controller::power_shelf::io::PowerShelfStateControllerIO;
 use crate::state_controller::rack::handler::RackStateHandler;
@@ -1125,7 +1126,12 @@ pub async fn initialize_and_start_controllers<'a>(
         .database(db_pool.clone(), work_lock_manager_handle.clone())
         .meter("carbide_network_segments", meter.clone())
         .processor_id(state_controller_id.clone())
-        .services(handler_services.clone());
+        .services(
+            NetworkSegmentStateHandlerServices {
+                db_pool: handler_services.db_pool.clone(),
+            }
+            .into(),
+        );
     ns_builder
         .iteration_config((&carbide_config.network_segment_state_controller.controller).into())
         .state_handler(Arc::new(NetworkSegmentStateHandler::new(

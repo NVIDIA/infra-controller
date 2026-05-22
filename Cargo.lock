@@ -1184,6 +1184,7 @@ dependencies = [
  "carbide-measured-boot",
  "carbide-metrics-utils",
  "carbide-network",
+ "carbide-network-segment-controller",
  "carbide-nvlink-manager",
  "carbide-preingestion-manager",
  "carbide-prost-builder",
@@ -2218,6 +2219,25 @@ dependencies = [
  "serde_json",
  "sqlx",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "carbide-network-segment-controller"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "carbide-api-db",
+ "carbide-api-model",
+ "carbide-utils",
+ "carbide-uuid",
+ "chrono",
+ "config-version",
+ "eyre",
+ "ipnetwork",
+ "opentelemetry",
+ "sqlx",
+ "state-controller",
+ "tracing",
 ]
 
 [[package]]
