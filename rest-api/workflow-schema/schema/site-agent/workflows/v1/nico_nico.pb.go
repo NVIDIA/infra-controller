@@ -373,21 +373,24 @@ const (
 	TenantState_UPDATING TenantState = 8
 	// Something Wrong happened at nico. Check logs for more info.
 	TenantState_INVALID TenantState = 9
+	// Instance is undergoing online repair on the site.
+	TenantState_REPAIRING TenantState = 10
 )
 
 // Enum value maps for TenantState.
 var (
 	TenantState_name = map[int32]string{
-		0: "PROVISIONING",
-		1: "READY",
-		2: "CONFIGURING",
-		3: "TERMINATING",
-		4: "TERMINATED",
-		5: "FAILED",
-		6: "DPU_REPROVISIONING",
-		7: "HOST_REPROVISIONING",
-		8: "UPDATING",
-		9: "INVALID",
+		0:  "PROVISIONING",
+		1:  "READY",
+		2:  "CONFIGURING",
+		3:  "TERMINATING",
+		4:  "TERMINATED",
+		5:  "FAILED",
+		6:  "DPU_REPROVISIONING",
+		7:  "HOST_REPROVISIONING",
+		8:  "UPDATING",
+		9:  "INVALID",
+		10: "REPAIRING",
 	}
 	TenantState_value = map[string]int32{
 		"PROVISIONING":        0,
@@ -400,6 +403,7 @@ var (
 		"HOST_REPROVISIONING": 7,
 		"UPDATING":            8,
 		"INVALID":             9,
+		"REPAIRING":           10,
 	}
 )
 
@@ -53293,7 +53297,7 @@ const file_nico_nico_proto_rawDesc = "" +
 	"\x0fPrefixMatchType\x12\x10\n" +
 	"\fPREFIX_EXACT\x10\x00\x12\x13\n" +
 	"\x0fPREFIX_CONTAINS\x10\x01\x12\x17\n" +
-	"\x13PREFIX_CONTAINED_BY\x10\x02*\xb4\x01\n" +
+	"\x13PREFIX_CONTAINED_BY\x10\x02*\xc3\x01\n" +
 	"\vTenantState\x12\x10\n" +
 	"\fPROVISIONING\x10\x00\x12\t\n" +
 	"\x05READY\x10\x01\x12\x0f\n" +
@@ -53306,7 +53310,9 @@ const file_nico_nico_proto_rawDesc = "" +
 	"\x12DPU_REPROVISIONING\x10\x06\x12\x17\n" +
 	"\x13HOST_REPROVISIONING\x10\a\x12\f\n" +
 	"\bUPDATING\x10\b\x12\v\n" +
-	"\aINVALID\x10\t*`\n" +
+	"\aINVALID\x10\t\x12\r\n" +
+	"\tREPAIRING\x10\n" +
+	"*`\n" +
 	"\rDeletedFilter\x12\x1a\n" +
 	"\x16DELETED_FILTER_EXCLUDE\x10\x00\x12\x17\n" +
 	"\x13DELETED_FILTER_ONLY\x10\x01\x12\x1a\n" +

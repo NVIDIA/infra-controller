@@ -1136,7 +1136,7 @@ async fn test_request_repair_health_override_template(
 
     // Create a RequestRepair health override using the API
     let repair_request_override = health_report::HealthReport {
-        source: "repair-request".to_string(),
+        source: health_report::REPAIR_REQUEST_MERGE_SOURCE.to_string(),
         triggered_by: None,
         observed_at: Some(chrono::Utc::now()),
         successes: vec![],
@@ -1174,7 +1174,10 @@ async fn test_request_repair_health_override_template(
         machine.health_sources[1].mode,
         HealthReportApplyMode::Merge as i32
     );
-    assert_eq!(machine.health_sources[1].source, "repair-request");
+    assert_eq!(
+        machine.health_sources[1].source,
+        health_report::REPAIR_REQUEST_MERGE_SOURCE
+    );
 
     // Verify aggregate health includes the override
     let aggregate_health = aggregate(machine).unwrap();
@@ -1232,7 +1235,7 @@ async fn test_tenant_reported_issue_and_request_repair_combined(
     };
 
     let repair_request_override = health_report::HealthReport {
-        source: "repair-request".to_string(),
+        source: health_report::REPAIR_REQUEST_MERGE_SOURCE.to_string(),
         triggered_by: None,
         observed_at: Some(chrono::Utc::now()),
         successes: vec![],
@@ -1278,7 +1281,7 @@ async fn test_tenant_reported_issue_and_request_repair_combined(
         .map(|o| o.source.clone())
         .collect();
     assert!(sources.contains(&"tenant-reported-issue".to_string()));
-    assert!(sources.contains(&"repair-request".to_string()));
+    assert!(sources.contains(&health_report::REPAIR_REQUEST_MERGE_SOURCE.to_string()));
 
     // All should be merge mode
     for override_entry in &machine.health_sources {

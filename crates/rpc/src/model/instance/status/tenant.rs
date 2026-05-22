@@ -22,13 +22,19 @@ use model::machine::{InstanceState, ManagedHostState};
 use crate as rpc;
 use crate::errors::RpcDataConversionError;
 
-/// Tries to convert Machine state to tenant state.
+/// Converts machine state into the tenant-visible [`TenantState`].
+///
+/// When `repair_active` is true, [`TenantState::Repairing`] is returned only if the
+/// instance would otherwise be tenant-ready (`InstanceState::Ready` with synced configs
+/// and extension services ready). It does not override Failed, Updating, Configuring,
+/// Provisioning, or Terminating.
 pub fn instance_status_tenant_state(
     machine_state: ManagedHostState,
     configs_synced: SyncState,
     phone_home_enrolled: bool,
     phone_home_last_contact: Option<chrono::DateTime<chrono::Utc>>,
     extension_services_ready: bool,
+    repair_active: bool,
 ) -> Result<TenantState, RpcDataConversionError> {
     // At this point, we are sure that instance is created.
     // If machine state is still ready, means state machine has not processed this instance
@@ -61,7 +67,8 @@ pub fn instance_status_tenant_state(
                     (false, _, false) => TenantState::Configuring,
 
                     // If there is no pending phone-home and extension services are ready,
-                    // return Ready (this was the default before phone_home)
+                    // the instance is tenant-ready; surface online repair only in this case.
+                    (false, SyncState::Synced, true) if repair_active => TenantState::Repairing,
                     (false, SyncState::Synced, true) => TenantState::Ready,
 
                     // If there is a pending phone-home, we're still
@@ -125,6 +132,127 @@ impl TryFrom<TenantState> for rpc::TenantState {
             TenantState::HostReprovisioning => rpc::TenantState::HostReprovisioning,
             TenantState::Updating => rpc::TenantState::Updating,
             TenantState::Invalid => rpc::TenantState::Invalid,
+            TenantState::Repairing => rpc::TenantState::Repairing,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::str::FromStr;
+
+    use carbide_uuid::machine::MachineId;
+    use chrono::Utc;
+    use health_report::{HealthReport, REPAIR_REQUEST_MERGE_SOURCE};
+    use model::health::HealthReportSources;
+    use model::instance::status::SyncState;
+    use model::machine::{
+        DpuReprovisionStates, FailureCause, FailureDetails, FailureSource, InstanceState,
+        ManagedHostState,
+    };
+
+    use super::*;
+
+    #[test]
+    fn repair_merge_active_detects_merge_sources() {
+        let mut health = HealthReportSources::default();
+        assert!(!health.repair_merge_active());
+        health.merges.insert(
+            REPAIR_REQUEST_MERGE_SOURCE.to_string(),
+            HealthReport {
+                source: REPAIR_REQUEST_MERGE_SOURCE.to_string(),
+                ..Default::default()
+            },
+        );
+        assert!(health.repair_merge_active());
+    }
+
+    #[test]
+    fn repair_merge_tenant_state_precedence() {
+        let machine_id =
+            MachineId::from_str("fm100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0")
+                .unwrap();
+        let failed = InstanceState::Failed {
+            details: FailureDetails {
+                cause: FailureCause::NoError,
+                failed_at: Utc::now(),
+                source: FailureSource::StateMachine,
+            },
+            machine_id,
+        };
+
+        struct Case {
+            name: &'static str,
+            machine_state: ManagedHostState,
+            configs_synced: SyncState,
+            repair_active: bool,
+            expected: TenantState,
+        }
+
+        let cases = [
+            Case {
+                name: "tenant-ready with repair merge",
+                machine_state: ManagedHostState::Assigned {
+                    instance_state: InstanceState::Ready,
+                },
+                configs_synced: SyncState::Synced,
+                repair_active: true,
+                expected: TenantState::Repairing,
+            },
+            Case {
+                name: "terminating with repair merge",
+                machine_state: ManagedHostState::Assigned {
+                    instance_state: InstanceState::SwitchToAdminNetwork,
+                },
+                configs_synced: SyncState::Synced,
+                repair_active: true,
+                expected: TenantState::Terminating,
+            },
+            Case {
+                name: "reprovision with repair merge",
+                machine_state: ManagedHostState::Assigned {
+                    instance_state: InstanceState::DPUReprovision {
+                        dpu_states: DpuReprovisionStates {
+                            states: HashMap::new(),
+                        },
+                    },
+                },
+                configs_synced: SyncState::Synced,
+                repair_active: true,
+                expected: TenantState::Updating,
+            },
+            Case {
+                name: "configuring with repair merge",
+                machine_state: ManagedHostState::Assigned {
+                    instance_state: InstanceState::Ready,
+                },
+                configs_synced: SyncState::Pending,
+                repair_active: true,
+                expected: TenantState::Configuring,
+            },
+            Case {
+                name: "failed with repair merge",
+                machine_state: ManagedHostState::Assigned {
+                    instance_state: failed,
+                },
+                configs_synced: SyncState::Synced,
+                repair_active: true,
+                expected: TenantState::Failed,
+            },
+        ];
+
+        for case in cases {
+            let state = instance_status_tenant_state(
+                case.machine_state,
+                case.configs_synced,
+                false,
+                None,
+                true,
+                case.repair_active,
+            )
+            .unwrap_or_else(|_| panic!("case {:?} failed conversion", case.name));
+            assert_eq!(state, case.expected, "case: {}", case.name);
+        }
     }
 }

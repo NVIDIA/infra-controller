@@ -19,6 +19,7 @@ use std::collections::HashMap;
 
 use carbide_uuid::machine::MachineId;
 use config_version::Versioned;
+use model::health::HealthReportSources;
 use model::instance::snapshot::InstanceSnapshot;
 use model::instance::status::InstanceStatus;
 use model::machine::infiniband::MachineInfinibandStatusObservation;
@@ -37,6 +38,7 @@ pub fn instance_snapshot_derive_status(
     reprovision_request: Option<ReprovisionRequest>,
     ib_status: Option<&MachineInfinibandStatusObservation>,
     nvlink_status: Option<&MachineNvLinkStatusObservation>,
+    host_health: &HealthReportSources,
 ) -> Result<InstanceStatus, RpcDataConversionError> {
     instance_status_from_config_and_observation(
         dpu_id_to_device_map,
@@ -55,5 +57,6 @@ pub fn instance_snapshot_derive_status(
         ib_status,
         nvlink_status,
         snapshot.update_network_config_request.is_some(),
+        host_health,
     )
 }
