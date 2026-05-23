@@ -25,6 +25,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::state_controller::config::IterationConfig;
 use crate::state_controller::controller::StateController;
+use crate::state_controller::power_shelf::context::PowerShelfStateHandlerServices;
 use crate::state_controller::power_shelf::handler::PowerShelfStateHandler;
 use crate::state_controller::power_shelf::io::PowerShelfStateControllerIO;
 use crate::tests::common;
@@ -136,7 +137,14 @@ async fn test_power_shelf_deletion_with_state_controller(
         })
         .database(pool.clone(), env.api.work_lock_manager_handle.clone())
         .processor_id(uuid::Uuid::new_v4().to_string())
-        .services(handler_services.clone())
+        .services(
+            PowerShelfStateHandlerServices {
+                db_pool: handler_services.db_pool.clone(),
+                rms_client: handler_services.rms_client.clone(),
+                credential_manager: handler_services.credential_manager.clone(),
+            }
+            .into(),
+        )
         .state_handler(power_shelf_handler.clone())
         .build_for_manual_iterations(cancel_token.clone())
         .unwrap();

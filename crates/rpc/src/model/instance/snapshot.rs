@@ -19,6 +19,7 @@ use std::collections::HashMap;
 
 use carbide_uuid::machine::MachineId;
 use config_version::Versioned;
+use model::health::HealthReportSources;
 use model::instance::snapshot::InstanceSnapshot;
 use model::instance::status::InstanceStatus;
 use model::machine::infiniband::MachineInfinibandStatusObservation;
@@ -31,6 +32,7 @@ use crate::model::instance::status::instance_status_from_config_and_observation;
 
 /// Derives the tenant and site-admin facing [`InstanceStatus`] from the
 /// snapshot information about the instance
+#[allow(clippy::too_many_arguments)]
 pub fn instance_snapshot_derive_status(
     snapshot: &InstanceSnapshot,
     dpu_id_to_device_map: HashMap<String, Vec<MachineId>>,
@@ -39,6 +41,7 @@ pub fn instance_snapshot_derive_status(
     ib_status: Option<&MachineInfinibandStatusObservation>,
     nvlink_status: Option<&MachineNvLinkStatusObservation>,
     spx_status: Option<&MachineSpxStatusObservation>,
+    host_health: &HealthReportSources,
 ) -> Result<InstanceStatus, RpcDataConversionError> {
     instance_status_from_config_and_observation(
         dpu_id_to_device_map,
@@ -59,5 +62,6 @@ pub fn instance_snapshot_derive_status(
         nvlink_status,
         spx_status,
         snapshot.update_network_config_request.is_some(),
+        host_health,
     )
 }

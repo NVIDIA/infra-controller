@@ -20,11 +20,11 @@
 use carbide_uuid::switch::SwitchId;
 use db::switch as db_switch;
 use model::switch::{Switch, SwitchControllerState};
-
-use crate::state_controller::state_handler::{
+use state_controller::state_handler::{
     StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
-use crate::state_controller::switch::context::SwitchStateHandlerContextObjects;
+
+use crate::context::SwitchStateHandlerContextObjects;
 
 /// Handles the Deleting state for a switch.
 /// TODO: Implement full deletion logic (check in use, shut down, release resources).

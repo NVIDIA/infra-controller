@@ -239,6 +239,7 @@ service Forge {
   rpc FindConnectedDevicesByDpuMachineIds(common.MachineIdList) returns (ConnectedDeviceList);
   rpc FindMachineIdsByBmcIps(BmcIpList) returns (MachineIdBmcIpPairs);
   rpc FindMacAddressByBmcIp(BmcIp) returns (MacAddressBmcIp);
+  rpc FindBmcIps(FindBmcIpsRequest) returns (BmcIpList);
   rpc IdentifyUuid(IdentifyUuidRequest) returns (IdentifyUuidResponse);
   rpc IdentifyMac(IdentifyMacRequest) returns (IdentifyMacResponse);
   rpc IdentifySerial(IdentifySerialRequest) returns (IdentifySerialResponse);
@@ -1781,6 +1782,8 @@ enum TenantState {
 
   // Something Wrong happened at carbide. Check logs for more info.
   INVALID = 9;
+  // Instance is undergoing online repair (health override active).
+  REPAIRING = 10;
 }
 
 // Describe the desired configuration of an IBPartition
@@ -5225,6 +5228,13 @@ enum UuidType {
   UuidTypeDomain = 4;
   UuidTypeDpaInterfaceId = 5;
   UuidTypeComputeAllocationId = 6;
+}
+
+message FindBmcIpsRequest {
+  oneof lookup_by {
+    string mac_address = 1;
+    string serial = 2;
+  }
 }
 
 message IdentifyMacRequest {

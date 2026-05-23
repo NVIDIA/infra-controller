@@ -15,13 +15,23 @@
  * limitations under the License.
  */
 
-use crate::state_controller::common_services::CommonStateHandlerServices;
-use crate::state_controller::network_segment::metrics::NetworkSegmentMetrics;
-use crate::state_controller::state_handler::StateHandlerContextObjects;
+use std::sync::Arc;
 
-pub struct NetworkSegmentStateHandlerContextObjects {}
+use carbide_redfish::libredfish::RedfishClientPool;
+use sqlx::PgPool;
+use state_controller::state_handler::StateHandlerContextObjects;
 
-impl StateHandlerContextObjects for NetworkSegmentStateHandlerContextObjects {
-    type Services = CommonStateHandlerServices;
-    type ObjectMetrics = NetworkSegmentMetrics;
+use crate::metrics::AttestationMetrics;
+
+pub struct SpdmStateHandlerContextObjects {}
+
+#[derive(Clone)]
+pub struct SpdmStateHandlerServices {
+    pub db_pool: PgPool,
+    pub redfish_client_pool: Arc<dyn RedfishClientPool>,
+}
+
+impl StateHandlerContextObjects for SpdmStateHandlerContextObjects {
+    type Services = SpdmStateHandlerServices;
+    type ObjectMetrics = AttestationMetrics;
 }

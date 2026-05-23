@@ -17,6 +17,19 @@
 
 //! Handler for RackState::Maintenance.
 
+use carbide_rack::firmware_update::{
+    RackFirmwareInventory, RackSwitchFirmwareInventory, build_firmware_update_batches,
+    build_new_node_info, firmware_type_for_profile, load_rack_firmware_inventory,
+    load_rack_switch_firmware_inventory, submit_firmware_update_batches,
+};
+use carbide_rack::rack_manager_error;
+use carbide_rack::rms_client::SwitchSystemImageRmsClient;
+use carbide_rack_controller::context::RackStateHandlerContextObjects;
+use carbide_rack_controller::fabric_manager::{
+    get_scale_up_fabric_services_status, persist_fabric_manager_statuses, persist_primary_switch,
+    select_primary_switch, validate_switch_inventory_for_nmx_cluster,
+};
+use carbide_rack_controller::validating::strip_rv_labels;
 use carbide_uuid::rack::{RackId, RackProfileId};
 use db::{
     host_machine_update as db_host_machine_update, machine as db_machine,
@@ -33,23 +46,12 @@ use model::rack::{
 };
 use model::rack_firmware::{RackFirmware, RackFirmwareSearchFilter};
 use model::rack_type::RackHardwareType;
-
-use crate::rack::firmware_update::{
-    RackFirmwareInventory, RackSwitchFirmwareInventory, build_firmware_update_batches,
-    build_new_node_info, firmware_type_for_profile, load_rack_firmware_inventory,
-    load_rack_switch_firmware_inventory, submit_firmware_update_batches,
-};
-use crate::rack::rms_client::SwitchSystemImageRmsClient;
-use crate::state_controller::external_service_error::rack_manager_error;
-use crate::state_controller::rack::context::RackStateHandlerContextObjects;
-use crate::state_controller::rack::fabric_manager::{
-    get_scale_up_fabric_services_status, persist_fabric_manager_statuses, persist_primary_switch,
-    select_primary_switch, validate_switch_inventory_for_nmx_cluster,
-};
-use crate::state_controller::rack::validating::strip_rv_labels;
-use crate::state_controller::state_handler::{
+use state_controller::state_handler::{
     StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
+
+use crate::rack as carbide_rack;
+use crate::state_controller::rack as carbide_rack_controller;
 
 /// Strips all `rv.*` metadata labels from every machine in the rack.
 ///
@@ -552,7 +554,7 @@ fn build_switch_device_info_request(
 async fn rms_start_firmware_upgrade(
     rms_client: &dyn librms::RmsApi,
     firmware_id: &str,
-    batches: Vec<crate::rack::firmware_update::FirmwareUpdateBatchRequest>,
+    batches: Vec<carbide_rack::firmware_update::FirmwareUpdateBatchRequest>,
 ) -> model::rack::FirmwareUpgradeJob {
     let started_at = chrono::Utc::now();
     let submissions = submit_firmware_update_batches(rms_client, batches).await;
@@ -1993,6 +1995,7 @@ pub async fn handle_maintenance(
 
 #[cfg(test)]
 mod tests {
+    use carbide_rack::firmware_update::RackFirmwareInventory;
     use model::rack::{
         ConfigureNmxClusterState, FirmwareUpgradeDeviceInfo, FirmwareUpgradeState,
         MaintenanceActivity, MaintenanceScope, NvosUpdateState, RackMaintenanceState,
@@ -2003,7 +2006,7 @@ mod tests {
         filter_inventory_by_scope, first_maintenance_state, implicit_nvos_update_requested,
         next_state_after_configure, next_state_after_firmware, next_state_after_nvos,
     };
-    use crate::rack::firmware_update::RackFirmwareInventory;
+    use crate::rack as carbide_rack;
 
     fn test_machine_id(byte: u8) -> carbide_uuid::machine::MachineId {
         use carbide_uuid::machine::{MachineIdSource, MachineType};

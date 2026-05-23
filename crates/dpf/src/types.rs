@@ -305,6 +305,10 @@ impl From<DpuStatusPhase> for DpuPhase {
             DpuStatusPhase::InitializeInterface => Self::Provisioning("InitializeInterface".into()),
             DpuStatusPhase::CheckingHostRebootRequired => Self::Rebooting,
             DpuStatusPhase::NodeEffectRemoval => Self::NodeEffect,
+            DpuStatusPhase::DpuConfig => Self::Provisioning("DpuConfig".into()),
+            DpuStatusPhase::PerformArmForceRestart => {
+                Self::Provisioning("PerformArmForceRestart".into())
+            }
         }
     }
 }

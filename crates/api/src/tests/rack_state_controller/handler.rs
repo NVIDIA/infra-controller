@@ -620,7 +620,7 @@ async fn test_expected_no_definition_stays_parked(
     let mut rack = get_db_rack(txn.as_mut(), &rack_id).await;
 
     let handler = RackStateHandler::default();
-    let mut services = env.state_handler_services();
+    let mut services = env.rack_state_handler_services();
     let mut metrics = RackMetrics::default();
     let mut db_writes = DbWriteBatch::default();
     let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
@@ -760,7 +760,7 @@ async fn test_expected_incomplete_device_counts_stays(
     .await?;
 
     let handler = RackStateHandler::default();
-    let mut services = env.state_handler_services();
+    let mut services = env.rack_state_handler_services();
     let mut metrics = RackMetrics::default();
     let mut db_writes = DbWriteBatch::default();
     let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
@@ -818,7 +818,7 @@ async fn test_expected_counts_match_but_not_linked_stays(
     let mut rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
 
     let handler = RackStateHandler::default();
-    let mut services = env.state_handler_services();
+    let mut services = env.rack_state_handler_services();
     let mut metrics = RackMetrics::default();
     let mut db_writes = DbWriteBatch::default();
     let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
@@ -887,7 +887,7 @@ async fn test_expected_zero_topology_transitions_to_discovering(
     let mut rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
 
     let handler = RackStateHandler::default();
-    let mut services = env.state_handler_services();
+    let mut services = env.rack_state_handler_services();
     let mut metrics = RackMetrics::default();
     let mut db_writes = DbWriteBatch::default();
     let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
@@ -956,7 +956,7 @@ async fn test_expected_more_discovered_than_expected_transitions(
     let mut rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
 
     let handler = RackStateHandler::default();
-    let mut services = env.state_handler_services();
+    let mut services = env.rack_state_handler_services();
     let mut metrics = RackMetrics::default();
     let mut db_writes = DbWriteBatch::default();
     let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
@@ -1020,7 +1020,7 @@ async fn test_discovering_waits_for_compute_ready(
     .await?;
 
     let handler = RackStateHandler::default();
-    let mut services = env.state_handler_services();
+    let mut services = env.rack_state_handler_services();
     let mut metrics = RackMetrics::default();
     let mut db_writes = DbWriteBatch::default();
     let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
@@ -1075,7 +1075,7 @@ async fn test_discovering_empty_rack_transitions_to_maintenance(
     let mut rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
 
     let handler = RackStateHandler::default();
-    let mut services = env.state_handler_services();
+    let mut services = env.rack_state_handler_services();
     let mut metrics = RackMetrics::default();
     let mut db_writes = DbWriteBatch::default();
     let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
@@ -1126,7 +1126,7 @@ async fn test_error_state_does_nothing(
     let mut rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
 
     let handler = RackStateHandler::default();
-    let mut services = env.state_handler_services();
+    let mut services = env.rack_state_handler_services();
     let mut metrics = RackMetrics::default();
     let mut db_writes = DbWriteBatch::default();
     let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
@@ -1172,7 +1172,7 @@ async fn test_maintenance_completed_transitions_to_validation(
     let mut rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
 
     let handler = RackStateHandler::default();
-    let mut services = env.state_handler_services();
+    let mut services = env.rack_state_handler_services();
     let mut metrics = RackMetrics::default();
     let mut db_writes = DbWriteBatch::default();
     let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
@@ -1232,7 +1232,7 @@ async fn test_ready_with_no_labels_stays_ready(
     let mut rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
 
     let handler = RackStateHandler::default();
-    let mut services = env.state_handler_services();
+    let mut services = env.rack_state_handler_services();
     let mut metrics = RackMetrics::default();
     let mut db_writes = DbWriteBatch::default();
     let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
@@ -1278,7 +1278,7 @@ async fn test_firmware_upgrade_start_without_default_advances_to_nvos_update(
     let mut rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
 
     let handler_instance = RackStateHandler::default();
-    let mut services = env.state_handler_services();
+    let mut services = env.rack_state_handler_services();
     let mut metrics = RackMetrics::default();
     let mut db_writes = DbWriteBatch::default();
     let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
@@ -1362,7 +1362,7 @@ async fn test_firmware_upgrade_start_with_unavailable_default_advances_to_nvos_u
     let mut rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
 
     let handler_instance = RackStateHandler::default();
-    let mut services = env.state_handler_services();
+    let mut services = env.rack_state_handler_services();
     let mut metrics = RackMetrics::default();
     let mut db_writes = DbWriteBatch::default();
     let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
@@ -1473,7 +1473,7 @@ async fn test_firmware_upgrade_start_transitions_to_wait_for_complete(
     let mut rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
 
     let handler_instance = RackStateHandler::default();
-    let mut services = env.state_handler_services();
+    let mut services = env.rack_state_handler_services();
     let mut metrics = RackMetrics::default();
     let mut db_writes = DbWriteBatch::default();
     let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
@@ -1605,7 +1605,7 @@ async fn test_firmware_upgrade_wait_for_complete_waits_while_jobs_running(
     });
 
     let handler_instance = RackStateHandler::default();
-    let mut services = env.state_handler_services();
+    let mut services = env.rack_state_handler_services();
     let mut metrics = RackMetrics::default();
     let mut db_writes = DbWriteBatch::default();
     let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
@@ -1694,7 +1694,7 @@ async fn test_firmware_upgrade_wait_for_complete_transitions_to_error_on_job_fai
     });
 
     let handler_instance = RackStateHandler::default();
-    let mut services = env.state_handler_services();
+    let mut services = env.rack_state_handler_services();
     let mut metrics = RackMetrics::default();
     let mut db_writes = DbWriteBatch::default();
     let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
@@ -1818,7 +1818,7 @@ async fn test_firmware_upgrade_wait_for_complete_waits_for_all_nodes_to_be_termi
     });
 
     let handler_instance = RackStateHandler::default();
-    let mut services = env.state_handler_services();
+    let mut services = env.rack_state_handler_services();
     let mut metrics = RackMetrics::default();
     let mut db_writes = DbWriteBatch::default();
     let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
@@ -1972,7 +1972,7 @@ async fn test_firmware_upgrade_wait_for_complete_retries_when_job_lookup_fails(
     });
 
     let handler_instance = RackStateHandler::default();
-    let mut services = env.state_handler_services();
+    let mut services = env.rack_state_handler_services();
     let mut metrics = RackMetrics::default();
     let mut db_writes = DbWriteBatch::default();
     let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
@@ -2051,7 +2051,7 @@ async fn test_firmware_upgrade_wait_for_complete_retries_on_transient_poll_error
     });
 
     let handler_instance = RackStateHandler::default();
-    let mut services = env.state_handler_services();
+    let mut services = env.rack_state_handler_services();
     let mut metrics = RackMetrics::default();
     let mut db_writes = DbWriteBatch::default();
     let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
@@ -2145,7 +2145,7 @@ async fn test_nvos_update_start_transitions_to_wait_for_complete(
     let mut rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
 
     let handler_instance = RackStateHandler::default();
-    let mut services = env.state_handler_services();
+    let mut services = env.rack_state_handler_services();
     let mut metrics = RackMetrics::default();
     let mut db_writes = DbWriteBatch::default();
     let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
@@ -2228,7 +2228,7 @@ async fn test_configure_nmx_cluster_transitions_to_completed(
     let mut rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
 
     let handler_instance = RackStateHandler::default();
-    let mut services = env.state_handler_services();
+    let mut services = env.rack_state_handler_services();
     let mut metrics = RackMetrics::default();
     let mut db_writes = DbWriteBatch::default();
     let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
@@ -2296,7 +2296,7 @@ async fn test_ready_topology_changed_transitions_to_discovering(
     let mut rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
 
     let handler_instance = RackStateHandler::default();
-    let mut services = env.state_handler_services();
+    let mut services = env.rack_state_handler_services();
     let mut metrics = RackMetrics::default();
     let mut db_writes = DbWriteBatch::default();
     let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
@@ -2354,7 +2354,7 @@ async fn test_ready_reprovision_requested_transitions_to_maintenance(
     let mut rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
 
     let handler_instance = RackStateHandler::default();
-    let mut services = env.state_handler_services();
+    let mut services = env.rack_state_handler_services();
     let mut metrics = RackMetrics::default();
     let mut db_writes = DbWriteBatch::default();
     let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
@@ -2406,7 +2406,7 @@ async fn test_validation_failed_transitions_to_error(
     let mut rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
 
     let handler_instance = RackStateHandler::default();
-    let mut services = env.state_handler_services();
+    let mut services = env.rack_state_handler_services();
     let mut metrics = RackMetrics::default();
     let mut db_writes = DbWriteBatch::default();
     let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
@@ -2505,7 +2505,7 @@ async fn test_ready_with_failed_switch_transitions_to_error(
     let mut rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
 
     let handler = RackStateHandler::default();
-    let mut services = env.state_handler_services();
+    let mut services = env.rack_state_handler_services();
     let mut metrics = RackMetrics::default();
     let mut db_writes = DbWriteBatch::default();
     let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
@@ -2580,7 +2580,7 @@ async fn test_ready_with_failed_power_shelf_transitions_to_error(
     let mut rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
 
     let handler = RackStateHandler::default();
-    let mut services = env.state_handler_services();
+    let mut services = env.rack_state_handler_services();
     let mut metrics = RackMetrics::default();
     let mut db_writes = DbWriteBatch::default();
     let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
@@ -2631,7 +2631,7 @@ async fn test_ready_with_all_healthy_components_waits(
     let mut rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
 
     let handler = RackStateHandler::default();
-    let mut services = env.state_handler_services();
+    let mut services = env.rack_state_handler_services();
     let mut metrics = RackMetrics::default();
     let mut db_writes = DbWriteBatch::default();
     let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
@@ -2683,7 +2683,7 @@ async fn test_error_recovers_to_ready_when_all_components_ready(
     let error_state = rack.controller_state.value.clone();
 
     let handler = RackStateHandler::default();
-    let mut services = env.state_handler_services();
+    let mut services = env.rack_state_handler_services();
     let mut metrics = RackMetrics::default();
     let mut db_writes = DbWriteBatch::default();
     let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
@@ -2742,7 +2742,7 @@ async fn test_error_stays_in_error_when_components_not_all_ready(
     let error_state = rack.controller_state.value.clone();
 
     let handler = RackStateHandler::default();
-    let mut services = env.state_handler_services();
+    let mut services = env.rack_state_handler_services();
     let mut metrics = RackMetrics::default();
     let mut db_writes = DbWriteBatch::default();
     let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {

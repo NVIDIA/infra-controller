@@ -15,13 +15,26 @@
  * limitations under the License.
  */
 
-use crate::state_controller::common_services::CommonStateHandlerServices;
-use crate::state_controller::spdm::metrics::AttestationMetrics;
-use crate::state_controller::state_handler::StateHandlerContextObjects;
+use std::sync::Arc;
 
-pub struct SpdmStateHandlerContextObjects {}
+use forge_secrets::credentials::CredentialManager;
+use librms::RmsApi;
+use sqlx::PgPool;
+use state_controller::state_handler::StateHandlerContextObjects;
 
-impl StateHandlerContextObjects for SpdmStateHandlerContextObjects {
-    type Services = CommonStateHandlerServices;
-    type ObjectMetrics = AttestationMetrics;
+use crate::metrics::SwitchMetrics;
+
+pub struct SwitchStateHandlerContextObjects {}
+
+#[derive(Clone)]
+pub struct SwitchStateHandlerServices {
+    pub db_pool: PgPool,
+    /// Rack Manager Service client
+    pub rms_client: Option<Arc<dyn RmsApi>>,
+    pub credential_manager: Arc<dyn CredentialManager>,
+}
+
+impl StateHandlerContextObjects for SwitchStateHandlerContextObjects {
+    type ObjectMetrics = SwitchMetrics;
+    type Services = SwitchStateHandlerServices;
 }

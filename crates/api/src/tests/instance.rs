@@ -5333,7 +5333,7 @@ async fn test_instance_release_backward_compatibility(_: PgPoolOptions, options:
         !host_machine
             .health_reports
             .merges
-            .contains_key("repair-request"),
+            .contains_key(health_report::REPAIR_REQUEST_MERGE_SOURCE),
         "Backward compatibility: RequestRepair override should NOT be applied without issue field"
     );
 
@@ -5442,7 +5442,7 @@ async fn test_instance_release_repair_tenant(_: PgPoolOptions, options: PgConnec
             let has_repair_request_override = host_machine
                 .health_reports
                 .merges
-                .contains_key("repair-request");
+                .contains_key(health_report::REPAIR_REQUEST_MERGE_SOURCE);
 
             assert!(
                 !has_tenant_reported_override,
@@ -5540,7 +5540,7 @@ async fn test_instance_release_combined_enhancements(_: PgPoolOptions, options: 
     let has_repair_request_override = host_machine
         .health_reports
         .merges
-        .contains_key("repair-request");
+        .contains_key(health_report::REPAIR_REQUEST_MERGE_SOURCE);
 
     assert!(
         !has_repair_request_override,
@@ -5734,14 +5734,18 @@ async fn test_instance_release_auto_repair_enabled(_: PgPoolOptions, options: Pg
         host_machine
             .health_reports
             .merges
-            .contains_key("repair-request"),
+            .contains_key(health_report::REPAIR_REQUEST_MERGE_SOURCE),
         "Should have RequestRepair override when auto-repair is enabled"
     );
 
     // 4. Verify the RequestRepair override content
-    let repair_override = &host_machine.health_reports.merges["repair-request"];
+    let repair_override =
+        &host_machine.health_reports.merges[health_report::REPAIR_REQUEST_MERGE_SOURCE];
     let repair_report: health_report::HealthReport = repair_override.clone();
-    assert_eq!(repair_report.source, "repair-request");
+    assert_eq!(
+        repair_report.source,
+        health_report::REPAIR_REQUEST_MERGE_SOURCE
+    );
     assert_eq!(repair_report.alerts.len(), 1);
     assert_eq!(repair_report.alerts[0].id.to_string(), "RequestRepair");
     assert!(

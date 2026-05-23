@@ -1254,7 +1254,8 @@ async fn test_instance_upgrading_actual_part_2(
             None,
             None,
             None,
-            None
+            None,
+            &host.health_reports,
         )
         .unwrap()
         .tenant
@@ -1294,7 +1295,8 @@ async fn test_instance_upgrading_actual_part_2(
             None,
             None,
             None,
-            None
+            None,
+            &host.health_reports,
         )
         .unwrap()
         .tenant
@@ -1344,7 +1346,8 @@ async fn test_instance_upgrading_actual_part_2(
             None,
             None,
             None,
-            None
+            None,
+            &host.health_reports,
         )
         .unwrap()
         .tenant
@@ -1391,7 +1394,8 @@ async fn test_instance_upgrading_actual_part_2(
             None,
             None,
             None,
-            None
+            None,
+            &host.health_reports,
         )
         .unwrap()
         .tenant
@@ -1428,7 +1432,8 @@ async fn test_instance_upgrading_actual_part_2(
             None,
             None,
             None,
-            None
+            None,
+            &host.health_reports,
         )
         .unwrap()
         .tenant
@@ -1487,7 +1492,8 @@ async fn test_instance_upgrading_actual_part_2(
             None,
             None,
             None,
-            None
+            None,
+            &host.health_reports,
         )
         .unwrap()
         .tenant
@@ -1524,7 +1530,8 @@ async fn test_instance_upgrading_actual_part_2(
             None,
             None,
             None,
-            None
+            None,
+            &host.health_reports,
         )
         .unwrap()
         .tenant
@@ -1573,7 +1580,8 @@ async fn test_instance_upgrading_actual_part_2(
             None,
             None,
             None,
-            None
+            None,
+            &host.health_reports,
         )
         .unwrap()
         .tenant
@@ -1642,7 +1650,8 @@ async fn test_instance_upgrading_actual_part_2(
             None,
             None,
             None,
-            None
+            None,
+            &host.health_reports,
         )
         .unwrap()
         .tenant
@@ -1707,7 +1716,8 @@ async fn test_instance_upgrading_actual_part_2(
             None,
             None,
             None,
-            None
+            None,
+            &host.health_reports,
         )
         .unwrap()
         .tenant
@@ -1744,7 +1754,8 @@ async fn test_instance_upgrading_actual_part_2(
             None,
             None,
             None,
-            None
+            None,
+            &host.health_reports,
         )
         .unwrap()
         .tenant
@@ -1779,7 +1790,8 @@ async fn test_instance_upgrading_actual_part_2(
             None,
             None,
             None,
-            None
+            None,
+            &host.health_reports,
         )
         .unwrap()
         .tenant
@@ -1809,7 +1821,8 @@ async fn test_instance_upgrading_actual_part_2(
             None,
             None,
             None,
-            None
+            None,
+            &host.health_reports,
         )
         .unwrap()
         .tenant

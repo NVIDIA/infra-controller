@@ -3383,6 +3383,13 @@ impl Forge for Api {
             templates,
         }))
     }
+
+    async fn find_bmc_ips(
+        &self,
+        request: Request<::rpc::forge::FindBmcIpsRequest>,
+    ) -> Result<Response<::rpc::forge::BmcIpList>, Status> {
+        crate::handlers::machine_interface::find_bmc_ips(self, request).await
+    }
 }
 
 fn ipxe_template_scope_to_proto(

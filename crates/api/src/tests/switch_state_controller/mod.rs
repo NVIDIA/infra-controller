@@ -18,17 +18,17 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use carbide_switch_controller::context::SwitchStateHandlerServices;
+use carbide_switch_controller::handler::SwitchStateHandler;
+use carbide_switch_controller::io::SwitchStateControllerIO;
 use db::switch as db_switch;
 use forge_secrets::credentials::TestCredentialManager;
 use model::switch::{ConfiguringState, SwitchControllerState};
 use rpc::forge::forge_server::Forge;
 use tokio_util::sync::CancellationToken;
 
-use crate::state_controller::common_services::CommonStateHandlerServices;
 use crate::state_controller::config::IterationConfig;
 use crate::state_controller::controller::StateController;
-use crate::state_controller::switch::handler::SwitchStateHandler;
-use crate::state_controller::switch::io::SwitchStateControllerIO;
 use crate::tests::common;
 use crate::tests::common::api_fixtures::create_test_env;
 
@@ -105,16 +105,9 @@ async fn test_switch_deletion_with_state_controller(
     let switch_handler = Arc::new(SwitchStateHandler::default());
     const ITERATION_TIME: Duration = Duration::from_millis(50);
 
-    let handler_services = Arc::new(CommonStateHandlerServices {
+    let handler_services = Arc::new(SwitchStateHandlerServices {
         db_pool: pool.clone(),
-        db_reader: pool.clone().into(),
-        redfish_client_pool: env.redfish_sim.clone(),
-        ib_fabric_manager: env.ib_fabric_manager.clone(),
-        ib_pools: env.common_pools.infiniband.clone(),
-        ipmi_tool: env.ipmi_tool.clone(),
-        site_config: env.config.clone(),
         rms_client: None,
-        switch_system_image_rms_client: None,
         credential_manager: Arc::new(TestCredentialManager::default()),
     });
 
@@ -217,7 +210,14 @@ async fn test_switch_entire_state_transition_flow(
         })
         .database(pool.clone(), env.api.work_lock_manager_handle.clone())
         .processor_id(uuid::Uuid::new_v4().to_string())
-        .services(handler_services.clone())
+        .services(
+            SwitchStateHandlerServices {
+                db_pool: handler_services.db_pool.clone(),
+                rms_client: handler_services.rms_client.clone(),
+                credential_manager: handler_services.credential_manager.clone(),
+            }
+            .into(),
+        )
         .state_handler(switch_handler.clone())
         .build_for_manual_iterations(cancel_token.clone())
         .unwrap();

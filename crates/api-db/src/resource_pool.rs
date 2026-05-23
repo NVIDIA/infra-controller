@@ -368,9 +368,6 @@ const MAX_POOL_SIZE: usize = 250_000;
 
 #[derive(thiserror::Error, Debug)]
 pub enum DefineResourcePoolError {
-    #[error("Invalid TOML: {0}")]
-    InvalidToml(#[from] toml::de::Error),
-
     #[error("{0}")]
     InvalidArgument(String),
 

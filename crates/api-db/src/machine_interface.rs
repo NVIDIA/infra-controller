@@ -279,6 +279,22 @@ pub async fn find_by_mac_address(
     find_by(txn, ObjectColumnFilter::One(MacAddressColumn, &macaddr)).await
 }
 
+/// This function returns only an IP for efficiency, we don't need to fetch/deserialize the entire
+/// MachineInterfaceSnapshot
+pub async fn lookup_bmc_ip_by_mac_address(
+    db: impl DbReader<'_>,
+    mac_address: MacAddress,
+) -> DatabaseResult<Vec<IpAddr>> {
+    let query = r"SELECT mia.address FROM machine_interfaces mi
+        INNER JOIN machine_interface_addresses mia ON (mia.interface_id = mi.id)
+        WHERE mi.mac_address = $1";
+    sqlx::query_scalar(query)
+        .bind(mac_address)
+        .fetch_all(db)
+        .await
+        .map_err(|e| DatabaseError::query(query, e))
+}
+
 pub async fn find_by_ip(
     txn: impl DbReader<'_>,
     ip: IpAddr,

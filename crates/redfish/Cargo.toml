@@ -19,6 +19,10 @@ carbide-api-db = { path = "../api-db", default-features = false }
 carbide-api-model = { path = "../api-model", default-features = false }
 carbide-secrets = { path = "../secrets" }
 carbide-utils = { path = "../utils", default-features = false }
+# state-controller is required only to convert redfish errors to
+# controller external errors. We can make it more tight if move
+# StateHandlerError to separate crate.
+state-controller = { path = "../state-controller", default-features = false }
 
 #these are alphabetized
 arc-swap = { workspace = true }
