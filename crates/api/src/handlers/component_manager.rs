@@ -1993,12 +1993,17 @@ pub(crate) async fn list_component_firmware_versions(
             }))
         }
         rpc::list_component_firmware_versions_request::Target::MachineIds(list) => {
-            let cm = require_component_manager(api)?;
             if list.machine_ids.is_empty() {
                 return Err(Status::invalid_argument("machine_ids must not be empty"));
             }
 
-            if cm.compute_tray_use_state_controller {
+            let use_state_controller = api
+                .component_manager
+                .as_ref()
+                .map(|cm| cm.compute_tray_use_state_controller)
+                .unwrap_or(true);
+
+            if use_state_controller {
                 let fw_snapshot = api.runtime_config.get_firmware_config().create_snapshot();
 
                 let machines = db::machine::find(
@@ -2055,6 +2060,7 @@ pub(crate) async fn list_component_firmware_versions(
                     devices,
                 }))
             } else {
+                let cm = require_component_manager(api)?;
                 let resolved = resolve_compute_tray_endpoints(api, &list.machine_ids).await?;
 
                 let mut devices: Vec<rpc::DeviceFirmwareVersions> = resolved
