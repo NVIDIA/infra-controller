@@ -186,7 +186,6 @@ impl NvSwitchManager for StateControllerNvSwitch {
             MaintenanceActivity::FirmwareUpgrade {
                 firmware_version,
                 components: vec![],
-                access_token: None,
                 force_update: false,
             },
         )

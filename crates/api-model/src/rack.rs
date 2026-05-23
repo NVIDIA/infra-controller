@@ -654,10 +654,6 @@ pub enum MaintenanceActivity {
         /// Empty means all components.
         #[serde(default)]
         components: Vec<String>,
-        /// RMS artifact-download token for ApplyFirmwareObjectFromJSON.
-        /// Required when firmware upgrade is explicitly requested.
-        #[serde(default)]
-        access_token: Option<String>,
         #[serde(default)]
         force_update: bool,
     },
@@ -874,7 +870,6 @@ mod tests {
         assert!(scope.should_run(&MaintenanceActivity::FirmwareUpgrade {
             firmware_version: None,
             components: vec![],
-            access_token: None,
             force_update: false,
         }));
         assert!(scope.should_run(&MaintenanceActivity::NvosUpdate {
@@ -890,7 +885,6 @@ mod tests {
             activities: vec![MaintenanceActivity::FirmwareUpgrade {
                 firmware_version: Some("v2.0".into()),
                 components: vec![],
-                access_token: None,
                 force_update: false,
             }],
             ..Default::default()
@@ -898,7 +892,6 @@ mod tests {
         assert!(scope.should_run(&MaintenanceActivity::FirmwareUpgrade {
             firmware_version: None,
             components: vec![],
-            access_token: None,
             force_update: false,
         }));
         assert!(!scope.should_run(&MaintenanceActivity::NvosUpdate {
@@ -915,7 +908,6 @@ mod tests {
                 MaintenanceActivity::FirmwareUpgrade {
                     firmware_version: None,
                     components: vec![],
-                    access_token: None,
                     force_update: false,
                 },
                 MaintenanceActivity::NvosUpdate {
@@ -928,7 +920,6 @@ mod tests {
         assert!(scope.should_run(&MaintenanceActivity::FirmwareUpgrade {
             firmware_version: Some("v1.0".into()),
             components: vec![],
-            access_token: None,
             force_update: false,
         }));
         assert!(!scope.should_run(&MaintenanceActivity::ConfigureNmxCluster));
@@ -945,13 +936,11 @@ mod tests {
         let a = MaintenanceActivity::FirmwareUpgrade {
             firmware_version: Some("v1".into()),
             components: vec!["BMC".into()],
-            access_token: None,
             force_update: false,
         };
         let b = MaintenanceActivity::FirmwareUpgrade {
             firmware_version: None,
             components: vec![],
-            access_token: None,
             force_update: false,
         };
         assert!(a.same_kind(&b));
@@ -970,7 +959,6 @@ mod tests {
         let a = MaintenanceActivity::FirmwareUpgrade {
             firmware_version: None,
             components: vec![],
-            access_token: None,
             force_update: false,
         };
         let b = MaintenanceActivity::ConfigureNmxCluster;
@@ -983,7 +971,6 @@ mod tests {
             MaintenanceActivity::FirmwareUpgrade {
                 firmware_version: None,
                 components: vec![],
-                access_token: None,
                 force_update: false,
             }
             .to_string(),

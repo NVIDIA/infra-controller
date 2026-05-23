@@ -5827,7 +5827,7 @@ message FirmwareUpgradeActivity {
   // When empty, all components are updated.
   repeated string components = 2;
   // Used only by the backend for artifact download when firmware_version contains SOT JSON.
-  // NICo does not persist it.
+  // NICo stores it as a maintenance credential, not in rack maintenance state.
   optional string access_token = 3;
   bool force_update = 4;
 }

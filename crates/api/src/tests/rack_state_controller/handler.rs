@@ -22,7 +22,7 @@ use db::db_read::DbReader;
 use db::{
     ObjectColumnFilter, expected_rack as db_expected_rack, rack as db_rack, switch as db_switch,
 };
-use forge_secrets::credentials::{BmcCredentialType, CredentialKey, Credentials};
+use forge_secrets::credentials::{BmcCredentialType, CredentialKey, CredentialReader, Credentials};
 use librms::protos::rack_manager as rms;
 use model::expected_machine::ExpectedMachineData;
 use model::expected_rack::ExpectedRack;
@@ -505,6 +505,21 @@ async fn test_on_demand_rack_maintenance_schedules_firmware_and_nvos_scope(
             firmware_object_id: Some(id)
         } if id == "fw-mixed"
     ));
+    let token_credentials = env
+        .test_credential_manager
+        .get_credentials(&CredentialKey::RackMaintenanceAccessToken {
+            rack_id: rack_id.clone(),
+        })
+        .await
+        .expect("credential lookup should succeed")
+        .expect("access token should be stored as a credential");
+    assert_eq!(
+        token_credentials,
+        Credentials::UsernamePassword {
+            username: "access_token".to_string(),
+            password: "token".to_string(),
+        }
+    );
 
     Ok(())
 }
@@ -1295,6 +1310,124 @@ async fn test_firmware_upgrade_start_skips_without_json(
     .await?
     .expect("machine should exist");
     assert!(machine.host_reprovision_requested.is_none());
+
+    Ok(())
+}
+
+#[crate::sqlx_test]
+async fn test_firmware_upgrade_start_submits_json_and_deletes_access_token(
+    pool: sqlx::PgPool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let env = create_test_env_with_overrides(
+        pool.clone(),
+        TestEnvOverrides {
+            config: Some(config_with_rack_profiles()),
+            ..Default::default()
+        },
+    )
+    .await;
+    let (rack_id, switch_id) = create_ready_rack_with_switch(&env, &pool).await?;
+    let switch_id_string = switch_id.to_string();
+
+    crate::handlers::rack::on_demand_rack_maintenance(
+        env.api.as_ref(),
+        Request::new(rpc::forge::RackMaintenanceOnDemandRequest {
+            rack_id: Some(rack_id.clone()),
+            scope: Some(rpc::forge::RackMaintenanceScope {
+                machine_ids: vec![],
+                switch_ids: vec![switch_id_string.clone()],
+                power_shelf_ids: vec![],
+                activities: vec![rpc::forge::MaintenanceActivityConfig {
+                    activity: Some(
+                        rpc::forge::maintenance_activity_config::Activity::FirmwareUpgrade(
+                            rpc::forge::FirmwareUpgradeActivity {
+                                firmware_version: r#"{"Id":"fw-json"}"#.to_string(),
+                                components: vec!["BMC".to_string()],
+                                access_token: Some("token".to_string()),
+                                force_update: true,
+                            },
+                        ),
+                    ),
+                }],
+            }),
+        }),
+    )
+    .await?;
+    env.rms_sim
+        .queue_apply_firmware_object_response(rms::ApplyFirmwareObjectResponse {
+            response: Some(rms::NodeBatchResponse {
+                status: rms::ReturnCode::Success as i32,
+                message: "accepted".to_string(),
+                total_nodes: 1,
+                successful_nodes: 1,
+                job_id: "parent-job".to_string(),
+                ..Default::default()
+            }),
+            object_id: "fw-json".to_string(),
+            node_jobs: vec![rms::NodeFirmwareJobInfo {
+                node_id: switch_id_string.clone(),
+                job_id: "child-job".to_string(),
+            }],
+        })
+        .await;
+
+    let mut rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
+    let handler_instance = RackStateHandler::default();
+    let mut services = env.rack_state_handler_services();
+    let mut metrics = RackMetrics::default();
+    let mut db_writes = DbWriteBatch::default();
+    let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
+        services: &mut services,
+        metrics: &mut metrics,
+        pending_db_writes: &mut db_writes,
+    };
+
+    let fw_state = RackState::Maintenance {
+        maintenance_state: RackMaintenanceState::FirmwareUpgrade {
+            rack_firmware_upgrade: FirmwareUpgradeState::Start,
+        },
+    };
+    let mut outcome = handler_instance
+        .handle_object_state(&rack_id, &mut rack, &fw_state, &mut ctx)
+        .await?;
+    if let Some(txn) = outcome.take_transaction() {
+        txn.commit().await?;
+    }
+
+    assert!(
+        matches!(
+            outcome,
+            StateHandlerOutcome::Transition {
+                next_state: RackState::Maintenance {
+                    maintenance_state: RackMaintenanceState::FirmwareUpgrade {
+                        rack_firmware_upgrade: FirmwareUpgradeState::WaitForComplete,
+                    },
+                },
+                ..
+            }
+        ),
+        "expected FirmwareUpgrade(WaitForComplete), got {:?}",
+        std::mem::discriminant(&outcome),
+    );
+    let requests = env
+        .rms_sim
+        .submitted_apply_firmware_object_from_json_requests()
+        .await;
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].config_json, r#"{"Id":"fw-json"}"#);
+    assert_eq!(requests[0].access_token, "token");
+    assert_eq!(requests[0].firmware_type, "prod");
+    assert!(requests[0].force_update);
+    assert_eq!(requests[0].nodes.as_ref().unwrap().devices.len(), 1);
+
+    let token_after = env
+        .test_credential_manager
+        .get_credentials(&CredentialKey::RackMaintenanceAccessToken {
+            rack_id: rack_id.clone(),
+        })
+        .await
+        .expect("credential lookup should succeed");
+    assert!(token_after.is_none());
 
     Ok(())
 }

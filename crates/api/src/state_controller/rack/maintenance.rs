@@ -17,11 +17,13 @@
 
 //! Handler for RackState::Maintenance.
 
+use carbide_rack::firmware_object::{
+    ANY_RACK_HARDWARE_TYPE, profile_hardware_type_wire_value, rack_maintenance_access_token_key,
+};
 use carbide_rack::firmware_update::{
     RackFirmwareInventory, RackSwitchFirmwareInventory, build_new_node_info,
     firmware_type_for_profile, load_rack_firmware_inventory, load_rack_switch_firmware_inventory,
 };
-use carbide_rack::firmware_object::{ANY_RACK_HARDWARE_TYPE, profile_hardware_type_wire_value};
 use carbide_rack::rack_manager_error;
 use carbide_rack::rms_client::SwitchSystemImageRmsClient;
 use carbide_rack_controller::context::RackStateHandlerContextObjects;
@@ -35,6 +37,7 @@ use db::{
     host_machine_update as db_host_machine_update, machine as db_machine,
     machine_topology as db_machine_topology, rack as db_rack, switch as db_switch,
 };
+use forge_secrets::credentials::{CredentialManager, Credentials};
 use librms::protos::rack_manager as rms;
 use model::rack::{
     ConfigureNmxClusterState, FirmwareUpgradeDeviceInfo, FirmwareUpgradeDeviceStatus,
@@ -245,23 +248,55 @@ fn profile_hardware_type_or_any(profile: Option<&RackProfile>) -> String {
 
 fn requested_firmware_object_json_upgrade(
     scope: &MaintenanceScope,
-) -> Option<(Option<String>, Vec<String>, String, bool)> {
+) -> Option<(Option<String>, Vec<String>, bool)> {
     scope.activities.iter().find_map(|activity| match activity {
         MaintenanceActivity::FirmwareUpgrade {
             firmware_version,
             components,
-            access_token,
             force_update,
-        } => access_token.as_ref().map(|token| {
-            (
-                firmware_version.clone(),
-                components.clone(),
-                token.clone(),
-                *force_update,
-            )
-        }),
+        } => Some((firmware_version.clone(), components.clone(), *force_update)),
         _ => None,
     })
+}
+
+async fn load_rack_maintenance_access_token(
+    credential_manager: &dyn CredentialManager,
+    rack_id: &RackId,
+) -> Result<String, StateHandlerError> {
+    let key = rack_maintenance_access_token_key(rack_id);
+    let credentials = credential_manager
+        .get_credentials(&key)
+        .await
+        .map_err(|error| {
+            StateHandlerError::GenericError(eyre::eyre!(
+                "failed to load rack maintenance access token: {}",
+                error
+            ))
+        })?
+        .ok_or_else(|| {
+            StateHandlerError::GenericError(eyre::eyre!(
+                "rack maintenance access token is not available"
+            ))
+        })?;
+
+    let Credentials::UsernamePassword { password, .. } = credentials;
+    Ok(password)
+}
+
+async fn delete_rack_maintenance_access_token(
+    credential_manager: &dyn CredentialManager,
+    rack_id: &RackId,
+) {
+    if let Err(error) = credential_manager
+        .delete_credentials(&rack_maintenance_access_token_key(rack_id))
+        .await
+    {
+        tracing::warn!(
+            rack_id = %rack_id,
+            error = %error,
+            "failed to delete rack maintenance access token",
+        );
+    }
 }
 
 fn nvos_update_start_state(scope: &MaintenanceScope) -> RackMaintenanceState {
@@ -314,7 +349,6 @@ pub(crate) fn first_maintenance_state(scope: &MaintenanceScope) -> RackMaintenan
     if scope.should_run(&MaintenanceActivity::FirmwareUpgrade {
         firmware_version: None,
         components: vec![],
-        access_token: None,
         force_update: false,
     }) {
         RackMaintenanceState::FirmwareUpgrade {
@@ -1069,7 +1103,7 @@ pub async fn handle_maintenance(
             rack_firmware_upgrade,
         } => match rack_firmware_upgrade {
             FirmwareUpgradeState::Start => {
-                let Some((config_json, components, access_token, force_update)) =
+                let Some((config_json, components, force_update)) =
                     requested_firmware_object_json_upgrade(scope)
                 else {
                     if explicit_firmware_upgrade_requested(scope) {
@@ -1098,8 +1132,25 @@ pub async fn handle_maintenance(
                     .await;
                 };
                 let Some(rms_client) = ctx.services.rms_client.as_ref() else {
+                    delete_rack_maintenance_access_token(
+                        ctx.services.credential_manager.as_ref(),
+                        id,
+                    )
+                    .await;
                     return transition_to_rack_error(id, state, "RMS client not configured", ctx)
                         .await;
+                };
+                let access_token = match load_rack_maintenance_access_token(
+                    ctx.services.credential_manager.as_ref(),
+                    id,
+                )
+                .await
+                {
+                    Ok(access_token) => access_token,
+                    Err(error) => {
+                        let message = error.to_string();
+                        return transition_to_rack_error(id, state, &message, ctx).await;
+                    }
                 };
                 let profile = super::resolve_profile(id, rack_profile_id, ctx);
                 let rack_hardware_type = profile_hardware_type_or_any(profile);
@@ -1122,6 +1173,11 @@ pub async fn handle_maintenance(
                 let inventory = filter_inventory_by_scope(inventory, scope);
 
                 if inventory.machines.is_empty() && inventory.switches.is_empty() {
+                    delete_rack_maintenance_access_token(
+                        ctx.services.credential_manager.as_ref(),
+                        id,
+                    )
+                    .await;
                     return Ok(skip_firmware_upgrade_outcome(
                         id,
                         "no compute or switch devices require rack firmware updates",
@@ -1139,7 +1195,7 @@ pub async fn handle_maintenance(
                     "Rack firmware object JSON apply starting",
                 );
 
-                let mut job = match rms_start_firmware_upgrade_from_json(
+                let submit_result = rms_start_firmware_upgrade_from_json(
                     rms_client.as_ref(),
                     RmsFirmwareObjectJsonApply {
                         rack_id: id,
@@ -1153,8 +1209,11 @@ pub async fn handle_maintenance(
                         switches: inventory.switches.clone(),
                     },
                 )
-                .await
-                {
+                .await;
+                delete_rack_maintenance_access_token(ctx.services.credential_manager.as_ref(), id)
+                    .await;
+
+                let mut job = match submit_result {
                     Ok(job) => job,
                     Err(error) => {
                         return transition_to_rack_error_with_firmware_job(
@@ -1901,9 +1960,9 @@ pub async fn handle_maintenance(
 
 #[cfg(test)]
 mod tests {
+    use carbide_rack::firmware_update::RackFirmwareInventory;
     use carbide_uuid::machine::{MachineId, MachineIdSource, MachineType};
     use carbide_uuid::switch::{SwitchId, SwitchIdSource, SwitchType};
-    use carbide_rack::firmware_update::RackFirmwareInventory;
     use model::rack::{
         ConfigureNmxClusterState, FirmwareUpgradeDeviceInfo, FirmwareUpgradeState,
         MaintenanceActivity, MaintenanceScope, NvosUpdateState, RackMaintenanceState,
@@ -2094,7 +2153,6 @@ mod tests {
             activities: vec![MaintenanceActivity::FirmwareUpgrade {
                 firmware_version: None,
                 components: vec![],
-                access_token: None,
                 force_update: false,
             }],
             ..Default::default()
@@ -2181,7 +2239,6 @@ mod tests {
             activities: vec![MaintenanceActivity::FirmwareUpgrade {
                 firmware_version: None,
                 components: vec![],
-                access_token: None,
                 force_update: false,
             }],
             ..Default::default()
@@ -2220,7 +2277,6 @@ mod tests {
                 MaintenanceActivity::FirmwareUpgrade {
                     firmware_version: None,
                     components: vec![],
-                    access_token: None,
                     force_update: false,
                 },
                 MaintenanceActivity::PowerSequence,
@@ -2239,7 +2295,6 @@ mod tests {
             activities: vec![MaintenanceActivity::FirmwareUpgrade {
                 firmware_version: None,
                 components: vec![],
-                access_token: None,
                 force_update: false,
             }],
             ..Default::default()
@@ -2257,7 +2312,6 @@ mod tests {
                 MaintenanceActivity::FirmwareUpgrade {
                     firmware_version: None,
                     components: vec![],
-                    access_token: None,
                     force_update: false,
                 },
                 MaintenanceActivity::NvosUpdate {
@@ -2326,7 +2380,6 @@ mod tests {
                 MaintenanceActivity::FirmwareUpgrade {
                     firmware_version: None,
                     components: vec![],
-                    access_token: None,
                     force_update: false,
                 },
                 MaintenanceActivity::ConfigureNmxCluster,

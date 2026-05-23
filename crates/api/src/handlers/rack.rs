@@ -27,6 +27,7 @@ use db::{
     ObjectColumnFilter, WithTransaction, machine as db_machine, power_shelf as db_power_shelf,
     rack as db_rack, switch as db_switch,
 };
+use forge_secrets::credentials::Credentials;
 use futures_util::FutureExt;
 use health_report::HealthReportApplyMode;
 use model::machine::machine_search_config::MachineSearchConfig;
@@ -35,8 +36,9 @@ use model::rack::{MaintenanceActivity, MaintenanceScope, RackState};
 use tonic::{Request, Response, Status};
 
 use crate::CarbideError;
-use crate::api::{Api, log_request_data};
+use crate::api::{Api, log_request_data, log_request_data_redacted};
 use crate::auth::AuthContext;
+use crate::rack::firmware_object::rack_maintenance_access_token_key;
 
 pub async fn get_rack(
     api: &Api,
@@ -458,7 +460,7 @@ pub(crate) async fn on_demand_rack_maintenance(
     api: &Api,
     request: Request<rpc::RackMaintenanceOnDemandRequest>,
 ) -> Result<Response<rpc::RackMaintenanceOnDemandResponse>, Status> {
-    log_request_data(&request);
+    log_request_data_redacted("RackMaintenanceOnDemandRequest { redacted }");
 
     let req = request.into_inner();
 
@@ -501,10 +503,10 @@ pub(crate) async fn on_demand_rack_maintenance(
 
     let proto_scope = req.scope.unwrap_or_default();
 
-    let activities: Vec<MaintenanceActivity> = proto_scope
-        .activities
-        .iter()
-        .map(|entry| match &entry.activity {
+    let mut activities = Vec::with_capacity(proto_scope.activities.len());
+    let mut maintenance_access_token = None;
+    for entry in &proto_scope.activities {
+        let activity = match &entry.activity {
             Some(ProtoActivity::FirmwareUpgrade(fw)) => {
                 let firmware_version = if fw.firmware_version.trim().is_empty() {
                     None
@@ -523,12 +525,14 @@ pub(crate) async fn on_demand_rack_maintenance(
                     return Err(CarbideError::InvalidArgument(
                         "firmware-upgrade rack maintenance requires SOT JSON in firmware_version"
                             .into(),
-                    ));
+                    )
+                    .into());
                 }
                 if access_token.is_none() {
                     return Err(CarbideError::InvalidArgument(
                         "firmware-upgrade rack maintenance requires access_token".into(),
-                    ));
+                    )
+                    .into());
                 }
                 if let Some(config_json) = firmware_version.as_deref() {
                     serde_json::from_str::<serde_json::Value>(config_json).map_err(|error| {
@@ -537,30 +541,32 @@ pub(crate) async fn on_demand_rack_maintenance(
                         ))
                     })?;
                 }
+                maintenance_access_token = access_token;
 
-                Ok(MaintenanceActivity::FirmwareUpgrade {
+                MaintenanceActivity::FirmwareUpgrade {
                     firmware_version,
                     components: fw.components.clone(),
-                    access_token,
                     force_update: fw.force_update,
-                })
+                }
             }
-            Some(ProtoActivity::NvosUpdate(nvos)) => Ok(MaintenanceActivity::NvosUpdate {
+            Some(ProtoActivity::NvosUpdate(nvos)) => MaintenanceActivity::NvosUpdate {
                 firmware_object_id: if nvos.firmware_object_id.is_empty() {
                     None
                 } else {
                     Some(nvos.firmware_object_id.clone())
                 },
-            }),
-            Some(ProtoActivity::ConfigureNmxCluster(_)) => {
-                Ok(MaintenanceActivity::ConfigureNmxCluster)
+            },
+            Some(ProtoActivity::ConfigureNmxCluster(_)) => MaintenanceActivity::ConfigureNmxCluster,
+            Some(ProtoActivity::PowerSequence(_)) => MaintenanceActivity::PowerSequence,
+            None => {
+                return Err(CarbideError::InvalidArgument(
+                    "Maintenance activity entry has no activity set".into(),
+                )
+                .into());
             }
-            Some(ProtoActivity::PowerSequence(_)) => Ok(MaintenanceActivity::PowerSequence),
-            None => Err(CarbideError::InvalidArgument(
-                "Maintenance activity entry has no activity set".into(),
-            )),
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+        };
+        activities.push(activity);
+    }
 
     let scope = MaintenanceScope {
         machine_ids: proto_scope
@@ -681,26 +687,60 @@ pub(crate) async fn on_demand_rack_maintenance(
         }
     }
 
+    let access_token_stored = maintenance_access_token.is_some();
+    if let Some(token) = maintenance_access_token {
+        api.credential_manager
+            .set_credentials(
+                &rack_maintenance_access_token_key(&rack_id),
+                &Credentials::UsernamePassword {
+                    username: "access_token".into(),
+                    password: token,
+                },
+            )
+            .await
+            .map_err(|error| CarbideError::Internal {
+                message: format!("failed to store rack maintenance access token: {error}"),
+            })?;
+    }
+
     let mut updated_config = rack.config.clone();
     updated_config.maintenance_requested = Some(scope);
 
-    let mut txn = api.txn_begin().await?;
-    db_rack::update(&mut txn, &rack_id, &updated_config).await?;
-    if updated_config
-        .maintenance_requested
-        .as_ref()
-        .is_some_and(|scope| {
-            scope.should_run(&MaintenanceActivity::FirmwareUpgrade {
-                firmware_version: None,
-                components: vec![],
-                access_token: None,
-                force_update: false,
+    let db_result: Result<(), Status> = async {
+        let mut txn = api.txn_begin().await?;
+        db_rack::update(&mut txn, &rack_id, &updated_config).await?;
+        if updated_config
+            .maintenance_requested
+            .as_ref()
+            .is_some_and(|scope| {
+                scope.should_run(&MaintenanceActivity::FirmwareUpgrade {
+                    firmware_version: None,
+                    components: vec![],
+                    force_update: false,
+                })
             })
-        })
-    {
-        db_rack::update_firmware_upgrade_job(txn.as_mut(), &rack_id, None).await?;
+        {
+            db_rack::update_firmware_upgrade_job(txn.as_mut(), &rack_id, None).await?;
+        }
+        txn.commit().await?;
+        Ok(())
     }
-    txn.commit().await?;
+    .await;
+    if let Err(status) = db_result {
+        if access_token_stored
+            && let Err(error) = api
+                .credential_manager
+                .delete_credentials(&rack_maintenance_access_token_key(&rack_id))
+                .await
+        {
+            tracing::warn!(
+                rack_id = %rack_id,
+                error = %error,
+                "failed to delete rack maintenance access token after DB error",
+            );
+        }
+        return Err(status);
+    }
 
     tracing::info!("On-demand maintenance scheduled for rack {}", rack_id,);
 

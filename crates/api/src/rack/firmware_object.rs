@@ -15,6 +15,8 @@
  * limitations under the License.
  */
 
+use carbide_uuid::rack::RackId;
+use forge_secrets::credentials::CredentialKey;
 use model::rack_type::{RackHardwareType, RackProfile};
 
 pub const ANY_RACK_HARDWARE_TYPE: &str = "any";
@@ -41,6 +43,12 @@ pub fn hardware_type_matches_filter(
         || firmware_hardware_type
             .trim()
             .eq_ignore_ascii_case(rack_hardware_type.0.trim())
+}
+
+pub fn rack_maintenance_access_token_key(rack_id: &RackId) -> CredentialKey {
+    CredentialKey::RackMaintenanceAccessToken {
+        rack_id: rack_id.clone(),
+    }
 }
 
 #[cfg(test)]

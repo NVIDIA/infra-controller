@@ -22,6 +22,7 @@ use std::sync::{Arc, atomic};
 
 use async_trait::async_trait;
 use carbide_uuid::machine::MachineId;
+use carbide_uuid::rack::RackId;
 use mac_address::MacAddress;
 use rand::RngExt;
 use rand::seq::SliceRandom;
@@ -396,6 +397,9 @@ pub enum CredentialKey {
     MachineIdentityEncryptionKey {
         key_id: String,
     },
+    RackMaintenanceAccessToken {
+        rack_id: RackId,
+    },
 }
 
 /// CredentialPrefix identifies a category of
@@ -418,6 +422,7 @@ pub enum CredentialPrefix {
     SwitchNvosAdmin,
     MqttAuth,
     MachineIdentityEncryptionKey,
+    RackMaintenanceAccessToken,
 }
 
 impl CredentialPrefix {
@@ -439,6 +444,7 @@ impl CredentialPrefix {
             Self::SwitchNvosAdmin => "switch_nvos/",
             Self::MqttAuth => "mqtt/",
             Self::MachineIdentityEncryptionKey => "machine_identity/",
+            Self::RackMaintenanceAccessToken => "racks/",
         }
     }
 
@@ -459,6 +465,7 @@ impl CredentialPrefix {
             Self::SwitchNvosAdmin,
             Self::MqttAuth,
             Self::MachineIdentityEncryptionKey,
+            Self::RackMaintenanceAccessToken,
         ]
     }
 }
@@ -484,6 +491,7 @@ impl CredentialKey {
             Self::MachineIdentityEncryptionKey { .. } => {
                 CredentialPrefix::MachineIdentityEncryptionKey
             }
+            Self::RackMaintenanceAccessToken { .. } => CredentialPrefix::RackMaintenanceAccessToken,
         }
     }
 
@@ -575,6 +583,9 @@ impl CredentialKey {
             CredentialKey::Bgp { credential_type } => match credential_type {
                 BgpCredentialType::SiteWideLeafPassword => Cow::from("bgp/leaf/site/auth"),
             },
+            CredentialKey::RackMaintenanceAccessToken { rack_id } => {
+                Cow::from(format!("racks/{rack_id}/maintenance/access-token"))
+            }
         }
     }
 }
@@ -680,6 +691,7 @@ mod tests {
     fn to_key_str_produces_valid_paths() {
         #[allow(deprecated)]
         let machine_id = MachineId::default();
+        let rack_id = RackId::new("rack-01");
         let mac: MacAddress = MacAddress::new([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
 
         let cases: Vec<(CredentialKey, &str)> = vec![
@@ -793,6 +805,10 @@ mod tests {
                 },
                 "mqtt/",
             ),
+            (
+                CredentialKey::RackMaintenanceAccessToken { rack_id },
+                "racks/",
+            ),
         ];
 
         for (key, expected_prefix) in &cases {
@@ -819,6 +835,7 @@ mod tests {
     fn to_key_str_matches_prefix() {
         #[allow(deprecated)]
         let machine_id = MachineId::default();
+        let rack_id = RackId::new("rack-01");
         let mac = MacAddress::new([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
 
         let keys: Vec<CredentialKey> = vec![
@@ -861,6 +878,7 @@ mod tests {
             CredentialKey::MachineIdentityEncryptionKey {
                 key_id: "k".to_string(),
             },
+            CredentialKey::RackMaintenanceAccessToken { rack_id },
         ];
 
         for key in &keys {
@@ -880,6 +898,6 @@ mod tests {
     #[test]
     fn prefix_all_is_complete() {
         let all = CredentialPrefix::all();
-        assert_eq!(all.len(), 14);
+        assert_eq!(all.len(), 15);
     }
 }
