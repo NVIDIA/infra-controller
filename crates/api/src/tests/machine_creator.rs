@@ -85,7 +85,6 @@ async fn test_site_explorer_reject_zero_dpu_hosts(
         power_shelves_created_per_run: 1,
         create_switches: Arc::new(true.into()),
         switches_created_per_run: 1,
-        force_dpu_nic_mode: Arc::new(false.into()),
         allow_zero_dpu_hosts: false,
         ..Default::default()
     };

@@ -5550,18 +5550,19 @@ message ExpectedHostNic {
   optional bool primary = 6;
 }
 
-// Per-host DPU operating mode. Ultimately replaces the site-wide
-// `force_dpu_nic_mode` config flag, so site operators can mix DPU-mode,
+// Per-host DPU operating mode. Lets site operators mix DPU-mode,
 // NIC-mode, and no-DPU hosts within a single site.
 //
 // - DPU_MODE: The default. Attached DPUs are managed by NICo (DPU upgrades,
 //   overlay networking, etc).
 // - NIC_MODE: DPUs are present physically but operate as plain NICs. Site
-//   explorer skips DPU ingest; the host is tracked as if it had no DPUs.
+//   explorer reconfigures them to NIC mode if needed; the host is then
+//   tracked as if it had no DPUs.
 // - NO_DPU: no DPU hardware at all -- a plain host NIC on the underlay.
 //
-// Unset and `DPU_MODE_UNSPECIFIED` both mean "use the site default," which
-// is DPU_MODE unless the site-wide `force_dpu_nic_mode` config flag is on.
+// Unset and `DPU_MODE_UNSPECIFIED` both mean "use the site default,"
+// which comes from `[site_explorer] dpu_mode` (and falls back to
+// DPU_MODE when that's unset).
 enum DpuMode {
   DPU_MODE_UNSPECIFIED = 0;
   DPU_MODE = 1;
@@ -5601,9 +5602,9 @@ message ExpectedMachine {
   // When true, site-explorer skips BMC password rotation and stores the
   // factory-default credentials in Vault as-is.
   optional bool bmc_retain_credentials = 15;
-  // Per-host DPU operating mode. See `DpuMode` above. Unset means "site
-  // default" -- the site-wide `force_dpu_nic_mode` config flag still applies
-  // when no per-host override is set, so existing deployments keep working.
+  // Per-host DPU operating mode. See `DpuMode` above. Unset means "use
+  // the site-wide `[site_explorer] dpu_mode` default" (which itself
+  // defaults to DPU_MODE when unset).
   optional DpuMode dpu_mode = 16;
   // Per-host lifecycle profile. When unset in a patch/update request, the
   // existing DB value is preserved via COALESCE.

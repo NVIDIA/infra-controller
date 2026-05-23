@@ -179,23 +179,13 @@ pub struct SiteExplorerConfig {
     #[serde(default = "SiteExplorerConfig::default_switches_created_per_run")]
     pub switches_created_per_run: u64,
 
-    /// Use onboard NIC for host networking instead of DPU NICs.
-    #[serde(
-        default = "SiteExplorerConfig::default_force_dpu_nic_mode",
-        deserialize_with = "deserialize_arc_atomic_bool",
-        serialize_with = "serialize_arc_atomic_bool"
-    )]
-    pub force_dpu_nic_mode: Arc<AtomicBool>,
-    /// Site-wide default DPU operating mode. When set, applies to every
-    /// host that doesn't declare a per-host `ExpectedMachine.dpu_mode`
-    /// override (or that declares the default `DpuMode` variant, which is
-    /// indistinguishable from "unset"). Per-host `NicMode` / `NoDpu`
-    /// always overrides this. `None` means "no site default declared" and
-    /// resolution falls back to the legacy `force_dpu_nic_mode` flag.
-    ///
-    /// This setting is mirrored from the top-level `CarbideConfig.dpu_mode`
-    /// during config parsing so operators can set it once at the site
-    /// level without nesting under `[site_explorer]`.
+    /// Site-wide DPU operating mode. When set, applies to every host
+    /// that doesn't declare a per-host `ExpectedMachine.dpu_mode`
+    /// override (or that declares the default `DpuMode` variant,
+    /// which is indistinguishable from "unset"). Per-host `NicMode` /
+    /// `NoDpu` always wins. `None` means "site-wide setting unset"
+    /// and hosts fall back to the absolute default of
+    /// `DpuMode::DpuMode`.
     #[serde(default)]
     pub dpu_mode: Option<DpuMode>,
     /// Controls which Redfish client implementation is used
@@ -228,7 +218,6 @@ impl Default for SiteExplorerConfig {
             create_switches: Arc::new(true.into()),
             switches_created_per_run: Self::default_switches_created_per_run(),
             rotate_switch_nvos_credentials: Self::default_rotate_switch_nvos_credentials(),
-            force_dpu_nic_mode: Arc::new(false.into()),
             dpu_mode: None,
             explore_mode: Self::default_explore_mode(),
         }
@@ -303,10 +292,6 @@ impl SiteExplorerConfig {
 
     pub const fn default_switches_created_per_run() -> u64 {
         9
-    }
-
-    pub fn default_force_dpu_nic_mode() -> Arc<AtomicBool> {
-        Arc::new(false.into())
     }
 
     pub const fn default_explore_mode() -> SiteExplorerExploreMode {
