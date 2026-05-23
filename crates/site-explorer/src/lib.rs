@@ -1547,6 +1547,32 @@ impl SiteExplorer {
                 )
                 .await;
             }
+            // NVOS static IP: handler-side validation pairs `nvos_ip_address` with
+            // exactly one `nvos_mac_addresses` entry (the single wired NVOS port).
+            // ...but re-check here just incase, with the failure case being a
+            // log and skip for this pass.
+            if let Some(nvos_ip) = expected_switch.nvos_ip_address {
+                match expected_switch.nvos_mac_addresses.as_slice() {
+                    [nvos_mac] => {
+                        try_preallocate_one(
+                            &self.database_connection,
+                            *nvos_mac,
+                            nvos_ip,
+                            InterfaceType::Data,
+                            "expected_switch NVOS",
+                        )
+                        .await;
+                    }
+                    macs => {
+                        tracing::warn!(
+                            bmc_mac = %expected_switch.bmc_mac_address,
+                            %nvos_ip,
+                            nvos_mac_count = macs.len(),
+                            "Skipping NVOS preallocation: nvos_ip_address requires exactly one nvos_mac_addresses entry"
+                        );
+                    }
+                }
+            }
         }
 
         for expected_power_shelf in &expected_power_shelves {

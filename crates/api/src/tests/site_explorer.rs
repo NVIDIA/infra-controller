@@ -3177,6 +3177,7 @@ async fn test_site_explorer_switch_discovery(
         nvos_username: None,
         nvos_password: None,
         bmc_ip_address: None,
+        nvos_ip_address: None,
         metadata: Metadata {
             name: format!("Test Switch {}", serial_number),
             description: format!("A test switch with serial {}", serial_number),
@@ -5412,6 +5413,7 @@ fn expected_switch_fixture(
         nvos_username: None,
         nvos_password: None,
         bmc_ip_address: None,
+        nvos_ip_address: None,
         metadata: Metadata {
             name: format!("Test Switch {serial}"),
             description: String::new(),
@@ -5723,6 +5725,7 @@ async fn test_site_explorer_reconcile_creates_missing_preallocations(
             nvos_username: None,
             nvos_password: None,
             bmc_ip_address: Some(switch_bmc_ip),
+            nvos_ip_address: None,
             metadata: Metadata::default(),
             rack_id: None,
             bmc_retain_credentials: None,
@@ -5984,6 +5987,82 @@ async fn test_site_explorer_reconcile_tolerates_per_entry_conflicts(
         "non-conflicting expected_machine should still be preallocated despite the upstream conflict"
     );
     assert!(c[0].addresses.contains(&ok_ip));
+
+    Ok(())
+}
+
+/// Site-explorer's reconciliation pass must materialize the (nvos_mac, nvos_ip_address)
+/// pairing for expected switches, mirroring how it handles `bmc_ip_address` and the
+/// host-NIC `fixed_ip` paths. Calls `try_preallocate_one` directly the same way the
+/// expected_switches loop does, and verifies the resulting row carries the configured
+/// IP with `InterfaceType::Data`.
+#[crate::sqlx_test]
+async fn test_site_explorer_reconcile_preallocates_nvos_ip(
+    pool: sqlx::PgPool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let env = common::api_fixtures::create_test_env(pool.clone()).await;
+
+    let bmc_mac: MacAddress = "AA:BB:CC:DD:E4:01".parse().unwrap();
+    let nvos_mac: MacAddress = "AA:BB:CC:DD:E4:02".parse().unwrap();
+    let nvos_ip: IpAddr = "10.99.0.50".parse().unwrap();
+
+    let mut txn = env.pool.begin().await?;
+    db::expected_switch::create(
+        &mut txn,
+        model::expected_switch::ExpectedSwitch {
+            expected_switch_id: None,
+            bmc_mac_address: bmc_mac,
+            nvos_mac_addresses: vec![nvos_mac],
+            bmc_username: "ADMIN".into(),
+            serial_number: "reconcile-nvos-001".into(),
+            bmc_password: "PASS".into(),
+            nvos_username: None,
+            nvos_password: None,
+            bmc_ip_address: None,
+            nvos_ip_address: Some(nvos_ip),
+            metadata: Metadata::default(),
+            rack_id: None,
+            bmc_retain_credentials: None,
+        },
+    )
+    .await?;
+    txn.commit().await?;
+
+    // Baseline: no NVOS interface yet.
+    let mut txn = env.pool.begin().await?;
+    let before = db::machine_interface::find_by_mac_address(&mut *txn, nvos_mac).await?;
+    assert!(
+        before.is_empty(),
+        "no machine_interface should exist before site-explorer reconciles for {nvos_mac}"
+    );
+    txn.commit().await?;
+
+    carbide_site_explorer::try_preallocate_one(
+        &env.pool,
+        nvos_mac,
+        nvos_ip,
+        model::machine_interface::InterfaceType::Data,
+        "expected_switch NVOS",
+    )
+    .await;
+
+    let mut txn = env.pool.begin().await?;
+    let after = db::machine_interface::find_by_mac_address(&mut *txn, nvos_mac).await?;
+    assert_eq!(
+        after.len(),
+        1,
+        "expected_switch NVOS should be preallocated for {nvos_mac}"
+    );
+    assert!(
+        after[0].addresses.contains(&nvos_ip),
+        "preallocated row should carry {nvos_ip}, got {:?}",
+        after[0].addresses,
+    );
+    assert_eq!(
+        after[0].interface_type,
+        model::machine_interface::InterfaceType::Data,
+        "NVOS IPs should be preallocated with InterfaceType::Data, not Bmc"
+    );
 
     Ok(())
 }

@@ -2228,6 +2228,9 @@ message ExpectedSwitch {
   // When true, site-explorer skips BMC password rotation and stores the
   // factory-default credentials in Vault as-is.
   optional bool bmc_retain_credentials = 12;
+  // Static IP reservation for the single wired NVOS port. Only meaningful
+  // when `nvos_mac_addresses` has exactly one entry.
+  optional string nvos_ip_address = 13;
 }
 
 message ExpectedSwitchRequest {

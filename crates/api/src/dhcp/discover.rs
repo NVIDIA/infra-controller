@@ -272,8 +272,7 @@ pub async fn discover_dhcp(
                             // It looks like there's a DHCP reservation for this address,
                             // so make an idempotent call to ensure we have a preallocated
                             // machine interface (and machine interface address) for it,
-                            // creating one if needed. Races against site-explorer's
-                            // reconciliation pass are handled inside preallocate.
+                            // creating one if needed.
                             db::machine_interface::preallocate_machine_interface(
                                 &mut txn, parsed_mac, fixed_ip,
                             )
@@ -293,6 +292,23 @@ pub async fn discover_dhcp(
                         // site-explorer's reconciliation pass are handled inside preallocate.
                         db::machine_interface::preallocate_bmc_machine_interface(
                             &mut txn, parsed_mac, bmc_ip,
+                        )
+                        .await?;
+                    } else if let Some(s) =
+                        db::expected_switch::find_by_nvos_mac_address(&mut txn, parsed_mac)
+                            .await
+                            .map_err(CarbideError::from)?
+                        && let Some(nvos_ip) = s.nvos_ip_address
+                    {
+                        // The parsed MAC matches the single wired NVOS port of an expected
+                        // switch with a configured static IP. Mirrors the ExpectedHostNic
+                        // fixed_ip path: ensure the (mac, nvos_ip) row exists so the static
+                        // reservation gets served by the find_or_create_machine_interface
+                        // step below. Data variant (NVOS is a data interface, not a BMC).
+                        // Races against site-explorer's reconciliation pass are handled
+                        // inside preallocate.
+                        db::machine_interface::preallocate_machine_interface(
+                            &mut txn, parsed_mac, nvos_ip,
                         )
                         .await?;
                     }
