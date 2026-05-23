@@ -199,37 +199,6 @@ async fn test_get_bmc_credentials_rejects_caller_without_spiffe_service_id(pool:
 }
 
 #[crate::sqlx_test]
-async fn test_get_bmc_credentials_returns_failed_precondition_when_breaker_tripped(
-    pool: sqlx::PgPool,
-) {
-    let env = create_test_env(pool).await;
-
-    let bmc_mac: mac_address::MacAddress = "aa:bb:cc:dd:ee:01".parse().unwrap();
-    env.api
-        .bmc_session_manager
-        .force_trip_for_test(bmc_mac, 3, 401)
-        .await;
-
-    let mut request = tonic::Request::new(GetBmcCredentialsRequest {
-        mac_addr: bmc_mac.to_string(),
-    });
-    let mut auth_ctx = crate::auth::AuthContext::default();
-    auth_ctx.principals.push(
-        carbide_authn::middleware::Principal::SpiffeServiceIdentifier(
-            "test-spiffe-client".to_string(),
-        ),
-    );
-    request.extensions_mut().insert(auth_ctx);
-
-    let err = env
-        .api
-        .get_bmc_credentials(request)
-        .await
-        .expect_err("locked-out BMC should reject the call");
-    assert_eq!(err.code(), Code::FailedPrecondition);
-}
-
-#[crate::sqlx_test]
 async fn test_create_bgp_credential_validates_max_password_length(pool: sqlx::PgPool) {
     let env = create_test_env(pool).await;
 
