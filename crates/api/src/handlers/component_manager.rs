@@ -311,8 +311,21 @@ fn map_compute_tray_component_names(raw: &[i32]) -> Result<Vec<String>, Status> 
         .collect()
 }
 
-fn map_nv_switch_component_names(raw: &[i32]) -> Result<Vec<String>, Status> {
-    map_nv_switch_components(raw).map(|cs| cs.into_iter().map(|c| c.to_string()).collect())
+fn split_nv_switch_firmware_and_nvos_components(
+    components: &[NvSwitchComponent],
+) -> (Vec<String>, bool) {
+    let mut firmware_components = Vec::new();
+    let mut include_nvos = components.is_empty();
+
+    for component in components {
+        if *component == NvSwitchComponent::Nvos {
+            include_nvos = true;
+        } else {
+            firmware_components.push(component.to_string());
+        }
+    }
+
+    (firmware_components, include_nvos)
 }
 
 fn map_nv_switch_components(raw: &[i32]) -> Result<Vec<NvSwitchComponent>, Status> {
@@ -527,14 +540,16 @@ async fn group_switch_ids_by_rack(
 async fn submit_rack_firmware_maintenance_requests(
     api: &Api,
     targets: Vec<RackFirmwareMaintenanceTarget>,
-    firmware_version: String,
-    components: Vec<String>,
-    access_token: Option<String>,
-    force_update: bool,
+    activities: Vec<rpc::MaintenanceActivityConfig>,
 ) -> Result<Vec<rpc::ComponentResult>, Status> {
     if targets.is_empty() {
         return Err(Status::invalid_argument(
             "no devices specified for firmware upgrade",
+        ));
+    }
+    if activities.is_empty() {
+        return Err(Status::invalid_argument(
+            "no rack maintenance activities were selected for firmware upgrade",
         ));
     }
 
@@ -552,16 +567,7 @@ async fn submit_rack_firmware_maintenance_requests(
                 machine_ids: target.machine_ids,
                 switch_ids: target.switch_ids,
                 power_shelf_ids: vec![],
-                activities: vec![rpc::MaintenanceActivityConfig {
-                    activity: Some(rpc::maintenance_activity_config::Activity::FirmwareUpgrade(
-                        rpc::FirmwareUpgradeActivity {
-                            firmware_version: firmware_version.clone(),
-                            components: components.clone(),
-                            access_token: access_token.clone(),
-                            force_update,
-                        },
-                    )),
-                }],
+                activities: activities.clone(),
             }),
         });
 
@@ -576,6 +582,67 @@ async fn submit_rack_firmware_maintenance_requests(
     }
 
     Ok(results)
+}
+
+fn firmware_upgrade_activity(
+    firmware_version: String,
+    components: Vec<String>,
+    access_token: Option<String>,
+    force_update: bool,
+) -> rpc::MaintenanceActivityConfig {
+    rpc::MaintenanceActivityConfig {
+        activity: Some(rpc::maintenance_activity_config::Activity::FirmwareUpgrade(
+            rpc::FirmwareUpgradeActivity {
+                firmware_version,
+                components,
+                access_token,
+                force_update,
+            },
+        )),
+    }
+}
+
+fn nvos_update_activity(
+    config_json: String,
+    access_token: Option<String>,
+) -> rpc::MaintenanceActivityConfig {
+    rpc::MaintenanceActivityConfig {
+        activity: Some(rpc::maintenance_activity_config::Activity::NvosUpdate(
+            rpc::NvosUpdateActivity {
+                config_json,
+                access_token,
+            },
+        )),
+    }
+}
+
+fn switch_firmware_maintenance_activities(
+    config_json: &str,
+    access_token: &str,
+    components: &[NvSwitchComponent],
+    force_update: bool,
+) -> Vec<rpc::MaintenanceActivityConfig> {
+    let (firmware_components, include_nvos) =
+        split_nv_switch_firmware_and_nvos_components(components);
+    let mut activities = Vec::new();
+
+    if components.is_empty() || !firmware_components.is_empty() {
+        activities.push(firmware_upgrade_activity(
+            config_json.to_string(),
+            firmware_components,
+            Some(access_token.to_string()),
+            force_update,
+        ));
+    }
+
+    if include_nvos {
+        activities.push(nvos_update_activity(
+            config_json.to_string(),
+            Some(access_token.to_string()),
+        ));
+    }
+
+    activities
 }
 
 // ---- Endpoint resolution helpers ----
@@ -1406,13 +1473,11 @@ pub(crate) async fn update_component_firmware(
         .ok_or_else(|| Status::invalid_argument("target is required"))?;
     let access_token = normalize_access_token(req.access_token);
 
-    let target_version = req.target_version.clone();
     let force_update = req.force_update;
     let mut rack_maintenance_targets: Vec<RackFirmwareMaintenanceTarget> = Vec::new();
     let mut power_shelf_results: Option<Vec<rpc::ComponentResult>> = None;
     let mut rack_results: Option<Vec<rpc::ComponentResult>> = None;
-    let mut component_names: Vec<String> = Vec::new();
-    let mut maintenance_access_token: Option<String> = None;
+    let mut maintenance_activities: Vec<rpc::MaintenanceActivityConfig> = Vec::new();
 
     match target {
         rpc::update_component_firmware_request::Target::Switches(t) => {
@@ -1424,23 +1489,34 @@ pub(crate) async fn update_component_firmware(
             }
 
             if access_token.is_some() {
-                maintenance_access_token = Some(require_firmware_object_json_for_rack_maintenance(
+                let token = require_firmware_object_json_for_rack_maintenance(
                     "switch",
                     &access_token,
                     &req.target_version,
-                )?);
-                component_names = map_nv_switch_component_names(&t.components)?;
+                )?;
+                let components = map_nv_switch_components(&t.components)?;
+                maintenance_activities = switch_firmware_maintenance_activities(
+                    &req.target_version,
+                    &token,
+                    &components,
+                    force_update,
+                );
                 rack_maintenance_targets = group_switch_ids_by_rack(api, &list.ids).await?;
             } else {
                 let cm = require_component_manager(api)?;
                 if cm.nv_switch_use_state_controller {
-                    maintenance_access_token =
-                        Some(require_firmware_object_json_for_rack_maintenance(
-                            "switch",
-                            &access_token,
-                            &req.target_version,
-                        )?);
-                    component_names = map_nv_switch_component_names(&t.components)?;
+                    let token = require_firmware_object_json_for_rack_maintenance(
+                        "switch",
+                        &access_token,
+                        &req.target_version,
+                    )?;
+                    let components = map_nv_switch_components(&t.components)?;
+                    maintenance_activities = switch_firmware_maintenance_activities(
+                        &req.target_version,
+                        &token,
+                        &components,
+                        force_update,
+                    );
                     rack_maintenance_targets = group_switch_ids_by_rack(api, &list.ids).await?;
                 } else {
                     reject_firmware_object_json_for_direct_dispatch("switch", &access_token)?;
@@ -1486,24 +1562,35 @@ pub(crate) async fn update_component_firmware(
             }
 
             if access_token.is_some() {
-                maintenance_access_token = Some(require_firmware_object_json_for_rack_maintenance(
+                let token = require_firmware_object_json_for_rack_maintenance(
                     "compute tray",
                     &access_token,
                     &req.target_version,
-                )?);
-                component_names = map_compute_tray_component_names(&t.components)?;
+                )?;
+                let component_names = map_compute_tray_component_names(&t.components)?;
+                maintenance_activities = vec![firmware_upgrade_activity(
+                    req.target_version.clone(),
+                    component_names,
+                    Some(token),
+                    force_update,
+                )];
                 rack_maintenance_targets =
                     group_machine_ids_by_rack(api, &list.machine_ids).await?;
             } else {
                 let cm = require_component_manager(api)?;
                 if cm.compute_tray_use_state_controller {
-                    maintenance_access_token =
-                        Some(require_firmware_object_json_for_rack_maintenance(
-                            "compute tray",
-                            &access_token,
-                            &req.target_version,
-                        )?);
-                    component_names = map_compute_tray_component_names(&t.components)?;
+                    let token = require_firmware_object_json_for_rack_maintenance(
+                        "compute tray",
+                        &access_token,
+                        &req.target_version,
+                    )?;
+                    let component_names = map_compute_tray_component_names(&t.components)?;
+                    maintenance_activities = vec![firmware_upgrade_activity(
+                        req.target_version.clone(),
+                        component_names,
+                        Some(token),
+                        force_update,
+                    )];
                     rack_maintenance_targets =
                         group_machine_ids_by_rack(api, &list.machine_ids).await?;
                 } else {
@@ -1642,10 +1729,7 @@ pub(crate) async fn update_component_firmware(
     let results = submit_rack_firmware_maintenance_requests(
         api,
         rack_maintenance_targets,
-        target_version,
-        component_names,
-        maintenance_access_token,
-        force_update,
+        maintenance_activities,
     )
     .await?;
 
@@ -2021,6 +2105,46 @@ mod tests {
         assert!(err.message().contains("target_version"));
 
         validate_firmware_object_json_request("{}").unwrap();
+    }
+
+    #[test]
+    fn switch_firmware_maintenance_activities_split_nvos_component() {
+        let activities = switch_firmware_maintenance_activities(
+            r#"{"Id":"fw"}"#,
+            "token",
+            &[NvSwitchComponent::Bmc, NvSwitchComponent::Nvos],
+            true,
+        );
+
+        assert_eq!(activities.len(), 2);
+        assert!(matches!(
+            activities[0].activity.as_ref(),
+            Some(rpc::maintenance_activity_config::Activity::FirmwareUpgrade(
+                activity
+            )) if activity.components == vec!["BMC".to_string()] && activity.force_update
+        ));
+        assert!(matches!(
+            activities[1].activity.as_ref(),
+            Some(rpc::maintenance_activity_config::Activity::NvosUpdate(
+                activity
+            )) if activity.config_json == r#"{"Id":"fw"}"# && activity.access_token.as_deref() == Some("token")
+        ));
+    }
+
+    #[test]
+    fn switch_firmware_maintenance_activities_only_nvos_skips_firmware_activity() {
+        let activities = switch_firmware_maintenance_activities(
+            r#"{"Id":"fw"}"#,
+            "token",
+            &[NvSwitchComponent::Nvos],
+            false,
+        );
+
+        assert_eq!(activities.len(), 1);
+        assert!(matches!(
+            activities[0].activity.as_ref(),
+            Some(rpc::maintenance_activity_config::Activity::NvosUpdate(_))
+        ));
     }
 
     #[test]
@@ -2527,5 +2651,4 @@ mod tests {
             self::rpc::PowerState::Off
         );
     }
-
 }

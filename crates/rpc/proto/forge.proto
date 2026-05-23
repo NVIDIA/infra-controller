@@ -5841,9 +5841,14 @@ message FirmwareUpgradeActivity {
 }
 
 message NvosUpdateActivity {
-  // Firmware object containing the switch system image to install.
-  // When empty, the default firmware object for the rack hardware type is used.
-  string firmware_object_id = 1;
+  reserved 1;
+  reserved "firmware_object_id";
+  // SOT JSON string passed to RMS ApplySwitchSystemImageFromJSON.
+  // Required for nvos-update activity.
+  string config_json = 2;
+  // Used only by the backend for artifact download when config_json is set.
+  // NICo stores it as a maintenance credential, not in rack maintenance state.
+  optional string access_token = 3;
 }
 
 message ConfigureNmxClusterActivity {

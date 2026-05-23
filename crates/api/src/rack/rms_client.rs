@@ -19,9 +19,9 @@ use librms::protos::rack_manager as rms;
 
 #[async_trait::async_trait]
 pub trait SwitchSystemImageRmsClient: Send + Sync {
-    async fn apply_switch_system_image(
+    async fn apply_switch_system_image_from_json(
         &self,
-        cmd: rms::ApplySwitchSystemImageRequest,
+        cmd: rms::ApplySwitchSystemImageFromJsonRequest,
     ) -> Result<rms::ApplySwitchSystemImageResponse, tonic::Status>;
 
     async fn get_switch_system_image_job_status(
@@ -32,11 +32,11 @@ pub trait SwitchSystemImageRmsClient: Send + Sync {
 
 #[async_trait::async_trait]
 impl SwitchSystemImageRmsClient for librms::RackManagerApi {
-    async fn apply_switch_system_image(
+    async fn apply_switch_system_image_from_json(
         &self,
-        cmd: rms::ApplySwitchSystemImageRequest,
+        cmd: rms::ApplySwitchSystemImageFromJsonRequest,
     ) -> Result<rms::ApplySwitchSystemImageResponse, tonic::Status> {
-        self.client.apply_switch_system_image(cmd).await
+        self.client.apply_switch_system_image_from_json(cmd).await
     }
 
     async fn get_switch_system_image_job_status(
@@ -75,6 +75,8 @@ pub mod test_support {
         firmware_job_errors: Arc<Mutex<HashMap<String, String>>>,
         submitted_apply_switch_system_image_requests:
             Arc<Mutex<Vec<rms::ApplySwitchSystemImageRequest>>>,
+        submitted_apply_switch_system_image_from_json_requests:
+            Arc<Mutex<Vec<rms::ApplySwitchSystemImageFromJsonRequest>>>,
         queued_apply_switch_system_image_responses:
             Arc<Mutex<VecDeque<rms::ApplySwitchSystemImageResponse>>>,
         switch_system_image_job_statuses:
@@ -103,6 +105,9 @@ pub mod test_support {
                 firmware_job_statuses: Arc::new(Mutex::new(HashMap::new())),
                 firmware_job_errors: Arc::new(Mutex::new(HashMap::new())),
                 submitted_apply_switch_system_image_requests: Arc::new(Mutex::new(Vec::new())),
+                submitted_apply_switch_system_image_from_json_requests: Arc::new(Mutex::new(
+                    Vec::new(),
+                )),
                 queued_apply_switch_system_image_responses: Arc::new(Mutex::new(VecDeque::new())),
                 switch_system_image_job_statuses: Arc::new(Mutex::new(HashMap::new())),
                 switch_system_image_job_errors: Arc::new(Mutex::new(HashMap::new())),
@@ -147,6 +152,9 @@ pub mod test_support {
                 firmware_job_errors: self.firmware_job_errors.clone(),
                 submitted_apply_switch_system_image_requests: self
                     .submitted_apply_switch_system_image_requests
+                    .clone(),
+                submitted_apply_switch_system_image_from_json_requests: self
+                    .submitted_apply_switch_system_image_from_json_requests
                     .clone(),
                 queued_apply_switch_system_image_responses: self
                     .queued_apply_switch_system_image_responses
@@ -285,6 +293,15 @@ pub mod test_support {
                 .clone()
         }
 
+        pub async fn submitted_apply_switch_system_image_from_json_requests(
+            &self,
+        ) -> Vec<rms::ApplySwitchSystemImageFromJsonRequest> {
+            self.submitted_apply_switch_system_image_from_json_requests
+                .lock()
+                .await
+                .clone()
+        }
+
         /// Queue a `Result` to be returned on the next call to
         /// `set_power_state_by_device_list`. Used by power-shelf maintenance
         /// tests to drive both the success and failure paths of the
@@ -328,6 +345,8 @@ pub mod test_support {
         firmware_job_errors: Arc<Mutex<HashMap<String, String>>>,
         submitted_apply_switch_system_image_requests:
             Arc<Mutex<Vec<rms::ApplySwitchSystemImageRequest>>>,
+        submitted_apply_switch_system_image_from_json_requests:
+            Arc<Mutex<Vec<rms::ApplySwitchSystemImageFromJsonRequest>>>,
         queued_apply_switch_system_image_responses:
             Arc<Mutex<VecDeque<rms::ApplySwitchSystemImageResponse>>>,
         switch_system_image_job_statuses:
@@ -630,9 +649,18 @@ pub mod test_support {
         }
         async fn apply_switch_system_image_from_json(
             &self,
-            _cmd: rms::ApplySwitchSystemImageFromJsonRequest,
+            cmd: rms::ApplySwitchSystemImageFromJsonRequest,
         ) -> Result<rms::ApplySwitchSystemImageResponse, RackManagerError> {
-            Ok(rms::ApplySwitchSystemImageResponse::default())
+            self.submitted_apply_switch_system_image_from_json_requests
+                .lock()
+                .await
+                .push(cmd);
+            Ok(self
+                .queued_apply_switch_system_image_responses
+                .lock()
+                .await
+                .pop_front()
+                .unwrap_or_default())
         }
         async fn apply_switch_system_image(
             &self,
@@ -763,11 +791,11 @@ pub mod test_support {
 
     #[async_trait::async_trait]
     impl SwitchSystemImageRmsClient for MockRmsClient {
-        async fn apply_switch_system_image(
+        async fn apply_switch_system_image_from_json(
             &self,
-            cmd: rms::ApplySwitchSystemImageRequest,
+            cmd: rms::ApplySwitchSystemImageFromJsonRequest,
         ) -> Result<rms::ApplySwitchSystemImageResponse, tonic::Status> {
-            self.submitted_apply_switch_system_image_requests
+            self.submitted_apply_switch_system_image_from_json_requests
                 .lock()
                 .await
                 .push(cmd);

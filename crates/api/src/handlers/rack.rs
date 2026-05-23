@@ -456,6 +456,36 @@ pub(crate) async fn update_rack_metadata(
     Ok(tonic::Response::new(()))
 }
 
+fn non_empty_string(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn non_empty_optional_string(value: &Option<String>) -> Option<String> {
+    value.as_deref().and_then(non_empty_string)
+}
+
+fn set_maintenance_access_token(
+    maintenance_access_token: &mut Option<String>,
+    access_token: Option<String>,
+) -> Result<(), CarbideError> {
+    let Some(access_token) = access_token else {
+        return Ok(());
+    };
+
+    if let Some(existing) = maintenance_access_token {
+        if existing != &access_token {
+            return Err(CarbideError::InvalidArgument(
+                "rack maintenance activities must use the same access_token".into(),
+            ));
+        }
+        return Ok(());
+    }
+
+    *maintenance_access_token = Some(access_token);
+    Ok(())
+}
+
 pub(crate) async fn on_demand_rack_maintenance(
     api: &Api,
     request: Request<rpc::RackMaintenanceOnDemandRequest>,
@@ -508,18 +538,8 @@ pub(crate) async fn on_demand_rack_maintenance(
     for entry in &proto_scope.activities {
         let activity = match &entry.activity {
             Some(ProtoActivity::FirmwareUpgrade(fw)) => {
-                let firmware_version = if fw.firmware_version.trim().is_empty() {
-                    None
-                } else {
-                    Some(fw.firmware_version.clone())
-                };
-                let access_token = fw.access_token.as_ref().and_then(|token| {
-                    if token.trim().is_empty() {
-                        None
-                    } else {
-                        Some(token.clone())
-                    }
-                });
+                let firmware_version = non_empty_string(&fw.firmware_version);
+                let access_token = non_empty_optional_string(&fw.access_token);
 
                 if firmware_version.is_none() {
                     return Err(CarbideError::InvalidArgument(
@@ -541,7 +561,7 @@ pub(crate) async fn on_demand_rack_maintenance(
                         ))
                     })?;
                 }
-                maintenance_access_token = access_token;
+                set_maintenance_access_token(&mut maintenance_access_token, access_token)?;
 
                 MaintenanceActivity::FirmwareUpgrade {
                     firmware_version,
@@ -549,13 +569,32 @@ pub(crate) async fn on_demand_rack_maintenance(
                     force_update: fw.force_update,
                 }
             }
-            Some(ProtoActivity::NvosUpdate(nvos)) => MaintenanceActivity::NvosUpdate {
-                firmware_object_id: if nvos.firmware_object_id.is_empty() {
-                    None
-                } else {
-                    Some(nvos.firmware_object_id.clone())
-                },
-            },
+            Some(ProtoActivity::NvosUpdate(nvos)) => {
+                let config_json = non_empty_string(&nvos.config_json);
+                let access_token = non_empty_optional_string(&nvos.access_token);
+
+                if config_json.is_none() {
+                    return Err(CarbideError::InvalidArgument(
+                        "nvos-update rack maintenance requires SOT JSON in config_json".into(),
+                    )
+                    .into());
+                }
+                if access_token.is_none() {
+                    return Err(CarbideError::InvalidArgument(
+                        "nvos-update rack maintenance requires access_token".into(),
+                    )
+                    .into());
+                }
+                let config_json = config_json.expect("validated above");
+                serde_json::from_str::<serde_json::Value>(&config_json).map_err(|error| {
+                    CarbideError::InvalidArgument(format!(
+                        "nvos-update config_json must contain valid SOT JSON: {error}"
+                    ))
+                })?;
+                set_maintenance_access_token(&mut maintenance_access_token, access_token)?;
+
+                MaintenanceActivity::NvosUpdate { config_json }
+            }
             Some(ProtoActivity::ConfigureNmxCluster(_)) => MaintenanceActivity::ConfigureNmxCluster,
             Some(ProtoActivity::PowerSequence(_)) => MaintenanceActivity::PowerSequence,
             None => {

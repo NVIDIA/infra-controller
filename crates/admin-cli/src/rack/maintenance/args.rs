@@ -92,10 +92,4 @@ pub struct MaintenanceOptions {
         value_delimiter = ','
     )]
     pub components: Option<Vec<String>>,
-
-    #[clap(
-        long,
-        help = "Firmware object ID containing the NVOS switch system image (omit for default)"
-    )]
-    pub firmware_object_id: Option<String>,
 }

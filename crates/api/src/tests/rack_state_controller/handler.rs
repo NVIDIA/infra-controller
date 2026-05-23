@@ -372,7 +372,8 @@ async fn test_on_demand_rack_maintenance_schedules_nvos_only_scope(
                     activity: Some(
                         rpc::forge::maintenance_activity_config::Activity::NvosUpdate(
                             rpc::forge::NvosUpdateActivity {
-                                firmware_object_id: "fw-nvos".to_string(),
+                                config_json: r#"{"Id":"fw-nvos"}"#.to_string(),
+                                access_token: Some("token".to_string()),
                             },
                         ),
                     ),
@@ -392,8 +393,8 @@ async fn test_on_demand_rack_maintenance_schedules_nvos_only_scope(
     assert!(matches!(
         &scope.activities[0],
         MaintenanceActivity::NvosUpdate {
-            firmware_object_id: Some(id)
-        } if id == "fw-nvos"
+            config_json,
+        } if config_json == r#"{"Id":"fw-nvos"}"#
     ));
 
     Ok(())
@@ -473,7 +474,8 @@ async fn test_on_demand_rack_maintenance_schedules_firmware_and_nvos_scope(
                         activity: Some(
                             rpc::forge::maintenance_activity_config::Activity::NvosUpdate(
                                 rpc::forge::NvosUpdateActivity {
-                                    firmware_object_id: "fw-mixed".to_string(),
+                                    config_json: r#"{"Id":"fw-mixed"}"#.to_string(),
+                                    access_token: Some("token".to_string()),
                                 },
                             ),
                         ),
@@ -502,8 +504,8 @@ async fn test_on_demand_rack_maintenance_schedules_firmware_and_nvos_scope(
     assert!(matches!(
         &scope.activities[1],
         MaintenanceActivity::NvosUpdate {
-            firmware_object_id: Some(id)
-        } if id == "fw-mixed"
+            config_json,
+        } if config_json == r#"{"Id":"fw-mixed"}"#
     ));
     let token_credentials = env
         .test_credential_manager
@@ -1279,14 +1281,12 @@ async fn test_firmware_upgrade_start_skips_without_json(
                 matches!(
                     next_state,
                     RackState::Maintenance {
-                        maintenance_state: RackMaintenanceState::NVOSUpdate {
-                            nvos_update: NvosUpdateState::Start {
-                                firmware_object_id: None,
-                            },
+                        maintenance_state: RackMaintenanceState::ConfigureNmxCluster {
+                            configure_nmx_cluster: _,
                         },
                     }
                 ),
-                "FirmwareUpgrade(Start) should skip firmware without JSON and advance to NVOSUpdate, got {:?}",
+                "FirmwareUpgrade(Start) should skip firmware without JSON and advance to the next requested activity, got {:?}",
                 next_state
             );
         }
@@ -1968,7 +1968,7 @@ async fn test_firmware_upgrade_wait_for_complete_retries_on_transient_poll_error
 
 /// test_nvos_update_start_transitions_to_wait_for_complete verifies that
 /// Maintenance::NVOSUpdate(Start) transitions to WaitForComplete when a
-/// default NVOS-capable firmware object is available through RMS.
+/// NVOS SOT JSON is available for RMS ApplySwitchSystemImageFromJSON.
 #[crate::sqlx_test]
 async fn test_nvos_update_start_transitions_to_wait_for_complete(
     pool: sqlx::PgPool,
@@ -1991,7 +1991,7 @@ async fn test_nvos_update_start_transitions_to_wait_for_complete(
         maintenance_requested: Some(MaintenanceScope {
             switch_ids: vec![switch_id],
             activities: vec![MaintenanceActivity::NvosUpdate {
-                firmware_object_id: Some("fw-nvos-default".to_string()),
+                config_json: r#"{"Id":"fw-nvos-default"}"#.to_string(),
             }],
             ..Default::default()
         }),
@@ -2000,6 +2000,20 @@ async fn test_nvos_update_start_transitions_to_wait_for_complete(
     let mut txn = pool.acquire().await?;
     db_rack::update(&mut txn, &rack_id, &config).await?;
     drop(txn);
+
+    env.api
+        .credential_manager
+        .set_credentials(
+            &CredentialKey::RackMaintenanceAccessToken {
+                rack_id: rack_id.clone(),
+            },
+            &Credentials::UsernamePassword {
+                username: "access_token".to_string(),
+                password: "token".to_string(),
+            },
+        )
+        .await
+        .map_err(|error| eyre::eyre!("failed to set maintenance access token: {}", error))?;
 
     env.rms_sim
         .queue_apply_switch_system_image_response(
@@ -2028,9 +2042,7 @@ async fn test_nvos_update_start_transitions_to_wait_for_complete(
 
     let nvos_state = RackState::Maintenance {
         maintenance_state: RackMaintenanceState::NVOSUpdate {
-            nvos_update: NvosUpdateState::Start {
-                firmware_object_id: Some("fw-nvos-default".to_string()),
-            },
+            nvos_update: NvosUpdateState::Start,
         },
     };
     let outcome = handler_instance
@@ -2041,13 +2053,16 @@ async fn test_nvos_update_start_transitions_to_wait_for_complete(
         rack.nvos_update_job.is_some(),
         "NVOSUpdate(Start) should populate rack.nvos_update_job"
     );
+    let requests = env
+        .rms_sim
+        .submitted_apply_switch_system_image_from_json_requests()
+        .await;
     assert!(
-        !env.rms_sim
-            .submitted_apply_switch_system_image_requests()
-            .await
-            .is_empty(),
-        "NVOSUpdate(Start) should submit a switch system image request to RMS"
+        !requests.is_empty(),
+        "NVOSUpdate(Start) should submit ApplySwitchSystemImageFromJSON"
     );
+    assert_eq!(requests[0].config_json, r#"{"Id":"fw-nvos-default"}"#);
+    assert_eq!(requests[0].access_token, "token");
     let mut txn = pool.acquire().await?;
     let switch = db_switch::find_by_id(&mut txn, &switch_id)
         .await?

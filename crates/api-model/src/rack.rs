@@ -492,14 +492,14 @@ impl Display for FirmwareUpgradeState {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NvosUpdateState {
-    Start { firmware_object_id: Option<String> },
+    Start,
     WaitForComplete,
 }
 
 impl Display for NvosUpdateState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            NvosUpdateState::Start { .. } => write!(f, "Start"),
+            NvosUpdateState::Start => write!(f, "Start"),
             NvosUpdateState::WaitForComplete => write!(f, "WaitForComplete"),
         }
     }
@@ -658,9 +658,9 @@ pub enum MaintenanceActivity {
         force_update: bool,
     },
     NvosUpdate {
-        /// Firmware object containing the switch system image to install.
-        /// `None` means the default firmware object for the rack is used.
-        firmware_object_id: Option<String>,
+        /// Ephemeral SOT JSON used with RMS ApplySwitchSystemImageFromJSON.
+        /// The access token is stored separately as a maintenance credential.
+        config_json: String,
     },
     ConfigureNmxCluster,
     PowerSequence,
@@ -873,7 +873,7 @@ mod tests {
             force_update: false,
         }));
         assert!(scope.should_run(&MaintenanceActivity::NvosUpdate {
-            firmware_object_id: None,
+            config_json: String::new(),
         }));
         assert!(scope.should_run(&MaintenanceActivity::ConfigureNmxCluster));
         assert!(scope.should_run(&MaintenanceActivity::PowerSequence));
@@ -895,7 +895,7 @@ mod tests {
             force_update: false,
         }));
         assert!(!scope.should_run(&MaintenanceActivity::NvosUpdate {
-            firmware_object_id: None,
+            config_json: String::new(),
         }));
         assert!(!scope.should_run(&MaintenanceActivity::ConfigureNmxCluster));
         assert!(!scope.should_run(&MaintenanceActivity::PowerSequence));
@@ -911,7 +911,7 @@ mod tests {
                     force_update: false,
                 },
                 MaintenanceActivity::NvosUpdate {
-                    firmware_object_id: Some("fw-nvos".into()),
+                    config_json: r#"{"Id":"fw-nvos"}"#.into(),
                 },
                 MaintenanceActivity::PowerSequence,
             ],
@@ -924,7 +924,7 @@ mod tests {
         }));
         assert!(!scope.should_run(&MaintenanceActivity::ConfigureNmxCluster));
         assert!(scope.should_run(&MaintenanceActivity::NvosUpdate {
-            firmware_object_id: None,
+            config_json: String::new(),
         }));
         assert!(scope.should_run(&MaintenanceActivity::PowerSequence));
     }
@@ -946,10 +946,10 @@ mod tests {
         assert!(a.same_kind(&b));
 
         let a = MaintenanceActivity::NvosUpdate {
-            firmware_object_id: Some("fw-a".into()),
+            config_json: r#"{"Id":"fw-a"}"#.into(),
         };
         let b = MaintenanceActivity::NvosUpdate {
-            firmware_object_id: None,
+            config_json: String::new(),
         };
         assert!(a.same_kind(&b));
     }
@@ -982,7 +982,7 @@ mod tests {
         );
         assert_eq!(
             MaintenanceActivity::NvosUpdate {
-                firmware_object_id: None,
+                config_json: String::new(),
             }
             .to_string(),
             "NvosUpdate"

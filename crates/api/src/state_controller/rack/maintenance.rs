@@ -219,15 +219,11 @@ fn nvos_update_requested(scope: &MaintenanceScope) -> bool {
         .any(|activity| matches!(activity, MaintenanceActivity::NvosUpdate { .. }))
 }
 
-fn implicit_nvos_update_requested(scope: &MaintenanceScope) -> bool {
-    scope.should_run(&MaintenanceActivity::NvosUpdate {
-        firmware_object_id: None,
-    }) && !nvos_update_requested(scope)
-}
-
-fn requested_firmware_object_id(scope: &MaintenanceScope) -> Option<String> {
+fn requested_nvos_config_json(scope: &MaintenanceScope) -> Option<String> {
     scope.activities.iter().find_map(|activity| match activity {
-        MaintenanceActivity::NvosUpdate { firmware_object_id } => firmware_object_id.clone(),
+        MaintenanceActivity::NvosUpdate { config_json } => {
+            (!config_json.trim().is_empty()).then(|| config_json.clone())
+        }
         _ => None,
     })
 }
@@ -299,20 +295,16 @@ async fn delete_rack_maintenance_access_token(
     }
 }
 
-fn nvos_update_start_state(scope: &MaintenanceScope) -> RackMaintenanceState {
+fn nvos_update_start_state(_scope: &MaintenanceScope) -> RackMaintenanceState {
     RackMaintenanceState::NVOSUpdate {
-        nvos_update: NvosUpdateState::Start {
-            firmware_object_id: requested_firmware_object_id(scope),
-        },
+        nvos_update: NvosUpdateState::Start,
     }
 }
 
 /// Returns the next maintenance sub-state after firmware upgrade, skipping
 /// activities not requested in the scope.
 fn next_state_after_firmware(scope: &MaintenanceScope) -> RackMaintenanceState {
-    if scope.should_run(&MaintenanceActivity::NvosUpdate {
-        firmware_object_id: None,
-    }) {
+    if nvos_update_requested(scope) {
         nvos_update_start_state(scope)
     } else {
         next_state_after_nvos(scope)
@@ -830,28 +822,38 @@ async fn rms_get_firmware_upgrade_status(
     Ok(updated)
 }
 
+struct NvosUpdateSource<'a> {
+    config_json: &'a str,
+    access_token: &'a str,
+}
+
 async fn rms_start_nvos_update(
     rms_client: &dyn SwitchSystemImageRmsClient,
     rack_id: &RackId,
-    object_id: Option<&str>,
+    source: NvosUpdateSource<'_>,
     software_type: &str,
     hardware_type: &str,
     switches: Vec<FirmwareUpgradeDeviceInfo>,
 ) -> Result<NvosUpdateJob, StateHandlerError> {
     let started_at = chrono::Utc::now();
+    let devices: Vec<_> = switches
+        .iter()
+        .map(|switch| build_new_node_info(rack_id, switch, rms::NodeType::Switch))
+        .collect();
+    let nodes = Some(rms::NodeSet { devices });
+    let NvosUpdateSource {
+        config_json,
+        access_token,
+    } = source;
     let response = rms_client
-        .apply_switch_system_image(rms::ApplySwitchSystemImageRequest {
+        .apply_switch_system_image_from_json(rms::ApplySwitchSystemImageFromJsonRequest {
             metadata: None,
             rack_id: rack_id.to_string(),
-            object_id: object_id.unwrap_or_default().to_string(),
+            config_json: config_json.to_string(),
+            access_token: access_token.to_string(),
             software_type: software_type.to_string(),
             hardware_type: hardware_type.to_string(),
-            nodes: Some(rms::NodeSet {
-                devices: switches
-                    .iter()
-                    .map(|switch| build_new_node_info(rack_id, switch, rms::NodeType::Switch))
-                    .collect(),
-            }),
+            nodes,
         })
         .await
         .map_err(|error| {
@@ -876,7 +878,7 @@ async fn rms_start_nvos_update(
             .map(|batch_response| batch_response.message.as_str())
             .unwrap_or_default();
         let message = if message.is_empty() {
-            "RMS returned failure for ApplySwitchSystemImage".to_string()
+            "RMS returned failure for ApplySwitchSystemImageFromJSON".to_string()
         } else {
             message.to_string()
         };
@@ -1131,6 +1133,7 @@ pub async fn handle_maintenance(
                     )
                     .await;
                 };
+                let nvos_json_pending = requested_nvos_config_json(scope).is_some();
                 let Some(rms_client) = ctx.services.rms_client.as_ref() else {
                     delete_rack_maintenance_access_token(
                         ctx.services.credential_manager.as_ref(),
@@ -1173,11 +1176,13 @@ pub async fn handle_maintenance(
                 let inventory = filter_inventory_by_scope(inventory, scope);
 
                 if inventory.machines.is_empty() && inventory.switches.is_empty() {
-                    delete_rack_maintenance_access_token(
-                        ctx.services.credential_manager.as_ref(),
-                        id,
-                    )
-                    .await;
+                    if !nvos_json_pending {
+                        delete_rack_maintenance_access_token(
+                            ctx.services.credential_manager.as_ref(),
+                            id,
+                        )
+                        .await;
+                    }
                     return Ok(skip_firmware_upgrade_outcome(
                         id,
                         "no compute or switch devices require rack firmware updates",
@@ -1210,8 +1215,13 @@ pub async fn handle_maintenance(
                     },
                 )
                 .await;
-                delete_rack_maintenance_access_token(ctx.services.credential_manager.as_ref(), id)
+                if submit_result.is_err() || !nvos_json_pending {
+                    delete_rack_maintenance_access_token(
+                        ctx.services.credential_manager.as_ref(),
+                        id,
+                    )
                     .await;
+                }
 
                 let mut job = match submit_result {
                     Ok(job) => job,
@@ -1228,10 +1238,7 @@ pub async fn handle_maintenance(
                 };
 
                 let mut txn = ctx.services.db_pool.begin().await?;
-                let continue_after_firmware_upgrade =
-                    scope.should_run(&MaintenanceActivity::NvosUpdate {
-                        firmware_object_id: None,
-                    });
+                let continue_after_firmware_upgrade = nvos_update_requested(scope);
                 trigger_rack_firmware_reprovisioning_requests(
                     txn.as_mut(),
                     id,
@@ -1264,6 +1271,13 @@ pub async fn handle_maintenance(
                     ));
                 }
                 let Some(rms_client) = ctx.services.rms_client.as_ref() else {
+                    if requested_nvos_config_json(scope).is_some() {
+                        delete_rack_maintenance_access_token(
+                            ctx.services.credential_manager.as_ref(),
+                            id,
+                        )
+                        .await;
+                    }
                     return transition_to_rack_error(id, state, "RMS client not configured", ctx)
                         .await;
                 };
@@ -1276,9 +1290,6 @@ pub async fn handle_maintenance(
                 let completed = all.iter().filter(|d| d.status == "completed").count();
                 let failed = all.iter().filter(|d| d.status == "failed").count();
                 let terminal = completed + failed;
-                let run_implicit_nvos_update =
-                    terminal == total && failed == 0 && implicit_nvos_update_requested(scope);
-
                 let mut txn = ctx.services.db_pool.begin().await?;
 
                 let build_status =
@@ -1377,6 +1388,13 @@ pub async fn handle_maintenance(
                 }
 
                 if failed > 0 {
+                    if requested_nvos_config_json(scope).is_some() {
+                        delete_rack_maintenance_access_token(
+                            ctx.services.credential_manager.as_ref(),
+                            id,
+                        )
+                        .await;
+                    }
                     let now = chrono::Utc::now();
                     job.status = Some("failed".into());
                     if job.completed_at.is_none() {
@@ -1415,16 +1433,6 @@ pub async fn handle_maintenance(
                         "Rack firmware upgrade complete; advancing to explicitly requested next activity"
                     );
                     next
-                } else if run_implicit_nvos_update {
-                    tracing::info!(
-                        "Rack {} firmware upgrade complete; advancing to NVOSUpdate(Start) and letting RMS resolve the default switch system image",
-                        id,
-                    );
-                    RackMaintenanceState::NVOSUpdate {
-                        nvos_update: NvosUpdateState::Start {
-                            firmware_object_id: None,
-                        },
-                    }
                 } else {
                     let next = next_state_after_nvos(scope);
                     tracing::info!(
@@ -1432,7 +1440,7 @@ pub async fn handle_maintenance(
                         completed,
                         total,
                         next_state = %next,
-                        "Rack firmware upgrade complete; no default NVOS artifact available, advancing"
+                        "Rack firmware upgrade complete; no explicit NVOS update requested, advancing"
                     );
                     next
                 };
@@ -1444,11 +1452,37 @@ pub async fn handle_maintenance(
             }
         },
         RackMaintenanceState::NVOSUpdate { nvos_update } => match nvos_update {
-            NvosUpdateState::Start { firmware_object_id } => {
+            NvosUpdateState::Start => {
+                let Some(config_json) = requested_nvos_config_json(scope) else {
+                    return transition_to_rack_error(
+                        id,
+                        state,
+                        "nvos-update rack maintenance requires SOT JSON and access token",
+                        ctx,
+                    )
+                    .await;
+                };
                 let Some(rms_client) = ctx.services.switch_system_image_rms_client.as_deref()
                 else {
+                    delete_rack_maintenance_access_token(
+                        ctx.services.credential_manager.as_ref(),
+                        id,
+                    )
+                    .await;
                     return transition_to_rack_error(id, state, "RMS client not configured", ctx)
                         .await;
+                };
+                let access_token = match load_rack_maintenance_access_token(
+                    ctx.services.credential_manager.as_ref(),
+                    id,
+                )
+                .await
+                {
+                    Ok(access_token) => access_token,
+                    Err(error) => {
+                        let message = error.to_string();
+                        return transition_to_rack_error(id, state, &message, ctx).await;
+                    }
                 };
                 let profile = super::resolve_profile(id, rack_profile_id, ctx);
                 let rack_hardware_type = profile_hardware_type_or_any(profile);
@@ -1469,6 +1503,11 @@ pub async fn handle_maintenance(
                 let switch_inventory = filter_switch_inventory_by_scope(switch_inventory, scope);
 
                 if switch_inventory.switches.is_empty() {
+                    delete_rack_maintenance_access_token(
+                        ctx.services.credential_manager.as_ref(),
+                        id,
+                    )
+                    .await;
                     let next = next_state_after_nvos(scope);
                     tracing::info!(
                         rack_id = %id,
@@ -1481,9 +1520,11 @@ pub async fn handle_maintenance(
                 }
 
                 tracing::info!(
-                    "Rack {} switch system image update starting with firmware object '{}'",
-                    id,
-                    firmware_object_id.as_deref().unwrap_or("<default>"),
+                    rack_id = %id,
+                    software_type,
+                    hardware_type = %rack_hardware_type,
+                    switch_count = switch_inventory.switches.len(),
+                    "Rack switch system image FromJSON update starting",
                 );
 
                 for switch in &switch_inventory.switches {
@@ -1507,29 +1548,24 @@ pub async fn handle_maintenance(
                     })?;
                 }
 
-                let job = match rms_start_nvos_update(
+                let source = NvosUpdateSource {
+                    config_json: &config_json,
+                    access_token: &access_token,
+                };
+                let submit_result = rms_start_nvos_update(
                     rms_client,
                     id,
-                    firmware_object_id.as_deref(),
+                    source,
                     software_type,
                     &rack_hardware_type,
                     switch_inventory.switches,
                 )
-                .await
-                {
+                .await;
+                delete_rack_maintenance_access_token(ctx.services.credential_manager.as_ref(), id)
+                    .await;
+
+                let job = match submit_result {
                     Ok(job) => job,
-                    Err(error) if !nvos_update_requested(scope) => {
-                        let next = next_state_after_nvos(scope);
-                        tracing::info!(
-                            rack_id = %id,
-                            error = %error,
-                            next_state = %next,
-                            "Implicit switch system image update could not be started, advancing"
-                        );
-                        return Ok(StateHandlerOutcome::transition(RackState::Maintenance {
-                            maintenance_state: next,
-                        }));
-                    }
                     Err(error) => return Err(error),
                 };
 
@@ -1972,8 +2008,8 @@ mod tests {
 
     use super::{
         filter_inventory_by_scope, firmware_device_status, first_maintenance_state,
-        implicit_nvos_update_requested, next_state_after_configure, next_state_after_firmware,
-        next_state_after_nvos, profile_hardware_type_or_any,
+        next_state_after_configure, next_state_after_firmware, next_state_after_nvos,
+        profile_hardware_type_or_any,
     };
     use crate::rack as carbide_rack;
 
@@ -2181,16 +2217,14 @@ mod tests {
     fn first_maintenance_state_only_nvos() {
         let scope = MaintenanceScope {
             activities: vec![MaintenanceActivity::NvosUpdate {
-                firmware_object_id: Some("fw-nvos".into()),
+                config_json: r#"{"Id":"fw-nvos"}"#.into(),
             }],
             ..Default::default()
         };
         assert_eq!(
             first_maintenance_state(&scope),
             RackMaintenanceState::NVOSUpdate {
-                nvos_update: NvosUpdateState::Start {
-                    firmware_object_id: Some("fw-nvos".into()),
-                },
+                nvos_update: NvosUpdateState::Start,
             },
         );
     }
@@ -2226,48 +2260,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn implicit_nvos_update_requested_for_all_activities() {
-        let scope = MaintenanceScope::default();
-
-        assert!(implicit_nvos_update_requested(&scope));
-    }
-
-    #[test]
-    fn implicit_nvos_update_not_requested_for_firmware_only() {
-        let scope = MaintenanceScope {
-            activities: vec![MaintenanceActivity::FirmwareUpgrade {
-                firmware_version: None,
-                components: vec![],
-                force_update: false,
-            }],
-            ..Default::default()
-        };
-
-        assert!(!implicit_nvos_update_requested(&scope));
-    }
-
-    #[test]
-    fn implicit_nvos_update_not_requested_for_explicit_nvos() {
-        let scope = MaintenanceScope {
-            activities: vec![MaintenanceActivity::NvosUpdate {
-                firmware_object_id: None,
-            }],
-            ..Default::default()
-        };
-
-        assert!(!implicit_nvos_update_requested(&scope));
-    }
-
     // ── next_state_after_firmware ───────────────────────────────────────
 
     #[test]
-    fn after_firmware_all_activities_goes_to_nvos() {
+    fn after_firmware_all_activities_skips_nvos_without_explicit_json() {
         let scope = MaintenanceScope::default();
-        assert!(matches!(
+        assert_eq!(
             next_state_after_firmware(&scope),
-            RackMaintenanceState::NVOSUpdate { .. },
-        ));
+            next_state_after_nvos(&scope)
+        );
     }
 
     #[test]
@@ -2315,7 +2316,7 @@ mod tests {
                     force_update: false,
                 },
                 MaintenanceActivity::NvosUpdate {
-                    firmware_object_id: Some("fw-nvos".into()),
+                    config_json: r#"{"Id":"fw-nvos"}"#.into(),
                 },
             ],
             ..Default::default()
@@ -2323,9 +2324,7 @@ mod tests {
         assert_eq!(
             next_state_after_firmware(&scope),
             RackMaintenanceState::NVOSUpdate {
-                nvos_update: NvosUpdateState::Start {
-                    firmware_object_id: Some("fw-nvos".into()),
-                },
+                nvos_update: NvosUpdateState::Start,
             },
         );
     }
@@ -2348,7 +2347,7 @@ mod tests {
         let scope = MaintenanceScope {
             activities: vec![
                 MaintenanceActivity::NvosUpdate {
-                    firmware_object_id: None,
+                    config_json: r#"{"Id":"fw-nvos"}"#.into(),
                 },
                 MaintenanceActivity::PowerSequence,
             ],
