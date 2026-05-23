@@ -26,12 +26,12 @@ use librms::protos::rack_manager as rms;
 use mac_address::MacAddress;
 use model::power_shelf::{PowerShelf, PowerShelfControllerState, PowerShelfMaintenanceOperation};
 use sqlx::PgPool;
-
-use crate::state_controller::external_service_error::rack_manager_error;
-use crate::state_controller::power_shelf::context::PowerShelfStateHandlerContextObjects;
-use crate::state_controller::state_handler::{
+use state_controller::state_handler::{
     StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
+
+use crate::rack::rack_manager_error;
+use crate::state_controller::power_shelf::context::PowerShelfStateHandlerContextObjects;
 
 /// Default BMC HTTPS port used when populating `rms::BmcEndpoint` for power
 /// shelves. Mirrors the value used by `crate::rack::firmware_update`.

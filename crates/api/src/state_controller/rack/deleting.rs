@@ -18,8 +18,7 @@
 //! Handler for RackState::Deleting.
 
 use model::rack::RackState;
-
-use crate::state_controller::state_handler::{StateHandlerError, StateHandlerOutcome};
+use state_controller::state_handler::{StateHandlerError, StateHandlerOutcome};
 
 pub async fn handle_deleting() -> Result<StateHandlerOutcome<RackState>, StateHandlerError> {
     Ok(StateHandlerOutcome::wait("rack is being deleted".into()))

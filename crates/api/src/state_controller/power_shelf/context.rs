@@ -15,13 +15,26 @@
  * limitations under the License.
  */
 
-use crate::state_controller::common_services::CommonStateHandlerServices;
+use std::sync::Arc;
+
+use forge_secrets::credentials::CredentialManager;
+use librms::RmsApi;
+use sqlx::PgPool;
+use state_controller::state_handler::StateHandlerContextObjects;
+
 use crate::state_controller::power_shelf::metrics::PowerShelfMetrics;
-use crate::state_controller::state_handler::StateHandlerContextObjects;
 
 pub struct PowerShelfStateHandlerContextObjects {}
 
+#[derive(Clone)]
+pub struct PowerShelfStateHandlerServices {
+    pub db_pool: PgPool,
+    /// Rack Manager Service client
+    pub rms_client: Option<Arc<dyn RmsApi>>,
+    pub credential_manager: Arc<dyn CredentialManager>,
+}
+
 impl StateHandlerContextObjects for PowerShelfStateHandlerContextObjects {
     type ObjectMetrics = PowerShelfMetrics;
-    type Services = CommonStateHandlerServices;
+    type Services = PowerShelfStateHandlerServices;
 }

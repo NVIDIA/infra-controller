@@ -866,6 +866,107 @@ async fn create_admin_vpc(pool: sqlx::PgPool) -> Result<(), eyre::Report> {
 }
 
 #[crate::sqlx_test]
+async fn create_admin_vpc_updates_existing_admin_vpc_vni(
+    pool: sqlx::PgPool,
+) -> Result<(), eyre::Report> {
+    let env = create_test_env(pool).await;
+    let initial_vni = 10000;
+    let updated_vni = 10001;
+
+    // Create the initial admin VPC and verify the admin segments attach to it.
+    db_init::create_admin_vpc(&env.pool, Some(initial_vni)).await?;
+    let mut txn = env.pool.begin().await?;
+    let mut initial_admin_vpcs = db::vpc::find_by_vni(&mut txn, initial_vni as i32).await?;
+    assert_eq!(initial_admin_vpcs.len(), 1);
+    let initial_admin_vpc = initial_admin_vpcs.remove(0);
+    for admin_segment in db::network_segment::admin(&mut txn).await? {
+        assert_eq!(Some(initial_admin_vpc.id), admin_segment.config.vpc_id);
+    }
+    txn.commit().await?;
+
+    // Change the configured VNI and run startup reconciliation again.
+    db_init::create_admin_vpc(&env.pool, Some(updated_vni)).await?;
+
+    // Fetch from the DB to verify the existing admin VPC was updated in place.
+    let mut txn = env.pool.begin().await?;
+    let mut updated_admin_vpcs = db::vpc::find_by_vni(&mut txn, updated_vni as i32).await?;
+    assert_eq!(updated_admin_vpcs.len(), 1);
+    let updated_admin_vpc = updated_admin_vpcs.remove(0);
+    assert_eq!(updated_admin_vpc.id, initial_admin_vpc.id);
+    assert_eq!(updated_admin_vpc.vni, Some(updated_vni as i32));
+    assert_eq!(
+        updated_admin_vpc
+            .status
+            .as_ref()
+            .and_then(|status| status.vni),
+        Some(updated_vni as i32)
+    );
+    assert!(
+        db::vpc::find_by_vni(&mut txn, initial_vni as i32)
+            .await?
+            .is_empty()
+    );
+
+    // Verify reconciliation did not create a duplicate admin VPC row.
+    let admin_vpcs = db::vpc::find_by_name(&env.pool, "admin").await?;
+    assert_eq!(admin_vpcs.len(), 1);
+
+    // Verify every admin segment still points at the same reconciled VPC.
+    for admin_segment in db::network_segment::admin(&mut txn).await? {
+        assert_eq!(Some(updated_admin_vpc.id), admin_segment.config.vpc_id);
+    }
+
+    Ok(())
+}
+
+#[crate::sqlx_test]
+async fn create_admin_vpc_rejects_existing_tenant_vpc_vni(
+    pool: sqlx::PgPool,
+) -> Result<(), eyre::Report> {
+    let env = create_test_env(pool).await;
+    let vni = 60001;
+
+    // Create a tenant VPC with the same VNI before the admin VPC is seeded.
+    let tenant_vpc = env
+        .api
+        .create_vpc(
+            VpcCreationRequest::builder("tenant-admin-vni-conflict")
+                .vni(vni)
+                .metadata(rpc::forge::Metadata {
+                    name: "tenant-admin-vni-conflict".to_string(),
+                    ..Default::default()
+                })
+                .tonic_request(),
+        )
+        .await?
+        .into_inner();
+
+    // Verify the VNI actually persisted before running admin reconciliation.
+    let mut txn = env.pool.begin().await?;
+    let mut tenant_vpcs = db::vpc::find_by_vni(&mut txn, vni as i32).await?;
+    assert_eq!(tenant_vpcs.len(), 1);
+    assert_eq!(tenant_vpcs.remove(0).id, tenant_vpc.id.unwrap());
+    txn.commit().await?;
+
+    // Seeding the admin VPC must fail instead of adopting the tenant VPC.
+    let err = db_init::create_admin_vpc(&env.pool, Some(vni))
+        .await
+        .expect_err("admin VPC seeding should reject an already-used tenant VNI");
+    assert!(
+        err.to_string()
+            .contains("but no admin VPC is attached to admin network segments")
+    );
+
+    // Verify the admin segments remain unattached after the rejected seed.
+    let mut txn = env.pool.begin().await?;
+    for admin_segment in db::network_segment::admin(&mut txn).await? {
+        assert!(admin_segment.config.vpc_id.is_none());
+    }
+
+    Ok(())
+}
+
+#[crate::sqlx_test]
 async fn create_update_network_security_group_for_vpc(
     pool: sqlx::PgPool,
 ) -> Result<(), Box<dyn std::error::Error>> {
