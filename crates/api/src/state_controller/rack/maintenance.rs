@@ -1290,6 +1290,13 @@ pub async fn handle_maintenance(
                 let completed = all.iter().filter(|d| d.status == "completed").count();
                 let failed = all.iter().filter(|d| d.status == "failed").count();
                 let terminal = completed + failed;
+                if failed > 0 && requested_nvos_config_json(scope).is_some() {
+                    delete_rack_maintenance_access_token(
+                        ctx.services.credential_manager.as_ref(),
+                        id,
+                    )
+                    .await;
+                }
                 let mut txn = ctx.services.db_pool.begin().await?;
 
                 let build_status =
@@ -1388,13 +1395,6 @@ pub async fn handle_maintenance(
                 }
 
                 if failed > 0 {
-                    if requested_nvos_config_json(scope).is_some() {
-                        delete_rack_maintenance_access_token(
-                            ctx.services.credential_manager.as_ref(),
-                            id,
-                        )
-                        .await;
-                    }
                     let now = chrono::Utc::now();
                     job.status = Some("failed".into());
                     if job.completed_at.is_none() {
