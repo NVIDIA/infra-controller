@@ -25,6 +25,9 @@ use arc_swap::ArcSwap;
 use carbide_firmware::FirmwareDownloader;
 use carbide_ib_fabric::IbFabricMonitor;
 use carbide_ib_fabric::ib::{self, IBFabricManager};
+use carbide_ib_partition_controller::context::IBPartitionStateHandlerServices;
+use carbide_ib_partition_controller::handler::IBPartitionStateHandler;
+use carbide_ib_partition_controller::io::IBPartitionStateControllerIO;
 use carbide_ipmi::IPMITool;
 use carbide_network_segment_controller::context::NetworkSegmentStateHandlerServices;
 use carbide_network_segment_controller::handler::NetworkSegmentStateHandler;
@@ -89,8 +92,6 @@ use crate::state_controller::common_services::CommonStateHandlerServices;
 use crate::state_controller::controller::{Enqueuer, StateController};
 use crate::state_controller::dpa_interface::handler::DpaInterfaceStateHandler;
 use crate::state_controller::dpa_interface::io::DpaInterfaceStateControllerIO;
-use crate::state_controller::ib_partition::handler::IBPartitionStateHandler;
-use crate::state_controller::ib_partition::io::IBPartitionStateControllerIO;
 use crate::state_controller::machine::handler::MachineStateHandlerBuilder;
 use crate::state_controller::machine::io::MachineStateControllerIO;
 use crate::state_controller::power_shelf::context::PowerShelfStateHandlerServices;
@@ -1194,7 +1195,14 @@ pub async fn initialize_and_start_controllers<'a>(
         .database(db_pool.clone(), work_lock_manager_handle.clone())
         .meter("carbide_ib_partitions", meter.clone())
         .processor_id(state_controller_id.clone())
-        .services(handler_services.clone())
+        .services(
+            IBPartitionStateHandlerServices {
+                db_pool: handler_services.db_pool.clone(),
+                ib_fabric_manager: handler_services.ib_fabric_manager.clone(),
+                ib_pools: handler_services.ib_pools.clone(),
+            }
+            .into(),
+        )
         .iteration_config((&carbide_config.ib_partition_state_controller.controller).into())
         .state_handler(Arc::new(IBPartitionStateHandler::default()))
         .build_and_spawn(join_set, cancel_token.clone())

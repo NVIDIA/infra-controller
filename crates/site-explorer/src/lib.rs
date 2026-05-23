@@ -1456,7 +1456,6 @@ impl SiteExplorer {
         let underlay_segments =
             db::network_segment::list_segment_ids(&mut txn, Some(NetworkSegmentType::Underlay))
                 .await?;
-        let interfaces = db::machine_interface::find_all(&mut txn).await?;
         let explored_endpoints = db::explored_endpoints::find_all(txn.as_pgconn()).await?;
         let expected_switches = db::expected_switch::find_all(&mut txn).await?;
         let expected_machines = db::expected_machine::find_all(&mut txn).await?;
@@ -1482,7 +1481,12 @@ impl SiteExplorer {
             .map(|sku| (sku.id, sku.device_type))
             .collect();
 
-        // Record expected machine metrics
+        // Record expected machine metrics and reconcile any configured static-IP reservations
+        // (bmc_ip_address, host_nics[].fixed_ip) into machine_interfaces. Idempotent on the
+        // api-db side -- steady-state runs are no-ops at the row level. This is the canonical
+        // path that materializes static reservations for IPs that don't reach
+        // `discover_dhcp` (devices on the static-assignments segment, devices not yet powered
+        // on, etc.), and a belt-and-suspenders for the in-network case too.
         for expected_machine in &expected_machines {
             let device_type = expected_machine
                 .data
@@ -1494,6 +1498,68 @@ impl SiteExplorer {
                 expected_machine.data.sku_id.as_deref(),
                 device_type,
             );
+
+            if let Some(bmc_ip) = expected_machine.data.bmc_ip_address {
+                try_preallocate_one(
+                    &self.database_connection,
+                    expected_machine.bmc_mac_address,
+                    bmc_ip,
+                    InterfaceType::Bmc,
+                    "expected_machine BMC",
+                )
+                .await;
+            }
+            for nic in &expected_machine.data.host_nics {
+                let Some(ip_str) = nic.fixed_ip.as_deref() else {
+                    continue;
+                };
+                let ip: IpAddr = match ip_str.parse() {
+                    Ok(ip) => ip,
+                    Err(error) => {
+                        tracing::warn!(
+                            %error,
+                            nic_mac = %nic.mac_address,
+                            fixed_ip = %ip_str,
+                            "Site-explorer preallocation: invalid fixed_ip on expected_machine host NIC"
+                        );
+                        continue;
+                    }
+                };
+                try_preallocate_one(
+                    &self.database_connection,
+                    nic.mac_address,
+                    ip,
+                    InterfaceType::Data,
+                    "expected_machine host NIC",
+                )
+                .await;
+            }
+        }
+
+        for expected_switch in &expected_switches {
+            if let Some(bmc_ip) = expected_switch.bmc_ip_address {
+                try_preallocate_one(
+                    &self.database_connection,
+                    expected_switch.bmc_mac_address,
+                    bmc_ip,
+                    InterfaceType::Bmc,
+                    "expected_switch BMC",
+                )
+                .await;
+            }
+        }
+
+        for expected_power_shelf in &expected_power_shelves {
+            if let Some(bmc_ip) = expected_power_shelf.bmc_ip_address {
+                try_preallocate_one(
+                    &self.database_connection,
+                    expected_power_shelf.bmc_mac_address,
+                    bmc_ip,
+                    InterfaceType::Bmc,
+                    "expected_power_shelf BMC",
+                )
+                .await;
+            }
         }
 
         let expected_count = expected_machines.len();
@@ -1507,7 +1573,11 @@ impl SiteExplorer {
         // until the machine is ingested. At that point in time this filter will remove them
         // from the to-be-scanned list.
         // Get all underlay interfaces from the database, which includes interfaces
-        // which have come from both DHCP and/or static assignments.
+        // which have come from both DHCP and/or static assignments. Fetched here, after the
+        // preallocate loops above, so we see any freshly preallocated rows from this iteration.
+        let mut txn = self.txn_begin().await?;
+        let interfaces = db::machine_interface::find_all(&mut txn).await?;
+        txn.commit().await?;
         let underlay_interfaces: Vec<MachineInterfaceSnapshot> = interfaces
             .into_iter()
             .filter(|iface| {
@@ -2647,6 +2717,56 @@ impl SiteExplorer {
                 );
                 Ok(true)
             }
+        }
+    }
+}
+
+/// Reconcile a single static-IP reservation into `machine_interfaces` in its
+/// own transaction.
+///
+/// Called once per configured static IP during the `update_explored_endpoints`
+/// walk over `expected_machine` / `expected_switch` / `expected_power_shelf`.
+/// Idempotent on the api-db side -- steady-state runs are noops. Per-entry
+/// errors are logged as warnings, and doesn't stop the wider iteration.
+///
+/// This is `pub` so tests can drive a single (mac, ip, interface_type)
+/// preallocation directly without needing to create a full `SiteExplorer`.
+pub async fn try_preallocate_one(
+    pool: &PgPool,
+    mac: MacAddress,
+    ip: IpAddr,
+    interface_type: InterfaceType,
+    kind: &'static str,
+) {
+    let mut txn = match db::Transaction::begin(pool).await {
+        Ok(t) => t,
+        Err(error) => {
+            tracing::warn!(
+                %error, %mac, %ip, kind,
+                "Site-explorer preallocation: txn_begin failed"
+            );
+            return;
+        }
+    };
+    let result = match interface_type {
+        InterfaceType::Bmc => {
+            db::machine_interface::preallocate_bmc_machine_interface(txn.as_pgconn(), mac, ip).await
+        }
+        InterfaceType::Data => {
+            db::machine_interface::preallocate_machine_interface(txn.as_pgconn(), mac, ip).await
+        }
+    };
+    match result {
+        Ok(()) => {
+            if let Err(error) = txn.commit().await {
+                tracing::warn!(
+                    %error, %mac, %ip, kind,
+                    "Site-explorer preallocation: commit failed"
+                );
+            }
+        }
+        Err(error) => {
+            tracing::warn!(%error, %mac, %ip, kind, "Site-explorer preallocation skipped");
         }
     }
 }

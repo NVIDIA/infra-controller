@@ -2070,8 +2070,10 @@ async fn test_add_expected_machine_with_invalid_static_ip(pool: sqlx::PgPool) {
     );
 }
 
-/// Adding an expected machine with host_nics[].fixed_ip should
-/// pre-allocate a machine_interface with a static address.
+/// Adding an expected machine with `host_nics[].fixed_ip` should result in a static
+/// `machine_interface` for that NIC. The materialization is deferred: site-explorer's
+/// reconciliation pass (or the DHCP discover hook) is what creates the row. The test
+/// triggers that reconciliation after add to verify the end-to-end flow.
 #[crate::sqlx_test]
 async fn test_add_with_host_nic_fixed_ip_creates_interface(
     pool: sqlx::PgPool,
@@ -2100,7 +2102,17 @@ async fn test_add_with_host_nic_fixed_ip_creates_interface(
         }))
         .await?;
 
-    // Verify a machine_interface was created for the host NIC MAC.
+    // Add doesn't preallocate inline; mimic what site-explorer does on the next iteration --
+    // materialize the host NIC's static fixed_ip.
+    carbide_site_explorer::try_preallocate_one(
+        &env.pool,
+        nic_mac,
+        fixed_ip.parse().unwrap(),
+        model::machine_interface::InterfaceType::Data,
+        "expected_machine host NIC",
+    )
+    .await;
+
     let mut txn = env.pool.begin().await?;
     let interfaces = db::machine_interface::find_by_mac_address(&mut *txn, nic_mac).await?;
     assert_eq!(
@@ -2241,10 +2253,37 @@ async fn test_preallocate_machine_interface_rejects_conflicting_ip(
     Ok(())
 }
 
+/// Symmetric to `test_preallocate_machine_interface_rejects_conflicting_ip`: pre-allocating
+/// an IP that another MAC already owns must error rather than silently reassigning. Covers
+/// the `find_by_address`-branch in `preallocate_machine_interface_with_type`.
+#[crate::sqlx_test]
+async fn test_preallocate_machine_interface_rejects_ip_owned_by_different_mac(
+    pool: sqlx::PgPool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let env = create_test_env(pool).await;
+    let mac_a: MacAddress = "7A:7B:7C:7D:7E:35".parse().unwrap();
+    let mac_b: MacAddress = "7A:7B:7C:7D:7E:36".parse().unwrap();
+    let ip: std::net::IpAddr = "192.0.2.248".parse().unwrap();
+
+    let mut txn = env.db_txn().await;
+    db::machine_interface::preallocate_machine_interface(txn.as_mut(), mac_a, ip).await?;
+    txn.commit().await?;
+
+    let mut txn = env.db_txn().await;
+    let result =
+        db::machine_interface::preallocate_machine_interface(txn.as_mut(), mac_b, ip).await;
+    assert!(
+        matches!(result, Err(DatabaseError::InvalidArgument(_))),
+        "preallocating an IP owned by a different MAC should be rejected, got {result:?}"
+    );
+
+    Ok(())
+}
+
 /// After a `machine_interface` row gets deleted (e.g. force-delete
 /// --delete-interfaces), a subsequent `preallocate_machine_interface` call
 /// must successfully recreate it with the same static IP. This is the
-/// lazy-allocation flow that we rely on with DHCP discover(...).
+/// deferred-allocation flow that we rely on with DHCP discover(...).
 #[crate::sqlx_test]
 async fn test_preallocate_machine_interface_recreates_after_deletion(
     pool: sqlx::PgPool,
@@ -2278,12 +2317,60 @@ async fn test_preallocate_machine_interface_recreates_after_deletion(
     Ok(())
 }
 
-/// Recovery scenario for the BMC: operator force-deleted a managed machine
-/// and its interfaces, then the BMC re-DHCPs. With DHCP in the allocation
-/// path, discover(...) consults `find_by_bmc_mac_address`, re-preallocates,
-/// and the existing find_or_create path serves the static IP.
+/// When an interface row already exists for the right (MAC, IP) but with the wrong
+/// `interface_type`, a subsequent preallocate call should promote the type rather than
+/// erroring or creating a duplicate. Covers the case where a host NIC initially DHCPs in as
+/// `InterfaceType::Data`, then the operator's expected_machine config later marks the same
+/// MAC as the BMC (or vice versa), and the next reconciliation pass (or discover hook)
+/// reconciles.
 #[crate::sqlx_test]
-async fn test_dhcp_discover_recovers_bmc_after_interface_deletion(
+async fn test_preallocate_machine_interface_promotes_interface_type(
+    pool: sqlx::PgPool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let env = create_test_env(pool).await;
+    let mac: MacAddress = "7A:7B:7C:7D:7E:34".parse().unwrap();
+    let ip: std::net::IpAddr = "192.0.2.247".parse().unwrap();
+
+    // Initial preallocation lands as InterfaceType::Data.
+    let mut txn = env.db_txn().await;
+    db::machine_interface::preallocate_machine_interface(txn.as_mut(), mac, ip).await?;
+    let before = db::machine_interface::find_by_mac_address(txn.as_mut(), mac).await?;
+    assert_eq!(
+        before[0].interface_type,
+        model::machine_interface::InterfaceType::Data,
+        "Data-variant preallocate should start as InterfaceType::Data"
+    );
+    txn.commit().await?;
+
+    // Re-preallocate the same (MAC, IP) but as the BMC variant. Helper should promote
+    // the existing row's interface_type rather than erroring or creating a duplicate.
+    let mut txn = env.db_txn().await;
+    db::machine_interface::preallocate_bmc_machine_interface(txn.as_mut(), mac, ip).await?;
+    let after = db::machine_interface::find_by_mac_address(txn.as_mut(), mac).await?;
+    txn.commit().await?;
+
+    assert_eq!(after.len(), 1, "no duplicate row should have been created");
+    assert_eq!(
+        after[0].interface_type,
+        model::machine_interface::InterfaceType::Bmc,
+        "Bmc-variant preallocate should promote the existing row to InterfaceType::Bmc"
+    );
+    assert!(
+        after[0].addresses.contains(&ip),
+        "promoted row should still carry the same IP"
+    );
+
+    Ok(())
+}
+
+/// First DHCPDISCOVER for an `expected_machines` BMC: discover() consults
+/// `find_by_bmc_mac_address`, preallocates from `bmc_ip_address`, and the existing
+/// find_or_create path serves that static IP. Add-time doesn't preallocate; row materialization
+/// is deferred until this hook fires (for in-network MACs that DHCPDISCOVER) or until
+/// site-explorer's reconciliation pass runs (for everything, including external
+/// static-assignments IPs).
+#[crate::sqlx_test]
+async fn test_dhcp_discover_preallocates_bmc_ip_for_unknown_mac(
     pool: sqlx::PgPool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let env = create_test_env(pool).await;
@@ -2302,16 +2389,13 @@ async fn test_dhcp_discover_recovers_bmc_after_interface_deletion(
         }))
         .await?;
 
-    // Baseline -- pre-allocation happened during add.
+    // Add no longer preallocates -- the row should be absent until DHCPDISCOVER fires.
     let mut txn = env.db_txn().await;
     let before = db::machine_interface::find_by_mac_address(txn.as_mut(), bmc_mac).await?;
-    assert_eq!(before.len(), 1, "expected_machine add should pre-allocate");
-    assert!(before[0].addresses.contains(&bmc_ip.parse().unwrap()));
-    let interface_id = before[0].id;
-
-    // Simulate `force-delete --delete-interfaces`: the machine_interface row
-    // goes away while the expected_machines entry stays.
-    db::machine_interface::delete(&interface_id, txn.as_mut()).await?;
+    assert!(
+        before.is_empty(),
+        "add does not preallocate inline; the interface should only appear after discover()"
+    );
     txn.commit().await?;
 
     let bmc_mac_str = bmc_mac.to_string();
@@ -2329,26 +2413,30 @@ async fn test_dhcp_discover_recovers_bmc_after_interface_deletion(
 
     assert_eq!(
         response.address, bmc_ip,
-        "BMC re-DHCP should serve the configured bmc_ip_address, not a dynamic-pool allocation"
+        "BMC DHCP should serve the configured bmc_ip_address, not a dynamic-pool allocation"
     );
 
     let mut txn = env.db_txn().await;
     let after = db::machine_interface::find_by_mac_address(txn.as_mut(), bmc_mac).await?;
-    assert_eq!(after.len(), 1, "interface should be re-created");
+    assert_eq!(after.len(), 1, "interface should be created by discover()");
     assert!(
         after[0].addresses.contains(&bmc_ip.parse().unwrap()),
-        "re-created interface should carry the configured static IP"
+        "preallocated interface should carry the configured static IP"
+    );
+    assert_eq!(
+        after[0].interface_type,
+        model::machine_interface::InterfaceType::Bmc,
+        "BMC discover hook should mark the interface as InterfaceType::Bmc, not Data"
     );
 
     Ok(())
 }
 
-/// Same recovery scenario for a host NIC with `fixed_ip`. discover() passes
-/// the matched `ExpectedHostNic` through to `validate_existing_mac_and_create`,
-/// which honors `fixed_ip` via `AddressSelectionStrategy::StaticAddress`.
-/// This test pins that the DHCP discover allocation flow works.
+/// First DHCPDISCOVER for an `ExpectedHostNic.fixed_ip`. discover() passes the matched NIC
+/// through to `validate_existing_mac_and_create`, which honors `fixed_ip` via
+/// `AddressSelectionStrategy::StaticAddress`. Pins the deferred preallocation path for host NICs.
 #[crate::sqlx_test]
-async fn test_dhcp_discover_recovers_host_nic_after_interface_deletion(
+async fn test_dhcp_discover_preallocates_host_nic_fixed_ip_for_unknown_mac(
     pool: sqlx::PgPool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let env = create_test_env(pool).await;
@@ -2377,9 +2465,10 @@ async fn test_dhcp_discover_recovers_host_nic_after_interface_deletion(
 
     let mut txn = env.db_txn().await;
     let before = db::machine_interface::find_by_mac_address(txn.as_mut(), nic_mac).await?;
-    assert_eq!(before.len(), 1);
-    let interface_id = before[0].id;
-    db::machine_interface::delete(&interface_id, txn.as_mut()).await?;
+    assert!(
+        before.is_empty(),
+        "add does not preallocate inline; the interface should only appear after discover()"
+    );
     txn.commit().await?;
 
     let nic_mac_str = nic_mac.to_string();
@@ -2398,6 +2487,15 @@ async fn test_dhcp_discover_recovers_host_nic_after_interface_deletion(
     assert_eq!(
         response.address, fixed_ip,
         "host NIC re-DHCP should serve the configured fixed_ip"
+    );
+
+    let mut txn = env.db_txn().await;
+    let after = db::machine_interface::find_by_mac_address(txn.as_mut(), nic_mac).await?;
+    assert_eq!(after.len(), 1, "interface should be created by discover()");
+    assert_eq!(
+        after[0].interface_type,
+        model::machine_interface::InterfaceType::Data,
+        "host NIC discover hook should mark the interface as InterfaceType::Data, not Bmc"
     );
 
     Ok(())
@@ -2868,8 +2966,25 @@ async fn test_create_missing_from_preallocates_interfaces(
     .await?;
     txn.commit().await?;
 
-    // Both the BMC interface and the host NIC interface should now exist
-    // with their static IPs assigned.
+    // Mimic site-explorer's per-row materialization: one preallocate per static IP on the
+    // entity we just inserted.
+    carbide_site_explorer::try_preallocate_one(
+        &env.pool,
+        bmc_mac,
+        bmc_ip,
+        model::machine_interface::InterfaceType::Bmc,
+        "expected_machine BMC",
+    )
+    .await;
+    carbide_site_explorer::try_preallocate_one(
+        &env.pool,
+        nic_mac,
+        host_ip,
+        model::machine_interface::InterfaceType::Data,
+        "expected_machine host NIC",
+    )
+    .await;
+
     let mut txn = env.pool.begin().await?;
     for (mac, expected_ip) in [(bmc_mac, bmc_ip), (nic_mac, host_ip)] {
         let interfaces = db::machine_interface::find_by_mac_address(&mut *txn, mac).await?;
@@ -2885,7 +3000,7 @@ async fn test_create_missing_from_preallocates_interfaces(
         );
     }
 
-    // Re-running with the same input must be a no-op (i.e. idempotent).
+    // Re-running create_missing_from with the same input must be a no-op (idempotent).
     let mut txn = env.pool.begin().await?;
     crate::handlers::expected_machine::create_missing_from(
         &mut txn,

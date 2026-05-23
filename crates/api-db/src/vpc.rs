@@ -185,6 +185,21 @@ pub async fn find_by_vni(txn: &mut PgConnection, vni: i32) -> Result<Vec<Vpc>, D
         .map_err(|e| DatabaseError::query(query, e))
 }
 
+/// Updates both persisted VNI locations for a VPC.
+pub async fn set_vni(value: &Vpc, txn: &mut PgConnection, vni: i32) -> DatabaseResult<Vpc> {
+    // Keep the requested VNI column and the actual status VNI in sync.
+    let query = "UPDATE vpcs
+            SET vni=$1, status=jsonb_set(status, '{vni}', to_jsonb($1::integer), true), updated=NOW()
+            WHERE id=$2 AND deleted is null
+            RETURNING *";
+    sqlx::query_as(query)
+        .bind(vni)
+        .bind(value.id)
+        .fetch_one(txn)
+        .await
+        .map_err(|e| DatabaseError::query(query, e))
+}
+
 pub async fn find_by_name(txn: impl DbReader<'_>, name: &str) -> Result<Vec<Vpc>, DatabaseError> {
     find_by(txn, ObjectColumnFilter::One(NameColumn, &name)).await
 }

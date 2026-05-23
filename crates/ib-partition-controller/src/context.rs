@@ -15,12 +15,25 @@
  * limitations under the License.
  */
 
-use crate::state_controller::common_services::CommonStateHandlerServices;
-use crate::state_controller::state_handler::StateHandlerContextObjects;
+use std::sync::Arc;
+
+use carbide_ib_fabric::ib::IBFabricManager;
+use model::resource_pool::common::IbPools;
+use sqlx::PgPool;
+use state_controller::state_handler::StateHandlerContextObjects;
 
 pub struct IBPartitionStateHandlerContextObjects {}
 
+#[derive(Clone)]
+pub struct IBPartitionStateHandlerServices {
+    pub db_pool: PgPool,
+    /// API for interaction with Forge IBFabricManager
+    pub ib_fabric_manager: Arc<dyn IBFabricManager>,
+    /// Resource pools for ib pkey allocation/release.
+    pub ib_pools: IbPools,
+}
+
 impl StateHandlerContextObjects for IBPartitionStateHandlerContextObjects {
-    type Services = CommonStateHandlerServices;
+    type Services = IBPartitionStateHandlerServices;
     type ObjectMetrics = ();
 }

@@ -965,8 +965,17 @@ async fn test_add_with_bmc_ip_creates_static_interface(
         }))
         .await?;
 
-    // Verify a machine_interface was effectiveely pre-created
-    // for the BMC MAC.
+    // Add doesn't preallocate inline; mimic what site-explorer does on the next iteration --
+    // materialize the static BMC interface for this entity.
+    carbide_site_explorer::try_preallocate_one(
+        &env.pool,
+        bmc_mac,
+        bmc_ip.parse().unwrap(),
+        model::machine_interface::InterfaceType::Bmc,
+        "expected_power_shelf BMC",
+    )
+    .await;
+
     let mut txn = env.pool.begin().await?;
     let interfaces = db::machine_interface::find_by_mac_address(&mut *txn, bmc_mac).await?;
     assert_eq!(
@@ -1030,54 +1039,6 @@ async fn test_add_without_bmc_ip_creates_no_interface(
     Ok(())
 }
 
-/// Adding an expected power shelf with bmc_ip_address should fail if
-/// a machine_interface already exists for that MAC (e.g., the device
-/// already DHCP'd).
-#[crate::sqlx_test()]
-async fn test_add_with_bmc_ip_rejects_if_interface_exists(
-    pool: sqlx::PgPool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let env = create_test_env(pool).await;
-    let bmc_mac: MacAddress = "6A:6B:6C:6D:6E:80".parse().unwrap();
-    let relay: std::net::IpAddr = common::api_fixtures::FIXTURE_DHCP_RELAY_ADDRESS
-        .parse()
-        .unwrap();
-
-    // Create an interface via DHCP (simulating the device already being on the network).
-    let mut txn = env.pool.begin().await?;
-    db::machine_interface::validate_existing_mac_and_create(
-        &mut txn,
-        bmc_mac,
-        std::slice::from_ref(&relay),
-        None,
-    )
-    .await?;
-    txn.commit().await?;
-
-    // Now try to add an expected power shelf with the same MAC -- should fail.
-    let result = env
-        .api
-        .add_expected_power_shelf(tonic::Request::new(rpc::forge::ExpectedPowerShelf {
-            expected_power_shelf_id: None,
-            bmc_mac_address: bmc_mac.to_string(),
-            bmc_username: "ADMIN".into(),
-            bmc_password: "PASS".into(),
-            shelf_serial_number: "PS-COLLISION-001".into(),
-            bmc_ip_address: "192.0.1.190".into(),
-            metadata: Some(rpc::forge::Metadata::default()),
-            rack_id: None,
-            bmc_retain_credentials: None,
-        }))
-        .await;
-
-    assert!(
-        result.is_err(),
-        "add should fail if interface already exists for this MAC"
-    );
-
-    Ok(())
-}
-
 /// Adding an expected power shelf with an external bmc_ip_address (not
 /// in any managed prefix) should create the interface on the
 /// static-assignments anchor segment.
@@ -1103,6 +1064,17 @@ async fn test_add_with_external_bmc_ip_uses_static_assignments(
         }))
         .await?;
 
+    // Add doesn't preallocate inline; mimic what site-explorer does on the next iteration --
+    // materialize the static BMC interface for this entity.
+    carbide_site_explorer::try_preallocate_one(
+        &env.pool,
+        bmc_mac,
+        external_ip.parse().unwrap(),
+        model::machine_interface::InterfaceType::Bmc,
+        "expected_power_shelf BMC",
+    )
+    .await;
+
     // Verify interface was created on the static-assignments segment
     let mut txn = env.pool.begin().await?;
     let interfaces = db::machine_interface::find_by_mac_address(&mut *txn, bmc_mac).await?;
@@ -1115,54 +1087,6 @@ async fn test_add_with_external_bmc_ip_uses_static_assignments(
     assert_eq!(
         iface.segment_id, static_seg.id,
         "external IP should be on the static-assignments segment"
-    );
-
-    Ok(())
-}
-
-/// Adding an expected power shelf with a bmc_ip_address that is already
-/// allocated to another interface should fail.
-#[crate::sqlx_test()]
-async fn test_add_with_bmc_ip_rejects_if_ip_already_allocated(
-    pool: sqlx::PgPool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let env = create_test_env(pool).await;
-    let relay: std::net::IpAddr = common::api_fixtures::FIXTURE_DHCP_RELAY_ADDRESS
-        .parse()
-        .unwrap();
-
-    // Create an interface via DHCP -- it gets an IP from the admin pool.
-    let mut txn = env.pool.begin().await?;
-    let existing = db::machine_interface::validate_existing_mac_and_create(
-        &mut txn,
-        "6A:6B:6C:6D:6E:87".parse().unwrap(),
-        std::slice::from_ref(&relay),
-        None,
-    )
-    .await?;
-    let taken_ip = existing.addresses[0];
-    txn.commit().await?;
-
-    // Try to add an expected power shelf with a DIFFERENT MAC but the
-    // SAME IP -- should fail.
-    let result = env
-        .api
-        .add_expected_power_shelf(tonic::Request::new(rpc::forge::ExpectedPowerShelf {
-            expected_power_shelf_id: None,
-            bmc_mac_address: "6A:6B:6C:6D:6E:88".to_string(),
-            bmc_username: "ADMIN".into(),
-            bmc_password: "PASS".into(),
-            shelf_serial_number: "PS-IP-COLLISION".into(),
-            bmc_ip_address: taken_ip.to_string(),
-            metadata: Some(rpc::forge::Metadata::default()),
-            rack_id: None,
-            bmc_retain_credentials: None,
-        }))
-        .await;
-
-    assert!(
-        result.is_err(),
-        "add should fail if the IP is already allocated to another interface"
     );
 
     Ok(())
@@ -1223,7 +1147,8 @@ async fn test_update_with_different_bmc_ip_leaves_interface_alone(
     let bmc_mac: MacAddress = "6A:6B:6C:6D:6E:82".parse().unwrap();
     let original_ip = "192.0.1.192";
 
-    // Add expected power shelf with bmc_ip_address.
+    // Add expected power shelf with bmc_ip_address, then run the sweep so the static
+    // machine_interface row exists (the sweep is what materializes it).
     env.api
         .add_expected_power_shelf(tonic::Request::new(rpc::forge::ExpectedPowerShelf {
             expected_power_shelf_id: None,
@@ -1237,6 +1162,14 @@ async fn test_update_with_different_bmc_ip_leaves_interface_alone(
             bmc_retain_credentials: None,
         }))
         .await?;
+    carbide_site_explorer::try_preallocate_one(
+        &env.pool,
+        bmc_mac,
+        original_ip.parse().unwrap(),
+        model::machine_interface::InterfaceType::Bmc,
+        "expected_power_shelf BMC",
+    )
+    .await;
 
     // Update with a DIFFERENT bmc_ip_address -- should succeed but
     // not touch the interface (it already has an address).
@@ -1417,6 +1350,14 @@ async fn test_update_without_bmc_ip_does_not_touch_interface(
             bmc_retain_credentials: None,
         }))
         .await?;
+    carbide_site_explorer::try_preallocate_one(
+        &env.pool,
+        bmc_mac,
+        bmc_ip.parse().unwrap(),
+        model::machine_interface::InterfaceType::Bmc,
+        "expected_power_shelf BMC",
+    )
+    .await;
 
     // Update without bmc_ip_address (just changing credentials).
     env.api

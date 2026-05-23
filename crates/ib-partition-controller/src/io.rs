@@ -24,10 +24,10 @@ use model::StateSla;
 use model::controller_outcome::PersistentStateHandlerOutcome;
 use model::ib_partition::{self, IBPartition, IBPartitionControllerState};
 use sqlx::PgConnection;
+use state_controller::io::StateControllerIO;
+use state_controller::metrics::NoopMetricsEmitter;
 
-use crate::state_controller::ib_partition::context::IBPartitionStateHandlerContextObjects;
-use crate::state_controller::io::StateControllerIO;
-use crate::state_controller::metrics::NoopMetricsEmitter;
+use crate::context::IBPartitionStateHandlerContextObjects;
 
 /// State Controller IO implementation for Infiniband Partitions
 #[derive(Default, Debug)]

@@ -44,6 +44,7 @@ carbide-firmware = { path = "../firmware" }
 carbide-health-report = { path = "../health-report" }
 carbide-health-metrics = { path = "../health-metrics" }
 carbide-ib-fabric = { path = "../ib-fabric" }
+carbide-ib-partition-controller = { path = "../ib-partition-controller" }
 carbide-ipxe-renderer = { path = "../ipxe-renderer" }
 carbide-ipmi = { path = "../ipmi" }
 carbide-redfish = { path = "../redfish" }

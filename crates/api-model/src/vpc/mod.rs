@@ -14,9 +14,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+pub mod capability;
+
 use std::collections::HashMap;
 use std::net::IpAddr;
 
+pub use capability::{
+    ALL_VPC_VIRTUALIZATION_TYPES, DataPlaneKind, FabricInterfaceType, VpcCapabilities,
+    VpcCapabilityError, VpcVirtualizationTypeCapabilities,
+};
 use carbide_network::virtualization::VpcVirtualizationType;
 use carbide_uuid::machine::MachineId;
 use carbide_uuid::network_security_group::NetworkSecurityGroupId;

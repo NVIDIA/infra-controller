@@ -17,6 +17,12 @@
 
 //! State Controller implementation for IB Partitions.
 
+use state_controller::state_handler::{ExternalServiceError, StateHandlerError};
+
 pub mod context;
 pub mod handler;
 pub mod io;
+
+pub(crate) fn ufm_error(operation: &'static str, error: eyre::Report) -> StateHandlerError {
+    ExternalServiceError::new("ufm", operation, error.to_string(), "ib_fabric_error").into()
+}
