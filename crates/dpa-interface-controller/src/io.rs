@@ -24,10 +24,10 @@ use model::StateSla;
 use model::controller_outcome::PersistentStateHandlerOutcome;
 use model::dpa_interface::{self, DpaInterface, DpaInterfaceControllerState};
 use sqlx::PgConnection;
+use state_controller::io::StateControllerIO;
 
-use crate::state_controller::dpa_interface::context::DpaInterfaceStateHandlerContextObjects;
-use crate::state_controller::dpa_interface::metrics::DpaInterfaceMetricsEmitter;
-use crate::state_controller::io::StateControllerIO;
+use crate::context::DpaInterfaceStateHandlerContextObjects;
+use crate::metrics::DpaInterfaceMetricsEmitter;
 
 /// State Controller IO implementation for dpa interfaces
 #[derive(Default, Debug)]

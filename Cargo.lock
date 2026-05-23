@@ -1172,6 +1172,7 @@ dependencies = [
  "carbide-api-db",
  "carbide-api-model",
  "carbide-authn",
+ "carbide-dpa-interface-controller",
  "carbide-dpf",
  "carbide-firmware",
  "carbide-health-metrics",
@@ -1636,6 +1637,30 @@ dependencies = [
  "trust-dns-resolver",
  "trust-dns-server",
  "uuid",
+]
+
+[[package]]
+name = "carbide-dpa-interface-controller"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "carbide-api-db",
+ "carbide-api-model",
+ "carbide-utils",
+ "carbide-uuid",
+ "chrono",
+ "config-version",
+ "duration-str",
+ "eyre",
+ "mac_address",
+ "mqttea",
+ "opentelemetry",
+ "prost",
+ "serde",
+ "sqlx",
+ "state-controller",
+ "tonic-prost-build",
+ "tracing",
 ]
 
 [[package]]
@@ -2221,7 +2246,7 @@ dependencies = [
 name = "carbide-mockdpa"
 version = "0.0.1"
 dependencies = [
- "carbide-rpc",
+ "carbide-dpa-interface-controller",
  "chrono",
  "clap",
  "mqttea",

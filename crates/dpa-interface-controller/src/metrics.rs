@@ -17,10 +17,9 @@
 
 //! Defines custom metrics that are collected and emitted by the Machine State Controller
 
-use ::carbide_utils::metrics::SharedMetricsHolder;
+use carbide_utils::metrics::SharedMetricsHolder;
 use opentelemetry::metrics::Meter;
-
-use crate::state_controller::metrics::MetricsEmitter;
+use state_controller::metrics::MetricsEmitter;
 
 #[derive(Debug, Default, Clone)]
 pub struct DpaInterfaceMetrics {}

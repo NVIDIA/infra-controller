@@ -27,23 +27,18 @@ use model::dpa_interface::DpaLockMode::{Locked, Unlocked};
 use model::dpa_interface::{DpaInterface, DpaInterfaceControllerState};
 use mqttea::MqtteaClient;
 use sqlx::PgTransaction;
-
-use crate::dpa::handler::DpaInfo;
-use crate::state_controller::common_services::CommonStateHandlerServices;
-use crate::state_controller::dpa_interface::context::DpaInterfaceStateHandlerContextObjects;
-use crate::state_controller::state_handler::{
+use state_controller::state_handler::{
     StateHandler, StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
+
+use crate::DpaInfo;
+use crate::context::{DpaInterfaceStateHandlerContextObjects, DpaInterfaceStateHandlerServices};
 
 /// The actual Dpa Interface State handler
 #[derive(Debug, Clone)]
 pub struct DpaInterfaceStateHandler {}
 
 impl DpaInterfaceStateHandler {
-    pub fn new() -> Self {
-        Self {}
-    }
-
     fn record_metrics(
         &self,
         _state: &mut DpaInterface,
@@ -71,8 +66,7 @@ impl StateHandler for DpaInterfaceStateHandler {
 
         let hb_interval = ctx
             .services
-            .site_config
-            .get_hb_interval()
+            .hb_interval
             .unwrap_or_else(|| Duration::minutes(2));
 
         let dpa_info = ctx.services.dpa_info.clone().unwrap();
@@ -318,7 +312,7 @@ impl StateHandler for DpaInterfaceStateHandler {
 // If so, call send_set_vni_command to send the heart beat or set vni
 async fn do_heartbeat<'a>(
     state: &mut DpaInterface,
-    services: &mut CommonStateHandlerServices,
+    services: &mut DpaInterfaceStateHandlerServices,
     client: Arc<MqtteaClient>,
     dpa_info: &Arc<DpaInfo>,
     hb_interval: TimeDelta,
@@ -367,7 +361,7 @@ async fn do_heartbeat<'a>(
 // sent is 0.
 async fn send_set_vni_command<'a>(
     state: &mut DpaInterface,
-    services: &mut CommonStateHandlerServices,
+    services: &mut DpaInterfaceStateHandlerServices,
     client: Arc<MqtteaClient>,
     dpa_info: &Arc<DpaInfo>,
     needs_vni: bool,
@@ -395,7 +389,7 @@ async fn send_set_vni_command<'a>(
     };
 
     // Send a heartbeat command, indicated by the revision string being "NIL".
-    match crate::dpa::handler::send_dpa_command(
+    match crate::send_dpa_command(
         client,
         dpa_info,
         state.mac_address.to_string(),

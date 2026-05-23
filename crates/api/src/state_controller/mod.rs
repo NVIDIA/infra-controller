@@ -16,7 +16,6 @@
  */
 
 pub mod common_services;
-pub mod dpa_interface;
 pub(crate) mod external_service_error;
 pub mod machine;
 pub mod power_shelf;

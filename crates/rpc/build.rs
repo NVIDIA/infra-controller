@@ -868,7 +868,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &[
                 "proto/common.proto",
                 "proto/forge.proto",
-                "proto/dpa_rpc.proto",
                 "proto/machine_discovery.proto",
                 "proto/mlx_device.proto",
                 "proto/nmx_c.proto",

@@ -15,9 +15,10 @@
  * limitations under the License.
  */
 
-//! State Controller implementation for Dpa Interface
+#[allow(non_snake_case, unknown_lints, clippy::all)]
+#[rustfmt::skip]
+mod dpa_rpc {
+    include!(concat!(env!("OUT_DIR"), "/dpa_rpc.rs"));
+}
 
-pub mod context;
-pub mod handler;
-pub mod io;
-pub mod metrics;
+pub use dpa_rpc::*;

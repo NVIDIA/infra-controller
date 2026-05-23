@@ -15,13 +15,28 @@
  * limitations under the License.
  */
 
-use crate::state_controller::common_services::CommonStateHandlerServices;
-use crate::state_controller::dpa_interface::metrics::DpaInterfaceMetrics;
-use crate::state_controller::state_handler::StateHandlerContextObjects;
+use std::sync::Arc;
+
+use db::db_read::PgPoolReader;
+use sqlx::PgPool;
+use state_controller::state_handler::StateHandlerContextObjects;
+
+use crate::DpaInfo;
+use crate::metrics::DpaInterfaceMetrics;
 
 pub struct DpaInterfaceStateHandlerContextObjects {}
 
+#[derive(Clone)]
+pub struct DpaInterfaceStateHandlerServices {
+    pub db_pool: PgPool,
+    /// Postgres database pool that can be passed directly to read-only db functions without a
+    /// transaction
+    pub db_reader: PgPoolReader,
+    pub hb_interval: Option<chrono::Duration>,
+    pub dpa_info: Option<Arc<DpaInfo>>,
+}
+
 impl StateHandlerContextObjects for DpaInterfaceStateHandlerContextObjects {
-    type Services = CommonStateHandlerServices;
+    type Services = DpaInterfaceStateHandlerServices;
     type ObjectMetrics = DpaInterfaceMetrics;
 }

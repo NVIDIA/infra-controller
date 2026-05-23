@@ -36,6 +36,7 @@ bmc-vendor = { path = "../bmc-vendor" }
 bmc-explorer = { path = "../bmc-explorer" }
 bms-dsx-exchange = { path = "../bms-dsx-exchange" }
 config-version = { path = "../config-version", features = ["sqlx"] }
+carbide-dpa-interface-controller = { path = "../dpa-interface-controller" }
 carbide-host-support = { path = "../host-support", default-features = false }
 carbide-network = { path = "../network", features = ["sqlx"] }
 carbide-secrets = { path = "../secrets" }
