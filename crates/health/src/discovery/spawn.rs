@@ -316,7 +316,7 @@ pub(super) async fn spawn_collectors_for_endpoint(
         );
         match Collector::start::<NvueRestCollector>(
             endpoint_arc,
-            credentials.clone(),
+            credentials,
             NvueRestCollectorConfig {
                 rest_config: rest_cfg.clone(),
                 data_sink: data_sink.clone(),

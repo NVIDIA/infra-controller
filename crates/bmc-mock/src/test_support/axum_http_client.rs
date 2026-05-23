@@ -207,7 +207,6 @@ impl HttpClient for AxumRouterHttpClient {
         &self,
         _: Url,
         _: &B,
-        _: &BmcCredentials,
         _: &HeaderMap,
     ) -> Result<SessionCreateResponse<T>, Self::Error>
     where

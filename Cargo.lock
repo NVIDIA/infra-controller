@@ -7206,15 +7206,16 @@ dependencies = [
 
 [[package]]
 name = "nv-redfish"
-version = "0.9.1"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7416317c94c82f40c5f1220306315533e7fc013307074ec6fc541eaa7438947"
+checksum = "06c0a56718c0605b550a9957d90bcf824edd52093f09e32e6c6b5087dd86de7f"
 dependencies = [
  "futures-core",
  "futures-util",
  "nv-redfish-bmc-http",
  "nv-redfish-core",
  "nv-redfish-csdl-compiler",
+ "nv-redfish-schema",
  "serde",
  "serde_json",
  "tagged-types",
@@ -7222,14 +7223,16 @@ dependencies = [
 
 [[package]]
 name = "nv-redfish-bmc-http"
-version = "0.9.1"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "44972bb1c193d8e64d739ba9093ce412a290bb97f0fb7d3703cc7f31dd9dee1e"
+checksum = "d6dd788740d6111263b57d44dd3b4f59f5201f81e5383cd6784a977cdefe2196"
 dependencies = [
  "futures-core",
  "futures-util",
  "http",
  "nv-redfish-core",
+ "nv-redfish-csdl-compiler",
+ "nv-redfish-schema",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -7243,9 +7246,9 @@ dependencies = [
 
 [[package]]
 name = "nv-redfish-core"
-version = "0.9.1"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e27c16faa17ec39d673c905a70304e2ccfec4c96a3bf3d9414c3e014fd0b39ff"
+checksum = "f897d4e715aac6857673a344d05aea380d8d87cbf5eba876c9768664ecc8cba1"
 dependencies = [
  "futures-core",
  "futures-io",
@@ -7258,9 +7261,9 @@ dependencies = [
 
 [[package]]
 name = "nv-redfish-csdl-compiler"
-version = "0.9.1"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91702acc8ad0ca21d4b05d13f559fe5c097717e0f3cbfe8076ba339522c4ae1b"
+checksum = "264eb8b256664d1d2b953d2bfc26648f8c3986d0540dc4eaa2e666f2f16de567"
 dependencies = [
  "clap",
  "clap_derive",
@@ -7272,6 +7275,15 @@ dependencies = [
  "syn 2.0.117",
  "tagged-types",
  "toml 0.9.12+spec-1.1.0",
+]
+
+[[package]]
+name = "nv-redfish-schema"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f7049c7e09b59afe558b46d6c35323a3b29e9cc32daeede4eb5a7a2ca47ff4a3"
+dependencies = [
+ "glob",
 ]
 
 [[package]]
