@@ -26,6 +26,7 @@ use carbide_rack::firmware_update::{
 };
 use carbide_rack::rack_manager_error;
 use carbide_rack::rms_client::SwitchSystemImageRmsClient;
+use carbide_rack_controller::config::RmsConfig;
 use carbide_rack_controller::context::RackStateHandlerContextObjects;
 use carbide_rack_controller::fabric_manager::{
     get_scale_up_fabric_services_status, persist_fabric_manager_statuses, persist_primary_switch,
@@ -448,6 +449,31 @@ fn build_switch_device_info_request(
         }),
         ..Default::default()
     }
+}
+
+#[cfg(not(test))]
+const NMX_CONFIGURE_RMS_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+#[cfg(not(test))]
+fn build_nmx_configure_rms_client(rms_config: &RmsConfig) -> Option<librms::RackManagerApi> {
+    let url = rms_config
+        .api_url
+        .as_deref()
+        .filter(|url| !url.is_empty())?;
+    let mut rms_client_config = librms::client_config::RmsClientConfig::new(
+        rms_config.root_ca_path.clone(),
+        rms_config.client_cert.clone(),
+        rms_config.client_key.clone(),
+        rms_config.enforce_tls,
+    );
+    rms_client_config.connect_timeout = Some(NMX_CONFIGURE_RMS_CONNECT_TIMEOUT);
+    let rms_api_config = librms::client::RmsApiConfig::new(url, &rms_client_config);
+    Some(librms::RackManagerApi::new(&rms_api_config))
+}
+
+#[cfg(test)]
+fn build_nmx_configure_rms_client(_rms_config: &RmsConfig) -> Option<librms::RackManagerApi> {
+    None
 }
 
 fn rms_component_filters_from_components(
@@ -1732,10 +1758,23 @@ pub async fn handle_maintenance(
                 }))
             }
             ConfigureNmxClusterState::DisableScaleUpFabricState => {
-                let Some(rms_client) = ctx.services.rms_client.as_ref() else {
-                    return transition_to_rack_error(id, state, "RMS client not configured", ctx)
-                        .await;
-                };
+                let nmx_configure_rms_client =
+                    build_nmx_configure_rms_client(&ctx.services.site_config.rms);
+                let rms_client: &dyn librms::RmsApi =
+                    if let Some(rms_client) = nmx_configure_rms_client.as_ref() {
+                        rms_client
+                    } else {
+                        let Some(rms_client) = ctx.services.rms_client.as_ref() else {
+                            return transition_to_rack_error(
+                                id,
+                                state,
+                                "RMS client not configured",
+                                ctx,
+                            )
+                            .await;
+                        };
+                        rms_client.as_ref()
+                    };
                 let switch_inventory = load_rack_switch_firmware_inventory(
                     &ctx.services.db_pool,
                     ctx.services.credential_manager.as_ref(),
@@ -1850,10 +1889,23 @@ pub async fn handle_maintenance(
                 }))
             }
             ConfigureNmxClusterState::ConfigureScaleUpFabricManager => {
-                let Some(rms_client) = ctx.services.rms_client.as_ref() else {
-                    return transition_to_rack_error(id, state, "RMS client not configured", ctx)
-                        .await;
-                };
+                let nmx_configure_rms_client =
+                    build_nmx_configure_rms_client(&ctx.services.site_config.rms);
+                let rms_client: &dyn librms::RmsApi =
+                    if let Some(rms_client) = nmx_configure_rms_client.as_ref() {
+                        rms_client
+                    } else {
+                        let Some(rms_client) = ctx.services.rms_client.as_ref() else {
+                            return transition_to_rack_error(
+                                id,
+                                state,
+                                "RMS client not configured",
+                                ctx,
+                            )
+                            .await;
+                        };
+                        rms_client.as_ref()
+                    };
                 let switch_inventory = load_rack_switch_firmware_inventory(
                     &ctx.services.db_pool,
                     ctx.services.credential_manager.as_ref(),
@@ -2021,10 +2073,6 @@ pub async fn handle_maintenance(
                     },
                 }))
             }
-            ConfigureNmxClusterState::DisableScaleUpFabricState
-            | ConfigureNmxClusterState::ConfigureScaleUpFabricManager => Ok(
-                StateHandlerOutcome::wait("ConfigureNmxCluster sub-state is not wired yet".into()),
-            ),
             ConfigureNmxClusterState::WaitForFabricStatus => {
                 let switch_inventory = load_rack_switch_firmware_inventory(
                     &ctx.services.db_pool,

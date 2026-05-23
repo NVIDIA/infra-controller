@@ -2199,7 +2199,7 @@ async fn test_configure_nmx_cluster_start_advances_to_disable_scale_up_fabric_st
     let mut rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
 
     let handler_instance = RackStateHandler::default();
-    let mut services = env.state_handler_services();
+    let mut services = env.rack_state_handler_services();
     let mut metrics = RackMetrics::default();
     let mut db_writes = DbWriteBatch::default();
     let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
@@ -2294,7 +2294,7 @@ async fn test_configure_nmx_cluster_disable_scale_up_fabric_state_runs_on_all_sw
     let mut rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
 
     let handler_instance = RackStateHandler::default();
-    let mut services = env.state_handler_services();
+    let mut services = env.rack_state_handler_services();
     let mut metrics = RackMetrics::default();
     let mut db_writes = DbWriteBatch::default();
     let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
@@ -2436,7 +2436,7 @@ async fn test_configure_nmx_cluster_configure_selects_persists_and_configures_pr
     let mut rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
 
     let handler_instance = RackStateHandler::default();
-    let mut services = env.state_handler_services();
+    let mut services = env.rack_state_handler_services();
     let mut metrics = RackMetrics::default();
     let mut db_writes = DbWriteBatch::default();
     let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
@@ -2599,7 +2599,7 @@ async fn test_configure_nmx_cluster_runs_start_disable_configure_to_wait_for_fab
     let mut rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
 
     let handler_instance = RackStateHandler::default();
-    let mut services = env.state_handler_services();
+    let mut services = env.rack_state_handler_services();
     let mut metrics = RackMetrics::default();
     let mut db_writes = DbWriteBatch::default();
     let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
@@ -2819,7 +2819,7 @@ async fn test_configure_nmx_cluster_disable_scale_up_fabric_state_failure_stops_
     let mut rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
 
     let handler_instance = RackStateHandler::default();
-    let mut services = env.state_handler_services();
+    let mut services = env.rack_state_handler_services();
     let mut metrics = RackMetrics::default();
     let mut db_writes = DbWriteBatch::default();
     let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
@@ -2924,7 +2924,7 @@ async fn test_configure_nmx_cluster_configure_selection_failure_stops_before_con
     let mut rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
 
     let handler_instance = RackStateHandler::default();
-    let mut services = env.state_handler_services();
+    let mut services = env.rack_state_handler_services();
     let mut metrics = RackMetrics::default();
     let mut db_writes = DbWriteBatch::default();
     let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
@@ -3048,7 +3048,7 @@ async fn test_configure_nmx_cluster_configure_failure_advances_to_wait_for_fabri
     let mut rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
 
     let handler_instance = RackStateHandler::default();
-    let mut services = env.state_handler_services();
+    let mut services = env.rack_state_handler_services();
     let mut metrics = RackMetrics::default();
     let mut db_writes = DbWriteBatch::default();
     let mut ctx = StateHandlerContext::<RackStateHandlerContextObjects> {
