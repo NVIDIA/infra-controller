@@ -26,6 +26,7 @@ use mac_address::MacAddress;
 use rpc::forge::MachineSearchConfig;
 use rpc::forge_api_client::ForgeApiClient;
 use rpc::forge_tls_client::{ApiConfig, ForgeClientConfig};
+use tokio::sync::Mutex as AsyncMutex;
 use url::Url;
 
 use crate::HealthError;
@@ -37,6 +38,7 @@ use crate::endpoint::{
 #[derive(Clone)]
 pub struct ApiClientWrapper {
     client: ForgeApiClient,
+    credential_provider: Arc<dyn CredentialProvider>,
 }
 
 #[derive(Clone)]
@@ -81,7 +83,14 @@ impl ApiClientWrapper {
 
         let client = ForgeApiClient::new(&api_config);
 
-        Self { client }
+        let credential_provider: Arc<dyn CredentialProvider> = Arc::new(ApiCredentialProvider {
+            client: client.clone(),
+        });
+
+        Self {
+            client,
+            credential_provider,
+        }
     }
 
     pub async fn fetch_bmc_hosts(&self) -> Result<Vec<Arc<BmcEndpoint>>, HealthError> {
@@ -124,7 +133,7 @@ impl ApiClientWrapper {
             );
 
             for machine in machines.machines {
-                match self.extract_machine_endpoint(&machine).await {
+                match self.extract_machine_endpoint(&machine) {
                     Ok(endpoint) => endpoints.push(Arc::new(endpoint)),
                     Err(error) => tracing::warn!(
                         ?machine,
@@ -149,7 +158,7 @@ impl ApiClientWrapper {
                 let mut endpoints = Vec::new();
 
                 for switch in response.switches {
-                    match self.extract_switch_endpoint(&switch).await {
+                    match self.extract_switch_endpoint(&switch) {
                         Ok(endpoint) => endpoints.push(Arc::new(endpoint)),
                         Err(error) => tracing::warn!(
                             ?switch,
@@ -180,7 +189,7 @@ impl ApiClientWrapper {
                 let mut endpoints = Vec::new();
 
                 for power_shelf in response.power_shelves {
-                    match self.extract_power_shelf_endpoint(&power_shelf).await {
+                    match self.extract_power_shelf_endpoint(&power_shelf) {
                         Ok(endpoint) => endpoints.push(Arc::new(endpoint)),
                         Err(error) => tracing::warn!(
                             ?power_shelf,
@@ -200,7 +209,7 @@ impl ApiClientWrapper {
         }
     }
 
-    async fn extract_machine_endpoint(
+    fn extract_machine_endpoint(
         &self,
         machine: &rpc::forge::Machine,
     ) -> Result<BmcEndpoint, HealthError> {
@@ -234,10 +243,9 @@ impl ApiClientWrapper {
         });
 
         self.endpoint_with_auth(addr, metadata, machine.rack_id.clone())
-            .await
     }
 
-    async fn extract_switch_endpoint(
+    fn extract_switch_endpoint(
         &self,
         switch: &rpc::forge::Switch,
     ) -> Result<BmcEndpoint, HealthError> {
@@ -271,10 +279,9 @@ impl ApiClientWrapper {
             })),
             None,
         )
-        .await
     }
 
-    async fn extract_power_shelf_endpoint(
+    fn extract_power_shelf_endpoint(
         &self,
         power_shelf: &rpc::forge::PowerShelf,
     ) -> Result<BmcEndpoint, HealthError> {
@@ -300,27 +307,21 @@ impl ApiClientWrapper {
             })),
             None,
         )
-        .await
     }
 
-    async fn endpoint_with_auth(
+    fn endpoint_with_auth(
         &self,
         addr: BmcAddr,
         metadata: Option<EndpointMetadata>,
         rack_id: Option<RackId>,
     ) -> Result<BmcEndpoint, HealthError> {
-        let provider = ApiCredentialProvider {
-            client: self.client.clone(),
-        };
-
-        let credentials = provider.fetch_credentials(&addr).await?;
-
         Ok(BmcEndpoint {
             addr,
-            provider: Arc::new(provider),
+            provider: self.credential_provider.clone(),
             metadata,
             rack_id,
-            credentials: Arc::new(RwLock::new(credentials)),
+            credentials: Arc::new(RwLock::new(None)),
+            fetch_lock: Arc::new(AsyncMutex::new(())),
         })
     }
 

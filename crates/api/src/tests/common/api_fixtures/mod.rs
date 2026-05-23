@@ -107,7 +107,7 @@ use crate::cfg::file::{
     NetworkSecurityGroupConfig, NetworkSegmentStateControllerConfig, PowerManagerOptions,
     PowerShelfStateControllerConfig, RackStateControllerConfig, SpdmConfig,
     SpdmStateControllerConfig, StateControllerConfig, SwitchStateControllerConfig, VmaasConfig,
-    VpcPeeringPolicy, default_max_find_by_ids,
+    VpcPeeringPolicy, default_bmc_session_lockout_threshold, default_max_find_by_ids,
 };
 use crate::dpf::DpfOperations;
 use crate::ethernet_virtualization::{EthVirtData, SiteFabricPrefixList};
@@ -1161,6 +1161,7 @@ pub fn get_config() -> CarbideConfig {
         networks: None,
         dpu_ipmi_tool_impl: None,
         dpu_ipmi_reboot_attempts: Some(0),
+        bmc_session_lockout_threshold: default_bmc_session_lockout_threshold(),
         initial_domain_name: Some("test.com".to_string()),
         sitename: Some("testsite".to_string()),
         initial_dpu_agent_upgrade_policy: None,
@@ -1587,9 +1588,18 @@ pub async fn create_test_env_with_overrides(
     };
 
     let bmc_proxy = Arc::new(ArcSwap::new(None.into()));
+    let nv_redfish_pool = carbide_redfish::nv_redfish::new_pool(bmc_proxy);
+    let bmc_session_store: Arc<dyn crate::credentials::BmcSessionStore> =
+        Arc::new(crate::credentials::PgBmcSessionStore::new(db_pool.clone()));
+    let bmc_session_manager = Arc::new(crate::credentials::BmcSessionManager::new(
+        nv_redfish_pool.clone(),
+        composite_manager.clone(),
+        bmc_session_store,
+        config.bmc_session_lockout_threshold,
+    ));
     let bmc_explorer = carbide_site_explorer::new_bmc_explorer(
         redfish_sim.clone(),
-        carbide_redfish::nv_redfish::new_pool(bmc_proxy),
+        nv_redfish_pool,
         carbide_ipmi::test_support(),
         composite_manager.clone(),
         Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1617,6 +1627,7 @@ pub async fn create_test_env_with_overrides(
         certificate_provider: certificate_provider.clone(),
         database_connection: db_pool.clone(),
         redfish_pool: redfish_sim.clone(),
+        bmc_session_manager,
         eth_data: eth_virt_data.clone(),
         common_pools: common_pools.clone(),
         ib_fabric_manager: ib_fabric_manager.clone(),

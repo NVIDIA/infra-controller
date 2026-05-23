@@ -39,7 +39,7 @@ use crate::HealthError;
 use crate::bmc::AuthRefreshingBmc;
 use crate::config::Config as AppConfig;
 use crate::discovery::BmcClient;
-use crate::endpoint::BmcEndpoint;
+use crate::endpoint::{BmcCredentials, BmcEndpoint};
 use crate::limiter::RateLimiter;
 use crate::metrics::{
     CollectorRegistry, ComponentKind, MetricsManager, operation_duration_buckets_seconds,
@@ -261,6 +261,7 @@ fn create_bmc(
     client: ReqwestClient,
     endpoint: Arc<BmcEndpoint>,
     health_options: &AppConfig,
+    initial_credentials: BmcCredentials,
 ) -> Result<Arc<BmcClient>, HealthError> {
     let bmc_url = match &health_options.bmc_proxy_url {
         Some(url) => url.clone(),
@@ -283,7 +284,6 @@ fn create_bmc(
         HeaderMap::new()
     };
 
-    let initial_credentials = endpoint.credentials();
     let inner = HttpBmc::with_custom_headers(
         client,
         bmc_url,
@@ -314,6 +314,7 @@ pub struct StreamingCollectorStartContext {
 impl Collector {
     pub fn start<C: PeriodicCollector<BmcClient>>(
         endpoint: Arc<BmcEndpoint>,
+        credentials: BmcCredentials,
         config: C::Config,
         start_context: CollectorStartContext,
     ) -> Result<Self, HealthError> {
@@ -329,7 +330,7 @@ impl Collector {
         let cancel_token = CancellationToken::new();
         let cancel_token_clone = cancel_token.clone();
 
-        let bmc = create_bmc(client, Arc::clone(&endpoint), &health_options)?;
+        let bmc = create_bmc(client, Arc::clone(&endpoint), &health_options, credentials)?;
 
         let mut runner = C::new_runner(bmc, endpoint.clone(), config)?;
 
@@ -454,6 +455,7 @@ impl Collector {
 
     pub fn start_streaming<S: StreamingCollector<BmcClient>>(
         endpoint: Arc<BmcEndpoint>,
+        credentials: BmcCredentials,
         config: S::Config,
         data_sink: Arc<dyn DataSink>,
         start_context: StreamingCollectorStartContext,
@@ -468,7 +470,7 @@ impl Collector {
         let cancel_token = CancellationToken::new();
         let cancel_clone = cancel_token.clone();
 
-        let bmc = create_bmc(client, Arc::clone(&endpoint), &health_options)?;
+        let bmc = create_bmc(client, Arc::clone(&endpoint), &health_options, credentials)?;
 
         let mut collector = S::new_runner(Arc::clone(&bmc), endpoint.clone(), config)?;
         let event_context = EventContext::from_endpoint(&endpoint, collector.collector_type());

@@ -27,6 +27,7 @@ use carbide_uuid::power_shelf::PowerShelfId;
 use carbide_uuid::rack::RackId;
 use carbide_uuid::switch::SwitchId;
 use mac_address::MacAddress;
+use tokio::sync::Mutex as AsyncMutex;
 use url::Url;
 
 use crate::HealthError;
@@ -60,8 +61,10 @@ pub struct BmcEndpoint {
     pub addr: BmcAddr,
     pub metadata: Option<EndpointMetadata>,
     pub rack_id: Option<RackId>,
-    pub(crate) credentials: Arc<RwLock<BmcCredentials>>,
+    pub(crate) credentials: Arc<RwLock<Option<BmcCredentials>>>,
     pub(crate) provider: Arc<dyn CredentialProvider>,
+    // Neded to ensure only one collector fetches endpoint
+    pub(crate) fetch_lock: Arc<AsyncMutex<()>>,
 }
 
 impl BmcEndpoint {
@@ -92,8 +95,9 @@ impl BmcEndpoint {
             addr,
             metadata,
             rack_id,
-            credentials: Arc::new(RwLock::new(credentials)),
+            credentials: Arc::new(RwLock::new(Some(credentials))),
             provider,
+            fetch_lock: Arc::new(AsyncMutex::new(())),
         }
     }
 
@@ -106,16 +110,27 @@ impl BmcEndpoint {
         }
     }
 
-    pub fn credentials(&self) -> BmcCredentials {
-        self.credentials.read().expect("lock poisoned").to_owned()
+    pub fn credentials(&self) -> Option<BmcCredentials> {
+        self.credentials.read().expect("lock poisoned").clone()
+    }
+
+    pub async fn ensure_credentials(&self) -> Result<BmcCredentials, HealthError> {
+        if let Some(creds) = self.credentials() {
+            return Ok(creds);
+        }
+        let _guard = self.fetch_lock.lock().await;
+        // Maybe another task has already fetched credentials while we were waiting for the lock?
+        if let Some(creds) = self.credentials() {
+            return Ok(creds);
+        }
+        let fresh = self.provider.fetch_credentials(&self.addr).await?;
+        *self.credentials.write().expect("lock poisoned") = Some(fresh.clone());
+        Ok(fresh)
     }
 
     pub async fn refresh(&self) -> Result<BmcCredentials, HealthError> {
         let credentials = self.provider.fetch_credentials(&self.addr).await?;
-        self.credentials
-            .write()
-            .map(|mut current| *current = credentials.clone())
-            .expect("lock poisoned");
+        *self.credentials.write().expect("lock poisoned") = Some(credentials.clone());
         Ok(credentials)
     }
 }

@@ -1241,6 +1241,7 @@ dependencies = [
  "mqttea",
  "nras",
  "num_cpus",
+ "nv-redfish",
  "oauth2",
  "oid-registry",
  "once_cell",
@@ -2334,6 +2335,7 @@ dependencies = [
  "mac_address",
  "nv-redfish",
  "reqwest 0.13.3",
+ "serde",
  "serde_json",
  "sqlx",
  "state-controller",
@@ -7150,9 +7152,9 @@ dependencies = [
 
 [[package]]
 name = "nv-redfish"
-version = "0.8.1"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "17a770625401680ec7d8539281484e5fa88caa772b21544d3717d6038ff84c6f"
+checksum = "a7416317c94c82f40c5f1220306315533e7fc013307074ec6fc541eaa7438947"
 dependencies = [
  "futures-core",
  "futures-util",
@@ -7166,9 +7168,9 @@ dependencies = [
 
 [[package]]
 name = "nv-redfish-bmc-http"
-version = "0.8.1"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b517fe5bf29664951329bde6f2f1fcd497addcb8a846f26d25bd0e2cbdda40af"
+checksum = "44972bb1c193d8e64d739ba9093ce412a290bb97f0fb7d3703cc7f31dd9dee1e"
 dependencies = [
  "futures-core",
  "futures-util",
@@ -7180,17 +7182,19 @@ dependencies = [
  "serde_path_to_error",
  "sse-stream",
  "time",
+ "tokio-util",
  "url",
  "uuid",
 ]
 
 [[package]]
 name = "nv-redfish-core"
-version = "0.8.1"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2c019526454812cf5edbda4471cd74b7b0ac61b0b43bed3c7cd82b21a8fa7894"
+checksum = "e27c16faa17ec39d673c905a70304e2ccfec4c96a3bf3d9414c3e014fd0b39ff"
 dependencies = [
  "futures-core",
+ "futures-io",
  "rust_decimal",
  "serde",
  "serde_json",
@@ -7200,9 +7204,9 @@ dependencies = [
 
 [[package]]
 name = "nv-redfish-csdl-compiler"
-version = "0.8.1"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "00e376c01ed74f97332e6ebfbed56fa8563a978ffd8637b24a42d2bf70a8c25a"
+checksum = "91702acc8ad0ca21d4b05d13f559fe5c097717e0f3cbfe8076ba339522c4ae1b"
 dependencies = [
  "clap",
  "clap_derive",
@@ -11040,6 +11044,7 @@ checksum = "9ae9cec805b01e8fc3fd2fe289f89149a9b66dd16786abd8b19cfa7b48cb0098"
 dependencies = [
  "bytes",
  "futures-core",
+ "futures-io",
  "futures-sink",
  "pin-project-lite",
  "slab",

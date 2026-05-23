@@ -27,17 +27,73 @@ pub use sources::{CompositeEndpointSource, StaticEndpointSource};
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
-    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex, RwLock as StdRwLock};
+    use std::time::Duration;
 
     use carbide_uuid::power_shelf::{PowerShelfIdSource, PowerShelfType};
     use carbide_uuid::switch::{SwitchIdSource, SwitchType};
     use mac_address::MacAddress;
+    use tokio::sync::Mutex as AsyncMutex;
 
     use super::*;
     use crate::HealthError;
     use crate::config::{
         StaticBmcEndpoint, StaticMachineEndpoint, StaticPowerShelfEndpoint, StaticSwitchEndpoint,
     };
+
+    struct CountingProvider {
+        calls: Arc<AtomicUsize>,
+        delay: Option<Duration>,
+        credentials: BmcCredentials,
+    }
+
+    impl CountingProvider {
+        fn new(
+            credentials: BmcCredentials,
+            delay: Option<Duration>,
+        ) -> (Arc<Self>, Arc<AtomicUsize>) {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let provider = Arc::new(Self {
+                calls: calls.clone(),
+                delay,
+                credentials,
+            });
+            (provider, calls)
+        }
+    }
+
+    impl CredentialProvider for CountingProvider {
+        fn fetch_credentials<'a>(
+            &'a self,
+            _endpoint: &'a BmcAddr,
+        ) -> BoxFuture<'a, Result<BmcCredentials, HealthError>> {
+            let delay = self.delay;
+            let credentials = self.credentials.clone();
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move {
+                if let Some(d) = delay {
+                    tokio::time::sleep(d).await;
+                }
+                Ok(credentials)
+            })
+        }
+    }
+
+    fn make_lazy_endpoint(provider: Arc<dyn CredentialProvider>) -> Arc<BmcEndpoint> {
+        Arc::new(BmcEndpoint {
+            addr: BmcAddr {
+                ip: "10.0.0.1".parse().unwrap(),
+                port: Some(443),
+                mac: MacAddress::from_str("00:11:22:33:44:55").unwrap(),
+            },
+            metadata: None,
+            rack_id: None,
+            credentials: Arc::new(StdRwLock::new(None)),
+            provider,
+            fetch_lock: Arc::new(AsyncMutex::new(())),
+        })
+    }
 
     fn make_test_endpoint(mac: MacAddress) -> BmcEndpoint {
         BmcEndpoint::with_fixed_credentials(
@@ -331,5 +387,127 @@ mod tests {
         let result = composite.fetch_bmc_hosts().await;
 
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn lazy_endpoint_does_not_fetch_until_ensure_credentials_called() {
+        let (provider, calls) = CountingProvider::new(
+            BmcCredentials::UsernamePassword {
+                username: "u".to_string(),
+                password: Some("p".to_string()),
+            },
+            None,
+        );
+        let endpoint = make_lazy_endpoint(provider);
+
+        assert!(endpoint.credentials().is_none());
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+        endpoint
+            .ensure_credentials()
+            .await
+            .expect("provider succeeds");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn ensure_credentials_returns_cached_value_on_second_call() {
+        let (provider, calls) = CountingProvider::new(
+            BmcCredentials::SessionToken {
+                token: "tok".to_string(),
+            },
+            None,
+        );
+        let endpoint = make_lazy_endpoint(provider);
+
+        endpoint.ensure_credentials().await.unwrap();
+        endpoint.ensure_credentials().await.unwrap();
+        endpoint.ensure_credentials().await.unwrap();
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "second/third call must reuse the cache"
+        );
+        assert!(endpoint.credentials().is_some());
+    }
+
+    #[tokio::test]
+    async fn ensure_credentials_fetches_once_under_concurrency() {
+        let (provider, calls) = CountingProvider::new(
+            BmcCredentials::SessionToken {
+                token: "tok".to_string(),
+            },
+            Some(Duration::from_millis(50)),
+        );
+        let endpoint = make_lazy_endpoint(provider);
+
+        let mut handles = Vec::with_capacity(8);
+        for _ in 0..8 {
+            let endpoint = endpoint.clone();
+            handles.push(tokio::spawn(async move {
+                endpoint.ensure_credentials().await.unwrap();
+            }));
+        }
+        for h in handles {
+            h.await.unwrap();
+        }
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "fetch_lock must collapse concurrent first-touch callers into one fetch"
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_replaces_cached_credentials() {
+        struct SequenceProvider {
+            tokens: Mutex<Vec<String>>,
+            calls: Arc<AtomicUsize>,
+        }
+
+        impl CredentialProvider for SequenceProvider {
+            fn fetch_credentials<'a>(
+                &'a self,
+                _endpoint: &'a BmcAddr,
+            ) -> BoxFuture<'a, Result<BmcCredentials, HealthError>> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                let token = self
+                    .tokens
+                    .lock()
+                    .unwrap()
+                    .pop()
+                    .expect("token sequence exhausted");
+                Box::pin(async move { Ok(BmcCredentials::SessionToken { token }) })
+            }
+        }
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let provider = Arc::new(SequenceProvider {
+            tokens: Mutex::new(vec!["second".to_string(), "first".to_string()]),
+            calls: calls.clone(),
+        });
+        let endpoint = make_lazy_endpoint(provider);
+
+        let first = endpoint.ensure_credentials().await.unwrap();
+        match first {
+            BmcCredentials::SessionToken { ref token } => assert_eq!(token, "first"),
+            _ => panic!("expected session token"),
+        }
+
+        let refreshed = endpoint.refresh().await.unwrap();
+        match refreshed {
+            BmcCredentials::SessionToken { ref token } => assert_eq!(token, "second"),
+            _ => panic!("expected session token"),
+        }
+
+        let cached_after_refresh = endpoint.credentials().expect("cache populated");
+        match cached_after_refresh {
+            BmcCredentials::SessionToken { ref token } => assert_eq!(token, "second"),
+            _ => panic!("expected session token"),
+        }
+
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 }

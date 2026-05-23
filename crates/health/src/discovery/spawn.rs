@@ -43,6 +43,13 @@ pub(super) async fn spawn_collectors_for_endpoint(
 ) -> Result<(), HealthError> {
     let key = endpoint.key();
     let endpoint_arc = endpoint.clone();
+
+    let credentials = endpoint.credentials().ok_or_else(|| {
+        HealthError::GenericError(
+            "Endpoint credentials must be available to spawn collectors".to_string(),
+        )
+    })?;
+
     if let Configurable::Enabled(sensor_cfg) = &ctx.sensors_config
         && !ctx.collectors.contains(CollectorKind::Sensor, &key)
     {
@@ -52,6 +59,7 @@ pub(super) async fn spawn_collectors_for_endpoint(
         );
         match Collector::start::<SensorCollector<BmcClient>>(
             endpoint_arc.clone(),
+            credentials.clone(),
             SensorCollectorConfig {
                 data_sink: data_sink.clone(),
                 state_refresh_interval: sensor_cfg.state_refresh_interval,
@@ -99,6 +107,7 @@ pub(super) async fn spawn_collectors_for_endpoint(
                 if let Some(data_sink) = data_sink.clone() {
                     Some(Collector::start_streaming::<SseLogCollector<BmcClient>>(
                         endpoint_arc.clone(),
+                        credentials.clone(),
                         SseLogCollectorConfig,
                         data_sink,
                         StreamingCollectorStartContext {
@@ -120,6 +129,7 @@ pub(super) async fn spawn_collectors_for_endpoint(
 
                     Some(Collector::start::<LogsCollector<BmcClient>>(
                         endpoint_arc.clone(),
+                        credentials.clone(),
                         LogsCollectorConfig {
                             state_file_path,
                             service_refresh_interval: pcfg.state_refresh_interval,
@@ -176,6 +186,7 @@ pub(super) async fn spawn_collectors_for_endpoint(
         );
         match Collector::start::<FirmwareCollector<BmcClient>>(
             endpoint_arc.clone(),
+            credentials.clone(),
             FirmwareCollectorConfig {
                 data_sink: data_sink.clone(),
             },
@@ -217,6 +228,7 @@ pub(super) async fn spawn_collectors_for_endpoint(
             )?);
         match Collector::start::<LeakDetectorCollector<BmcClient>>(
             endpoint_arc.clone(),
+            credentials.clone(),
             LeakDetectorCollectorConfig {
                 data_sink: data_sink.clone(),
                 state_refresh_interval: leak_detector_cfg.state_refresh_interval,
@@ -260,6 +272,7 @@ pub(super) async fn spawn_collectors_for_endpoint(
         );
         match Collector::start::<NmxtCollector>(
             endpoint_arc.clone(),
+            credentials.clone(),
             NmxtCollectorConfig {
                 nmxt_config: nmxt_cfg.clone(),
                 data_sink: data_sink.clone(),
@@ -303,6 +316,7 @@ pub(super) async fn spawn_collectors_for_endpoint(
         );
         match Collector::start::<NvueRestCollector>(
             endpoint_arc,
+            credentials.clone(),
             NvueRestCollectorConfig {
                 rest_config: rest_cfg.clone(),
                 data_sink: data_sink.clone(),

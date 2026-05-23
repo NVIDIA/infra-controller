@@ -83,9 +83,12 @@ impl<B: Bmc + 'static> PeriodicCollector<B> for NvueRestCollector {
         endpoint: Arc<BmcEndpoint>,
         config: Self::Config,
     ) -> Result<Self, HealthError> {
-        let BmcCredentials::UsernamePassword { username, password } = endpoint.credentials() else {
+        let Some(BmcCredentials::UsernamePassword { username, password }) = endpoint.credentials()
+        else {
             return Err(HealthError::GenericError(
-                "NVUE REST collector requires cached credentials at startup".to_string(),
+                "NVUE REST collector requires cached username/password credentials at startup; \
+                 ensure_credentials must populate the endpoint cache before new_runner is called"
+                    .to_string(),
             ));
         };
 

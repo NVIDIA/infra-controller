@@ -22,6 +22,7 @@ use futures::TryStreamExt;
 use nv_redfish::bmc_http::HttpBmc;
 use nv_redfish::bmc_http::reqwest::{BmcError, Client as ReqwestClient};
 use nv_redfish::core::query::{ExpandQuery, FilterQuery};
+use nv_redfish::core::upload::{MultipartUpdateRequest, UploadReader};
 use nv_redfish::core::{
     Action, Bmc, BoxTryStream, EntityTypeRef, Expandable, ModificationResponse, ODataETag, ODataId,
     SessionCreateResponse,
@@ -176,6 +177,22 @@ impl Bmc for AuthRefreshingBmc {
     ) -> Result<ModificationResponse<R>, Self::Error> {
         self.inner
             .update(id, etag, update)
+            .await
+            .map_err(HealthError::from)
+    }
+
+    async fn multipart_update<U, V, R>(
+        &self,
+        uri: &str,
+        request: MultipartUpdateRequest<'_, U, V>,
+    ) -> Result<ModificationResponse<R>, Self::Error>
+    where
+        U: UploadReader,
+        R: Send + Sync + for<'de> Deserialize<'de>,
+        V: Send + Sync + Serialize,
+    {
+        self.inner
+            .multipart_update(uri, request)
             .await
             .map_err(HealthError::from)
     }
