@@ -266,12 +266,14 @@ async fn test_can_retrieve_rack_state_history_with_real_handler(
 
     //--------------------------------------------------------------------------
 
-    // Iterations 3-5: FirmwareUpgrade -> Completed.
+    // Iterations 3-6: FirmwareUpgrade -> Completed.
     //
     // The default maintenance sequence is:
-    // FirmwareUpgrade -> ConfigureNmxCluster -> PowerSequence -> Completed.
-    controller.run_single_iteration().await; // FirmwareUpgrade(Start) -> ConfigureNmxCluster
-    controller.run_single_iteration().await; // ConfigureNmxCluster -> PowerSequence
+    // FirmwareUpgrade -> ConfigureNmxCluster(Start)
+    // -> ConfigureNmxCluster(DisableScaleUpFabricState) -> PowerSequence -> Completed.
+    controller.run_single_iteration().await; // FirmwareUpgrade(Start) -> ConfigureNmxCluster(Start)
+    controller.run_single_iteration().await; // ConfigureNmxCluster(Start) -> DisableScaleUpFabricState
+    controller.run_single_iteration().await; // DisableScaleUpFabricState -> PowerSequence
     controller.run_single_iteration().await; // PowerSequence -> Completed
 
     let rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
@@ -286,7 +288,7 @@ async fn test_can_retrieve_rack_state_history_with_real_handler(
         rack.controller_state.value
     );
 
-    // Iteration 6: Maintenance(Completed) -> Validating(Pending).
+    // Iteration 7: Maintenance(Completed) -> Validating(Pending).
     // The handler clears rv.* labels (none present yet) and transitions.
     controller.run_single_iteration().await;
 
@@ -304,7 +306,7 @@ async fn test_can_retrieve_rack_state_history_with_real_handler(
 
     //--------------------------------------------------------------------------
 
-    // --- Setup for iterations 7-10: Validation states ---
+    // --- Setup for iterations 8-11: Validation states ---
     //
     // Set rv.* labels on both compute trays so the real handler can drive the
     // validation sub-state machine. Both machines are assigned to the same
@@ -334,7 +336,7 @@ async fn test_can_retrieve_rack_state_history_with_real_handler(
         txn.commit().await?;
     }
 
-    // Iteration 7: Validating(Pending) -> Validating(InProgress).
+    // Iteration 8: Validating(Pending) -> Validating(InProgress).
     // The handler finds rv.run-id on a machine and promotes to InProgress.
     controller.run_single_iteration().await;
 
@@ -352,7 +354,7 @@ async fn test_can_retrieve_rack_state_history_with_real_handler(
 
     //--------------------------------------------------------------------------
 
-    // Iteration 8: Validating(InProgress) -> Validating(Partial).
+    // Iteration 9: Validating(InProgress) -> Validating(Partial).
     // Partition p0 has validated > 0 (both nodes pass), so InProgress -> Partial.
     controller.run_single_iteration().await;
 
@@ -370,7 +372,7 @@ async fn test_can_retrieve_rack_state_history_with_real_handler(
 
     //--------------------------------------------------------------------------
 
-    // Iteration 9: Validating(Partial) -> Validating(Validated).
+    // Iteration 10: Validating(Partial) -> Validating(Validated).
     // validated(1) == total_partitions(1) -> Validated.
     controller.run_single_iteration().await;
 
@@ -388,7 +390,7 @@ async fn test_can_retrieve_rack_state_history_with_real_handler(
 
     //--------------------------------------------------------------------------
 
-    // Iteration 10: Validating(Validated) -> Ready.
+    // Iteration 11: Validating(Validated) -> Ready.
     controller.run_single_iteration().await;
 
     let rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
@@ -418,6 +420,7 @@ async fn test_can_retrieve_rack_state_history_with_real_handler(
         "{\"state\": \"discovering\"}",
         "{\"state\": \"maintenance\", \"maintenance_state\": {\"FirmwareUpgrade\": {\"rack_firmware_upgrade\": \"Start\"}}}",
         "{\"state\": \"maintenance\", \"maintenance_state\": {\"ConfigureNmxCluster\": {\"configure_nmx_cluster\": \"Start\"}}}",
+        "{\"state\": \"maintenance\", \"maintenance_state\": {\"ConfigureNmxCluster\": {\"configure_nmx_cluster\": \"DisableScaleUpFabricState\"}}}",
         "{\"state\": \"maintenance\", \"maintenance_state\": {\"PowerSequence\": {\"rack_power\": \"PoweringOn\"}}}",
         "{\"state\": \"maintenance\", \"maintenance_state\": \"Completed\"}",
         "{\"state\": \"validating\", \"validating_state\": \"Pending\"}",
