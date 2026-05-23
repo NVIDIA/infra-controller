@@ -34,19 +34,16 @@ use forge_secrets::credentials::{
     BmcCredentialType, CredentialKey, CredentialManager, Credentials,
 };
 use futures_util::FutureExt;
-use librms::protos::rack_manager as rms;
 use mac_address::MacAddress;
 use model::component_manager::{
     ComputeTrayComponent as ModelComputeTrayComponent, NvSwitchComponent, PowerAction,
     PowerShelfComponent,
 };
-use model::firmware::FirmwareComponentType;
 use model::machine::machine_search_config::MachineSearchConfig;
 use model::rack::{FirmwareUpgradeJob, MaintenanceActivity};
 use tonic::{Code, Request, Response, Status};
 
 use crate::api::{Api, log_request_data, log_request_data_redacted};
-use crate::rack::firmware_object::hardware_type_matches_filter;
 
 const MACHINE_POWER_OVERRIDE_SOURCE: &str = "component_power_control";
 const MACHINE_POWER_OVERRIDE_MESSAGE: &str = "Compute-Tray component power control in progress";
@@ -55,6 +52,12 @@ fn require_component_manager(api: &Api) -> Result<&ComponentManager, Status> {
     api.component_manager
         .as_ref()
         .ok_or_else(|| Status::unimplemented("component manager is not configured"))
+}
+
+fn unsupported_from_json_firmware_versions(target: &str) -> Status {
+    Status::unimplemented(format!(
+        "listing {target} firmware versions is not supported for RMS firmware-object JSON updates; provide SOT JSON to UpdateComponentFirmware"
+    ))
 }
 
 fn component_manager_error_to_status(err: ComponentManagerError) -> Status {
@@ -120,14 +123,6 @@ fn not_found_component_result(id: &str, message: impl Into<String>) -> rpc::Comp
     make_result(
         id,
         rpc::ComponentManagerStatusCode::NotFound,
-        Some(message.into()),
-    )
-}
-
-fn invalid_argument_component_result(id: &str, message: impl Into<String>) -> rpc::ComponentResult {
-    make_result(
-        id,
-        rpc::ComponentManagerStatusCode::InvalidArgument,
         Some(message.into()),
     )
 }
@@ -291,8 +286,8 @@ fn map_power_action(raw: i32) -> Result<PowerAction, Status> {
 
 /// Maps raw proto `ComputeTrayComponent` values to display-name strings.
 ///
-/// Keep in sync with [`firmware_component_type_to_proto`] (same file) and
-/// `format_compute_tray_component` in `admin-cli/src/component_manager/versions/cmd.rs`.
+/// Keep in sync with `format_compute_tray_component` in
+/// `admin-cli/src/component_manager/versions/cmd.rs`.
 fn map_compute_tray_component_names(raw: &[i32]) -> Result<Vec<String>, Status> {
     raw.iter()
         .map(|&v| match rpc::ComputeTrayComponent::try_from(v) {
@@ -314,116 +309,6 @@ fn map_compute_tray_component_names(raw: &[i32]) -> Result<Vec<String>, Status> 
             ))),
         })
         .collect()
-}
-
-/// Converts a [`FirmwareComponentType`] to its proto equivalent.
-///
-/// Keep in sync with [`map_compute_tray_component_names`] (same file) and
-/// `format_compute_tray_component` in `admin-cli/src/component_manager/versions/cmd.rs`.
-fn firmware_component_type_to_proto(fct: &FirmwareComponentType) -> rpc::ComputeTrayComponent {
-    match fct {
-        FirmwareComponentType::Bmc => rpc::ComputeTrayComponent::Bmc,
-        FirmwareComponentType::Uefi => rpc::ComputeTrayComponent::Bios,
-        FirmwareComponentType::Cec => rpc::ComputeTrayComponent::Cec,
-        FirmwareComponentType::Nic => rpc::ComputeTrayComponent::Nic,
-        FirmwareComponentType::Cx7 => rpc::ComputeTrayComponent::Cx7,
-        FirmwareComponentType::CpldMb => rpc::ComputeTrayComponent::CpldMb,
-        FirmwareComponentType::CpldPdb => rpc::ComputeTrayComponent::CpldPdb,
-        FirmwareComponentType::HGXBmc => rpc::ComputeTrayComponent::HgxBmc,
-        FirmwareComponentType::CombinedBmcUefi => rpc::ComputeTrayComponent::CombinedBmcUefi,
-        FirmwareComponentType::Gpu => rpc::ComputeTrayComponent::Gpu,
-        FirmwareComponentType::Unknown => rpc::ComputeTrayComponent::Unknown,
-    }
-}
-
-fn get_compute_tray_firmware_version(
-    compute_machine_id: &carbide_uuid::machine::MachineId,
-    bmc_info: &model::bmc_info::BmcInfo,
-    endpoint_by_ip: &HashMap<IpAddr, model::site_explorer::ExploredEndpoint>,
-    fw_snapshot: &carbide_firmware::FirmwareConfigSnapshot,
-) -> rpc::DeviceFirmwareVersions {
-    let id_str = compute_machine_id.to_string();
-
-    let Some(ip_str) = bmc_info.ip.as_ref() else {
-        return rpc::DeviceFirmwareVersions {
-            result: Some(invalid_argument_component_result(
-                &id_str,
-                format!("machine {compute_machine_id} has no BMC IP configured"),
-            )),
-            ..Default::default()
-        };
-    };
-
-    let Ok(ip) = ip_str.parse::<IpAddr>() else {
-        tracing::warn!(
-            machine_id = %compute_machine_id,
-            bmc_ip = %ip_str,
-            "BMC IP failed to parse as a valid address"
-        );
-        return rpc::DeviceFirmwareVersions {
-            result: Some(error_result(
-                &id_str,
-                format!("machine {compute_machine_id} has unparseable BMC IP: {ip_str}"),
-            )),
-            ..Default::default()
-        };
-    };
-
-    let Some(endpoint) = endpoint_by_ip.get(&ip) else {
-        return rpc::DeviceFirmwareVersions {
-            result: Some(not_found_component_result(
-                &id_str,
-                format!(
-                    "no explored endpoint found for machine {compute_machine_id} (BMC IP {ip})"
-                ),
-            )),
-            ..Default::default()
-        };
-    };
-
-    let Some(fw) = fw_snapshot.find_fw_info_for_host(endpoint) else {
-        return rpc::DeviceFirmwareVersions {
-            result: Some(not_found_component_result(
-                &id_str,
-                format!("no firmware config matches endpoint for machine {compute_machine_id}"),
-            )),
-            ..Default::default()
-        };
-    };
-
-    let compute_fw_versions: Vec<rpc::ComputeTrayFirmwareVersions> = fw
-        .components
-        .iter()
-        .map(|(component_type, component)| {
-            let versions = component
-                .known_firmware
-                .iter()
-                .map(|entry| entry.version.clone())
-                .collect();
-            rpc::ComputeTrayFirmwareVersions {
-                component: firmware_component_type_to_proto(component_type).into(),
-                versions,
-            }
-        })
-        .collect();
-
-    if compute_fw_versions.is_empty() {
-        return rpc::DeviceFirmwareVersions {
-            result: Some(not_found_component_result(
-                &id_str,
-                format!(
-                    "firmware config for machine {compute_machine_id} has no component entries"
-                ),
-            )),
-            ..Default::default()
-        };
-    }
-
-    rpc::DeviceFirmwareVersions {
-        result: Some(success_result(&id_str)),
-        compute_fw_versions,
-        ..Default::default()
-    }
 }
 
 fn map_nv_switch_component_names(raw: &[i32]) -> Result<Vec<String>, Status> {
@@ -1914,7 +1799,12 @@ pub(crate) async fn list_component_firmware_versions(
 
     match target {
         rpc::list_component_firmware_versions_request::Target::SwitchIds(list) => {
-            let cm = require_component_manager(api)?;
+            let Some(cm) = api.component_manager.as_ref() else {
+                return Err(unsupported_from_json_firmware_versions("switch"));
+            };
+            if cm.nv_switch_use_state_controller {
+                return Err(unsupported_from_json_firmware_versions("switch"));
+            }
             let endpoints = resolve_switch_endpoints(api, &list.ids).await?;
 
             let mut devices: Vec<rpc::DeviceFirmwareVersions> = endpoints
@@ -1997,193 +1887,54 @@ pub(crate) async fn list_component_firmware_versions(
                 return Err(Status::invalid_argument("machine_ids must not be empty"));
             }
 
-            let use_state_controller = api
-                .component_manager
-                .as_ref()
-                .map(|cm| cm.compute_tray_use_state_controller)
-                .unwrap_or(true);
-
-            if use_state_controller {
-                let fw_snapshot = api.runtime_config.get_firmware_config().create_snapshot();
-
-                let machines = db::machine::find(
-                    api.db_reader().as_mut(),
-                    db::ObjectFilter::List(&list.machine_ids),
-                    MachineSearchConfig::default(),
-                )
-                .await
-                .map_err(|e| Status::internal(format!("failed to look up machines: {e}")))?;
-
-                let bmc_ips: Vec<IpAddr> = machines
-                    .iter()
-                    .filter_map(|m| m.bmc_info.ip.as_ref()?.parse().ok())
-                    .collect::<HashSet<_>>()
-                    .into_iter()
-                    .collect();
-
-                let endpoints =
-                    db::explored_endpoints::find_by_ips(api.db_reader().as_mut(), bmc_ips)
-                        .await
-                        .map_err(|e| {
-                            Status::internal(format!("failed to look up explored endpoints: {e}"))
-                        })?;
-
-                let endpoint_by_ip: HashMap<IpAddr, _> =
-                    endpoints.into_iter().map(|ep| (ep.address, ep)).collect();
-
-                let machine_by_id: HashMap<_, _> =
-                    machines.into_iter().map(|m| (m.id, m)).collect();
-
-                let devices = list
-                    .machine_ids
-                    .iter()
-                    .map(|machine_id| {
-                        let Some(machine) = machine_by_id.get(machine_id) else {
-                            return rpc::DeviceFirmwareVersions {
-                                result: Some(not_found_component_result(
-                                    &machine_id.to_string(),
-                                    format!("machine {machine_id} not found"),
-                                )),
-                                ..Default::default()
-                            };
-                        };
-                        get_compute_tray_firmware_version(
-                            machine_id,
-                            &machine.bmc_info,
-                            &endpoint_by_ip,
-                            &fw_snapshot,
-                        )
-                    })
-                    .collect();
-
-                Ok(Response::new(rpc::ListComponentFirmwareVersionsResponse {
-                    devices,
-                }))
-            } else {
-                let cm = require_component_manager(api)?;
-                let resolved = resolve_compute_tray_endpoints(api, &list.machine_ids).await?;
-
-                let mut devices: Vec<rpc::DeviceFirmwareVersions> = resolved
-                    .unresolved
-                    .iter()
-                    .map(|u| rpc::DeviceFirmwareVersions {
-                        result: Some(error_result(&u.id.to_string(), u.reason.clone())),
-                        ..Default::default()
-                    })
-                    .collect();
-
-                let versions = cm
-                    .compute_tray
-                    .list_firmware_bundles()
-                    .await
-                    .map_err(component_manager_error_to_status)?;
-
-                for ep in &resolved.resolved.endpoints {
-                    let id = resolved
-                        .resolved
-                        .ip_to_machine_id
-                        .get(&ep.bmc_ip)
-                        .map(|id| id.to_string())
-                        .unwrap_or_else(|| ep.bmc_ip.to_string());
-                    devices.push(rpc::DeviceFirmwareVersions {
-                        result: Some(success_result(&id)),
-                        versions: versions.clone(),
-                        ..Default::default()
-                    });
-                }
-
-                Ok(Response::new(rpc::ListComponentFirmwareVersionsResponse {
-                    devices,
-                }))
+            let Some(cm) = api.component_manager.as_ref() else {
+                return Err(unsupported_from_json_firmware_versions("compute tray"));
+            };
+            if cm.compute_tray_use_state_controller {
+                return Err(unsupported_from_json_firmware_versions("compute tray"));
             }
+
+            let resolved = resolve_compute_tray_endpoints(api, &list.machine_ids).await?;
+
+            let mut devices: Vec<rpc::DeviceFirmwareVersions> = resolved
+                .unresolved
+                .iter()
+                .map(|u| rpc::DeviceFirmwareVersions {
+                    result: Some(error_result(&u.id.to_string(), u.reason.clone())),
+                    ..Default::default()
+                })
+                .collect();
+
+            let versions = cm
+                .compute_tray
+                .list_firmware_bundles()
+                .await
+                .map_err(component_manager_error_to_status)?;
+
+            for ep in &resolved.resolved.endpoints {
+                let id = resolved
+                    .resolved
+                    .ip_to_machine_id
+                    .get(&ep.bmc_ip)
+                    .map(|id| id.to_string())
+                    .unwrap_or_else(|| ep.bmc_ip.to_string());
+                devices.push(rpc::DeviceFirmwareVersions {
+                    result: Some(success_result(&id)),
+                    versions: versions.clone(),
+                    ..Default::default()
+                });
+            }
+
+            Ok(Response::new(rpc::ListComponentFirmwareVersionsResponse {
+                devices,
+            }))
         }
         rpc::list_component_firmware_versions_request::Target::RackIds(list) => {
             if list.rack_ids.is_empty() {
                 return Err(Status::invalid_argument("rack_ids must not be empty"));
             }
 
-            let requested_rack_ids = list.rack_ids;
-            let racks = db::rack::find_by(
-                api.db_reader().as_mut(),
-                db::ObjectColumnFilter::List(db::rack::IdColumn, &requested_rack_ids),
-            )
-            .await
-            .map_err(|e| Status::internal(format!("failed to look up racks: {e}")))?;
-            let rack_by_id: HashMap<_, _> = racks
-                .into_iter()
-                .map(|rack| (rack.id.clone(), rack))
-                .collect();
-
-            let rms_client = api
-                .rms_client
-                .as_ref()
-                .ok_or_else(|| Status::failed_precondition("RMS client is not configured"))?;
-            let firmwares = rms_client
-                .list_firmware_objects(rms::ListFirmwareObjectsRequest {
-                    metadata: None,
-                    only_available: true,
-                    hardware_type: String::new(),
-                })
-                .await
-                .map_err(|e| Status::internal(format!("failed to list firmware objects: {e}")))?
-                .objects;
-
-            let devices = requested_rack_ids
-                .iter()
-                .map(|rack_id| {
-                    let Some(rack) = rack_by_id.get(rack_id) else {
-                        return rpc::DeviceFirmwareVersions {
-                            result: Some(not_found_component_result(
-                                rack_id.as_ref(),
-                                format!("rack {rack_id} not found"),
-                            )),
-                            ..Default::default()
-                        };
-                    };
-
-                    let Some(profile_id) = rack.rack_profile_id.as_ref() else {
-                        return rpc::DeviceFirmwareVersions {
-                            result: Some(invalid_argument_component_result(
-                                rack_id.as_ref(),
-                                format!("rack {rack_id} has no rack_profile_id"),
-                            )),
-                            ..Default::default()
-                        };
-                    };
-
-                    let Some(profile) = api.runtime_config.rack_profiles.get(profile_id.as_str())
-                    else {
-                        return rpc::DeviceFirmwareVersions {
-                            result: Some(not_found_component_result(
-                                rack_id.as_ref(),
-                                format!("rack profile {profile_id} not found"),
-                            )),
-                            ..Default::default()
-                        };
-                    };
-
-                    let versions = firmwares
-                        .iter()
-                        .filter(|firmware| {
-                            hardware_type_matches_filter(
-                                &firmware.hardware_type,
-                                profile.rack_hardware_type.as_ref(),
-                            )
-                        })
-                        .map(|firmware| firmware.id.clone())
-                        .collect();
-
-                    rpc::DeviceFirmwareVersions {
-                        result: Some(success_result(rack_id.as_ref())),
-                        versions,
-                        ..Default::default()
-                    }
-                })
-                .collect();
-
-            Ok(Response::new(rpc::ListComponentFirmwareVersionsResponse {
-                devices,
-            }))
+            Err(unsupported_from_json_firmware_versions("rack"))
         }
     }
 }
@@ -2624,47 +2375,6 @@ mod tests {
     }
 
     #[test]
-    fn firmware_component_type_to_proto_round_trip() {
-        use model::firmware::FirmwareComponentType;
-
-        let cases = [
-            (FirmwareComponentType::Bmc, rpc::ComputeTrayComponent::Bmc),
-            (FirmwareComponentType::Uefi, rpc::ComputeTrayComponent::Bios),
-            (FirmwareComponentType::Cec, rpc::ComputeTrayComponent::Cec),
-            (FirmwareComponentType::Nic, rpc::ComputeTrayComponent::Nic),
-            (
-                FirmwareComponentType::CpldMb,
-                rpc::ComputeTrayComponent::CpldMb,
-            ),
-            (
-                FirmwareComponentType::CpldPdb,
-                rpc::ComputeTrayComponent::CpldPdb,
-            ),
-            (
-                FirmwareComponentType::HGXBmc,
-                rpc::ComputeTrayComponent::HgxBmc,
-            ),
-            (
-                FirmwareComponentType::CombinedBmcUefi,
-                rpc::ComputeTrayComponent::CombinedBmcUefi,
-            ),
-            (FirmwareComponentType::Gpu, rpc::ComputeTrayComponent::Gpu),
-            (FirmwareComponentType::Cx7, rpc::ComputeTrayComponent::Cx7),
-            (
-                FirmwareComponentType::Unknown,
-                rpc::ComputeTrayComponent::Unknown,
-            ),
-        ];
-        for (input, expected) in cases {
-            assert_eq!(
-                firmware_component_type_to_proto(&input),
-                expected,
-                "mismatch for {input:?}"
-            );
-        }
-    }
-
-    #[test]
     fn make_result_fields() {
         let r = make_result(
             "sw-1",
@@ -2818,180 +2528,4 @@ mod tests {
         );
     }
 
-    // ---- get_compute_tray_firmware_version tests ----
-
-    use carbide_uuid::machine::{MachineIdSource, MachineType};
-    use model::bmc_info::BmcInfo;
-    use model::site_explorer::ExploredEndpoint;
-
-    fn test_machine_id() -> carbide_uuid::machine::MachineId {
-        carbide_uuid::machine::MachineId::new(MachineIdSource::Tpm, [0u8; 32], MachineType::Host)
-    }
-
-    fn stub_endpoint(ip: IpAddr) -> ExploredEndpoint {
-        ExploredEndpoint {
-            address: ip,
-            report: Default::default(),
-            report_version: ConfigVersion::initial(),
-            preingestion_state: model::site_explorer::PreingestionState::Initial,
-            waiting_for_explorer_refresh: false,
-            exploration_requested: false,
-            last_redfish_bmc_reset: None,
-            last_ipmitool_bmc_reset: None,
-            last_redfish_reboot: None,
-            last_redfish_powercycle: None,
-            pause_ingestion_and_poweron: false,
-            pause_remediation: false,
-            boot_interface_mac: None,
-        }
-    }
-
-    fn fw_snapshot_from(
-        models: HashMap<String, model::firmware::Firmware>,
-    ) -> carbide_firmware::FirmwareConfigSnapshot {
-        carbide_firmware::FirmwareConfig::new(std::path::PathBuf::new(), &models, &HashMap::new())
-            .create_snapshot()
-    }
-
-    fn empty_fw_snapshot() -> carbide_firmware::FirmwareConfigSnapshot {
-        fw_snapshot_from(HashMap::new())
-    }
-
-    #[test]
-    fn compute_fw_versions_no_bmc_ip() {
-        let id = test_machine_id();
-        let bmc = BmcInfo::default();
-        let result =
-            get_compute_tray_firmware_version(&id, &bmc, &HashMap::new(), &empty_fw_snapshot());
-        let r = result.result.unwrap();
-        assert_eq!(
-            r.status,
-            rpc::ComponentManagerStatusCode::InvalidArgument as i32,
-        );
-        assert!(r.error.contains("no BMC IP configured"));
-    }
-
-    #[test]
-    fn compute_fw_versions_unparseable_ip() {
-        let id = test_machine_id();
-        let bmc = BmcInfo {
-            ip: Some("not-an-ip".into()),
-            ..Default::default()
-        };
-        let result =
-            get_compute_tray_firmware_version(&id, &bmc, &HashMap::new(), &empty_fw_snapshot());
-        let r = result.result.unwrap();
-        assert_eq!(
-            r.status,
-            rpc::ComponentManagerStatusCode::InternalError as i32,
-        );
-        assert!(r.error.contains("unparseable BMC IP"));
-    }
-
-    #[test]
-    fn compute_fw_versions_no_explored_endpoint() {
-        let id = test_machine_id();
-        let bmc = BmcInfo {
-            ip: Some("10.0.0.1".into()),
-            ..Default::default()
-        };
-        let result =
-            get_compute_tray_firmware_version(&id, &bmc, &HashMap::new(), &empty_fw_snapshot());
-        let r = result.result.unwrap();
-        assert_eq!(r.status, rpc::ComponentManagerStatusCode::NotFound as i32);
-        assert!(r.error.contains("no explored endpoint found"));
-    }
-
-    #[test]
-    fn compute_fw_versions_no_firmware_config() {
-        let id = test_machine_id();
-        let ip: IpAddr = "10.0.0.1".parse().unwrap();
-        let bmc = BmcInfo {
-            ip: Some("10.0.0.1".into()),
-            ..Default::default()
-        };
-        let endpoints = HashMap::from([(ip, stub_endpoint(ip))]);
-        let result = get_compute_tray_firmware_version(&id, &bmc, &endpoints, &empty_fw_snapshot());
-        let r = result.result.unwrap();
-        assert_eq!(r.status, rpc::ComponentManagerStatusCode::NotFound as i32);
-        assert!(r.error.contains("no firmware config matches"));
-    }
-
-    #[test]
-    fn compute_fw_versions_empty_components() {
-        use model::firmware::Firmware;
-
-        let id = test_machine_id();
-        let ip: IpAddr = "10.0.0.1".parse().unwrap();
-        let bmc = BmcInfo {
-            ip: Some("10.0.0.1".into()),
-            ..Default::default()
-        };
-
-        let mut endpoint = stub_endpoint(ip);
-        endpoint.report.vendor = Some(bmc_vendor::BMCVendor::Nvidia);
-        endpoint.report.model = Some("TestModel".into());
-        let endpoints = HashMap::from([(ip, endpoint)]);
-
-        let fw = Firmware {
-            vendor: bmc_vendor::BMCVendor::Nvidia,
-            model: "TestModel".into(),
-            components: HashMap::new(),
-            ..Default::default()
-        };
-        let models = HashMap::from([("TestModel".into(), fw)]);
-        let fw_snapshot = fw_snapshot_from(models);
-
-        let result = get_compute_tray_firmware_version(&id, &bmc, &endpoints, &fw_snapshot);
-        let r = result.result.unwrap();
-        assert_eq!(r.status, rpc::ComponentManagerStatusCode::NotFound as i32);
-        assert!(r.error.contains("no component entries"));
-    }
-
-    #[test]
-    fn compute_fw_versions_success() {
-        use model::firmware::{Firmware, FirmwareComponent, FirmwareEntry};
-
-        let id = test_machine_id();
-        let ip: IpAddr = "10.0.0.1".parse().unwrap();
-        let bmc = BmcInfo {
-            ip: Some("10.0.0.1".into()),
-            ..Default::default()
-        };
-
-        let mut endpoint = stub_endpoint(ip);
-        endpoint.report.vendor = Some(bmc_vendor::BMCVendor::Nvidia);
-        endpoint.report.model = Some("TestModel".into());
-        let endpoints = HashMap::from([(ip, endpoint)]);
-
-        let mut components = HashMap::new();
-        components.insert(
-            FirmwareComponentType::Bmc,
-            FirmwareComponent {
-                known_firmware: vec![FirmwareEntry {
-                    version: "1.2.3".into(),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            },
-        );
-        let fw = Firmware {
-            vendor: bmc_vendor::BMCVendor::Nvidia,
-            model: "TestModel".into(),
-            components,
-            ..Default::default()
-        };
-        let models = HashMap::from([("TestModel".into(), fw)]);
-        let fw_snapshot = fw_snapshot_from(models);
-
-        let result = get_compute_tray_firmware_version(&id, &bmc, &endpoints, &fw_snapshot);
-        let r = result.result.unwrap();
-        assert_eq!(r.status, rpc::ComponentManagerStatusCode::Success as i32);
-        assert_eq!(result.compute_fw_versions.len(), 1);
-        assert_eq!(
-            result.compute_fw_versions[0].component,
-            rpc::ComputeTrayComponent::Bmc as i32,
-        );
-        assert_eq!(result.compute_fw_versions[0].versions, vec!["1.2.3"]);
-    }
 }

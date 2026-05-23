@@ -29,22 +29,6 @@ pub fn profile_hardware_type_wire_value(profile: &RackProfile) -> String {
     hardware_type_wire_value(profile.rack_hardware_type.as_ref())
 }
 
-pub fn hardware_type_matches_filter(
-    firmware_hardware_type: &str,
-    rack_hardware_type: Option<&RackHardwareType>,
-) -> bool {
-    let Some(rack_hardware_type) = rack_hardware_type else {
-        return true;
-    };
-
-    firmware_hardware_type
-        .trim()
-        .eq_ignore_ascii_case(ANY_RACK_HARDWARE_TYPE)
-        || firmware_hardware_type
-            .trim()
-            .eq_ignore_ascii_case(rack_hardware_type.0.trim())
-}
-
 pub fn rack_maintenance_access_token_key(rack_id: &RackId) -> CredentialKey {
     CredentialKey::RackMaintenanceAccessToken {
         rack_id: rack_id.clone(),
@@ -56,28 +40,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn hardware_type_matches_any_case_and_whitespace() {
-        assert!(hardware_type_matches_filter(
-            "any",
-            Some(&RackHardwareType::from("gb200"))
-        ));
-        assert!(hardware_type_matches_filter(
-            " ANY ",
-            Some(&RackHardwareType::from("gb200"))
-        ));
-        assert!(hardware_type_matches_filter(
-            "GB200",
-            Some(&RackHardwareType::from("gb200"))
-        ));
-        assert!(!hardware_type_matches_filter(
-            "gb300",
-            Some(&RackHardwareType::from("gb200"))
-        ));
-    }
-
-    #[test]
-    fn missing_rack_hardware_type_skips_filter() {
-        assert!(hardware_type_matches_filter("gb300", None));
+    fn missing_rack_hardware_type_serializes_empty() {
         assert_eq!(hardware_type_wire_value(None), "");
     }
 }
