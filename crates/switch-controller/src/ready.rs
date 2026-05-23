@@ -19,11 +19,11 @@
 
 use carbide_uuid::switch::SwitchId;
 use model::switch::{ReProvisioningState, Switch, SwitchControllerState};
-
-use crate::state_controller::state_handler::{
+use state_controller::state_handler::{
     StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
-use crate::state_controller::switch::context::SwitchStateHandlerContextObjects;
+
+use crate::context::SwitchStateHandlerContextObjects;
 
 /// Handles the Ready state for a switch.
 /// TODO: Implement Switch monitoring (health checks, status updates, etc.).

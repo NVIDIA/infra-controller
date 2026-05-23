@@ -15,7 +15,25 @@
  * limitations under the License.
  */
 
+use librms::RackManagerError;
+
+use crate::state_controller::state_handler::{ExternalServiceError, StateHandlerError};
+
 pub mod bms_client;
 pub mod firmware_object;
 pub mod firmware_update;
 pub mod rms_client;
+
+pub(crate) fn rack_manager_error(
+    operation: &'static str,
+    error: RackManagerError,
+) -> StateHandlerError {
+    ExternalServiceError::with_source(
+        "rack_manager",
+        operation,
+        error.to_string(),
+        "rack_manager_error",
+        error,
+    )
+    .into()
+}

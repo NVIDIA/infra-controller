@@ -1174,6 +1174,7 @@ dependencies = [
  "carbide-authn",
  "carbide-dpf",
  "carbide-firmware",
+ "carbide-health-metrics",
  "carbide-health-report",
  "carbide-host-support",
  "carbide-ib-fabric",
@@ -1196,6 +1197,7 @@ dependencies = [
  "carbide-spdm-controller",
  "carbide-sqlx-testing",
  "carbide-ssh",
+ "carbide-switch-controller",
  "carbide-tls",
  "carbide-utils",
  "carbide-uuid",
@@ -1880,6 +1882,16 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+]
+
+[[package]]
+name = "carbide-health-metrics"
+version = "0.0.0"
+dependencies = [
+ "carbide-api-model",
+ "carbide-health-report",
+ "carbide-utils",
+ "opentelemetry",
 ]
 
 [[package]]
@@ -2690,6 +2702,28 @@ dependencies = [
  "tonic-prost-build",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "carbide-switch-controller"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "carbide-api-db",
+ "carbide-api-model",
+ "carbide-health-metrics",
+ "carbide-secrets",
+ "carbide-site-explorer",
+ "carbide-utils",
+ "carbide-uuid",
+ "config-version",
+ "eyre",
+ "librms",
+ "mac_address",
+ "opentelemetry",
+ "sqlx",
+ "state-controller",
+ "tracing",
 ]
 
 [[package]]
@@ -6221,7 +6255,7 @@ dependencies = [
 [[package]]
 name = "libredfish"
 version = "0.0.0"
-source = "git+https://github.com/NVIDIA/libredfish.git?tag=v0.44.2#e2e047cf1fddb4ec8861d7e7f8bdcf7ecbbdb705"
+source = "git+https://github.com/NVIDIA/libredfish.git?tag=v0.44.3#02f9c19148f4aa4c6b7c9e5efe8f40361c9a3167"
 dependencies = [
  "chrono",
  "clap",

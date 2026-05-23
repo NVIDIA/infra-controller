@@ -16,23 +16,8 @@
  */
 
 use carbide_dpf::DpfError;
-use librms::RackManagerError;
 
 use crate::state_controller::state_handler::{ExternalServiceError, StateHandlerError};
-
-pub(crate) fn rack_manager_error(
-    operation: &'static str,
-    error: RackManagerError,
-) -> StateHandlerError {
-    ExternalServiceError::with_source(
-        "rack_manager",
-        operation,
-        error.to_string(),
-        "rack_manager_error",
-        error,
-    )
-    .into()
-}
 
 pub(crate) fn dpf_error(error: DpfError) -> StateHandlerError {
     ExternalServiceError::with_source("dpf", "", error.to_string(), "dpf_error", error).into()

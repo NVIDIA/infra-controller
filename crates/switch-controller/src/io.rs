@@ -24,10 +24,10 @@ use model::StateSla;
 use model::controller_outcome::PersistentStateHandlerOutcome;
 use model::switch::{Switch, SwitchControllerState, SwitchSearchFilter, state_sla};
 use sqlx::PgConnection;
+use state_controller::io::StateControllerIO;
 
-use crate::state_controller::io::StateControllerIO;
-use crate::state_controller::switch::context::SwitchStateHandlerContextObjects;
-use crate::state_controller::switch::metrics::SwitchMetricsEmitter;
+use crate::context::SwitchStateHandlerContextObjects;
+use crate::metrics::SwitchMetricsEmitter;
 
 /// State Controller IO implementation for Switches
 #[derive(Default, Debug)]

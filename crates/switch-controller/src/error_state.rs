@@ -15,28 +15,29 @@
  * limitations under the License.
  */
 
-//! Handler for SwitchControllerState::Created.
+//! Handler for SwitchControllerState::Error.
 
 use carbide_uuid::switch::SwitchId;
-use model::switch::{InitializingState, Switch, SwitchControllerState};
-
-use crate::state_controller::state_handler::{
+use model::switch::{Switch, SwitchControllerState};
+use state_controller::state_handler::{
     StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
-use crate::state_controller::switch::context::SwitchStateHandlerContextObjects;
 
-pub async fn handle_created(
-    switch_id: &SwitchId,
-    _state: &mut Switch,
+use crate::context::SwitchStateHandlerContextObjects;
+
+/// Handles the Error state for a switch.
+/// If marked for deletion, transition to Deleting; otherwise wait for manual intervention.
+pub async fn handle_error(
+    _switch_id: &SwitchId,
+    state: &mut Switch,
     _ctx: &mut StateHandlerContext<'_, SwitchStateHandlerContextObjects>,
 ) -> Result<StateHandlerOutcome<SwitchControllerState>, StateHandlerError> {
-    tracing::info!(
-        "Switch {:?} created, transitioning to Initializing",
-        switch_id
-    );
-    Ok(StateHandlerOutcome::transition(
-        SwitchControllerState::Initializing {
-            initializing_state: InitializingState::WaitForOsMachineInterface,
-        },
-    ))
+    tracing::info!("Switch is in error state {}", _switch_id.to_string());
+    if state.is_marked_as_deleted() {
+        Ok(StateHandlerOutcome::transition(
+            SwitchControllerState::Deleting,
+        ))
+    } else {
+        Ok(StateHandlerOutcome::do_nothing())
+    }
 }

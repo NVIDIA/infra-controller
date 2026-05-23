@@ -20,11 +20,11 @@
 use carbide_uuid::switch::SwitchId;
 use forge_secrets::credentials::{CredentialKey, Credentials};
 use model::switch::{ConfiguringState, Switch, SwitchControllerState, ValidatingState};
-
-use crate::state_controller::state_handler::{
+use state_controller::state_handler::{
     StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
-use crate::state_controller::switch::context::SwitchStateHandlerContextObjects;
+
+use crate::context::SwitchStateHandlerContextObjects;
 
 /// Handles the Configuring state for a switch.
 pub async fn handle_configuring(

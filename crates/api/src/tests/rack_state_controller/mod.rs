@@ -219,7 +219,7 @@ async fn test_can_retrieve_rack_state_history_with_real_handler(
 
     // Run the real handler through the controller.
     let rack_handler = Arc::new(RackStateHandler::default());
-    let handler_services = Arc::new(env.state_handler_services());
+    let handler_services = Arc::new(env.rack_state_handler_services());
     let cancel_token = CancellationToken::new();
     let mut controller = StateController::<RackStateControllerIO>::builder()
         .iteration_config(IterationConfig {
@@ -462,7 +462,7 @@ async fn test_error_state_does_nothing_with_controller(
     .await?;
 
     let rack_handler = Arc::new(RackStateHandler::default());
-    let handler_services = Arc::new(env.state_handler_services());
+    let handler_services = Arc::new(env.rack_state_handler_services());
     let cancel_token = CancellationToken::new();
     let mut controller = StateController::<RackStateControllerIO>::builder()
         .iteration_config(IterationConfig {
@@ -506,7 +506,7 @@ async fn test_rack_deletion_with_state_controller(
     let rack_handler = Arc::new(TestRackStateHandler::default());
     const ITERATION_TIME: Duration = Duration::from_millis(50);
 
-    let handler_services = Arc::new(env.state_handler_services());
+    let handler_services = Arc::new(env.rack_state_handler_services());
 
     let cancel_token = CancellationToken::new();
     let mut controller = StateController::<RackStateControllerIO>::builder()

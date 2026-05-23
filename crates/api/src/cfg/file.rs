@@ -54,6 +54,7 @@ use regex::Regex;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::state_controller::config::IterationConfig;
+use crate::state_controller::rack::config::{RackValidationConfig, RmsConfig};
 
 static BF2_NIC: &str = "24.47.2682";
 static BF2_BMC: &str = "BF-25.10-20";
@@ -553,6 +554,20 @@ pub struct CarbideConfig {
     #[serde(default)]
     pub arm_pxe_boot_url_override: Option<String>,
 
+    /// Vendors for which the state controller should pin the UEFI HTTP boot
+    /// URL on the BMC (via Redfish `HttpBootUri`) in addition to the existing
+    /// DHCP option 67 path. Machines whose BMC vendor is NOT in this list
+    /// continue to rely on carbide-dhcp's option 67 for the URL.
+    ///
+    /// Empty by default — no machines get the BMC-pinned URL until vendors
+    /// are explicitly added here (typically after per-vendor verification on
+    /// real hardware). Adding a vendor that libredfish doesn't yet implement
+    /// (e.g., `Dell` / `Lenovo` until their libredfish impls land) will
+    /// surface a runtime `NotSupported` error; carbide-dhcp option 67 is the
+    /// fallback URL source.
+    #[serde(default)]
+    pub set_http_boot_uri_for_vendors: Vec<BMCVendor>,
+
     /// Alternate API URL for external hosts that cannot resolve
     /// https://carbide-pxe.forge. This be an IP (e.g., "https://10.0.0.1:1079"),
     /// or an externally resolvable hostname (e.g.,
@@ -714,7 +729,7 @@ impl Default for DpfConfig {
 }
 
 fn default_dpf_bfb_url() -> String {
-    "https://content.mellanox.com/BlueField/BFBs/Ubuntu24.04/bf-bundle-3.2.1-34_25.11_ubuntu-24.04_64k_prod.bfb".to_string()
+    "https://content.mellanox.com/BlueField/BFBs/Ubuntu24.04/bf-bundle-3.2.2-125_26.02_ubuntu-24.04_64k_prod.bfb".to_string()
 }
 
 fn default_dpf_deployment_name() -> String {
@@ -1726,30 +1741,6 @@ fn default_max_database_connections() -> u32 {
     1000
 }
 
-fn default_rms_enforce_tls() -> bool {
-    true
-}
-
-/// Rack Manager Service (RMS) configuration for API connectivity and mTLS.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-pub struct RmsConfig {
-    /// URL of the RMS API for rack-level firmware upgrades and power sequencing.
-    pub api_url: Option<String>,
-
-    /// Path to the root CA certificate for TLS verification when connecting to RMS.
-    pub root_ca_path: Option<String>,
-
-    /// Path to the client certificate PEM for mTLS with RMS.
-    pub client_cert: Option<String>,
-
-    /// Path to the client private key PEM for mTLS with RMS.
-    pub client_key: Option<String>,
-
-    /// Enforce TLS when connecting to RMS. Defaults to true.
-    #[serde(default = "default_rms_enforce_tls")]
-    pub enforce_tls: bool,
-}
-
 /// DpuConfig related internal configuration
 #[derive(Clone, Debug, Serialize)]
 pub struct DpuConfig {
@@ -2320,35 +2311,6 @@ pub struct MachineValidationTestConfig {
 }
 
 impl MachineValidationConfig {
-    const fn default_run_interval() -> std::time::Duration {
-        std::time::Duration::from_secs(60)
-    }
-}
-
-/// Configuration for rack-level validation (partition-based
-/// multi-node tests run after firmware upgrade / maintenance).
-///
-/// Example:
-/// ```toml
-/// [rack_validation_config]
-/// enabled = true
-/// run_interval = "60s"
-/// ```
-#[derive(Default, Clone, Debug, Deserialize, Serialize)]
-pub struct RackValidationConfig {
-    /// Enables rack validation testing.
-    #[serde(default)]
-    pub enabled: bool,
-
-    #[serde(
-        default = "RackValidationConfig::default_run_interval",
-        deserialize_with = "deserialize_duration",
-        serialize_with = "as_std_duration"
-    )]
-    pub run_interval: std::time::Duration,
-}
-
-impl RackValidationConfig {
     const fn default_run_interval() -> std::time::Duration {
         std::time::Duration::from_secs(60)
     }

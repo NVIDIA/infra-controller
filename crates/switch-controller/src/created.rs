@@ -15,31 +15,28 @@
  * limitations under the License.
  */
 
-//! Handler for PowerShelfControllerState::Configuring.
+//! Handler for SwitchControllerState::Created.
 
-use carbide_uuid::power_shelf::PowerShelfId;
-use model::power_shelf::{PowerShelf, PowerShelfControllerState};
+use carbide_uuid::switch::SwitchId;
+use model::switch::{InitializingState, Switch, SwitchControllerState};
 use state_controller::state_handler::{
     StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
 
-use crate::state_controller::power_shelf::context::PowerShelfStateHandlerContextObjects;
+use crate::context::SwitchStateHandlerContextObjects;
 
-/// Handles the Configuring state for a power shelf.
-///
-/// TODO: Implement real configuration logic. This would typically involve:
-/// 1. Configuring the PowerShelf
-/// 2. Updating the PowerShelf status
-pub async fn handle_configuring(
-    power_shelf_id: &PowerShelfId,
-    _state: &mut PowerShelf,
-    _ctx: &mut StateHandlerContext<'_, PowerShelfStateHandlerContextObjects>,
-) -> Result<StateHandlerOutcome<PowerShelfControllerState>, StateHandlerError> {
+pub async fn handle_created(
+    switch_id: &SwitchId,
+    _state: &mut Switch,
+    _ctx: &mut StateHandlerContext<'_, SwitchStateHandlerContextObjects>,
+) -> Result<StateHandlerOutcome<SwitchControllerState>, StateHandlerError> {
     tracing::info!(
-        "Configuring PowerShelf {}, transitioning to Ready",
-        power_shelf_id
+        "Switch {:?} created, transitioning to Initializing",
+        switch_id
     );
     Ok(StateHandlerOutcome::transition(
-        PowerShelfControllerState::Ready,
+        SwitchControllerState::Initializing {
+            initializing_state: InitializingState::WaitForOsMachineInterface,
+        },
     ))
 }
