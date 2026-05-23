@@ -452,7 +452,7 @@ fn build_switch_device_info_request(
 }
 
 #[cfg(not(test))]
-const NMX_CONFIGURE_RMS_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+const NMX_CONFIGURE_RMS_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[cfg(not(test))]
 fn build_nmx_configure_rms_client(rms_config: &RmsConfig) -> Option<librms::RackManagerApi> {
