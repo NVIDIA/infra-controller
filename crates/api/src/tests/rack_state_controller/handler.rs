@@ -37,7 +37,6 @@ use model::rack_type::{
     RackHardwareClass, RackHardwareTopology, RackHardwareType, RackProfile, RackProfileConfig,
 };
 use model::switch::{NewSwitch, SwitchConfig};
-use serde_json::json;
 use tonic::Request;
 
 use crate::state_controller::db_write_batch::DbWriteBatch;
@@ -170,58 +169,6 @@ fn config_with_nmx_cluster_profile() -> crate::cfg::file::CarbideConfig {
         },
     );
     config
-}
-
-fn default_lookup_table_json() -> serde_json::Value {
-    json!({
-        "devices": {
-            "Compute Node": {
-                "HMC_prod": {
-                    "filename": "hmc-prod.bin",
-                    "target": "/redfish/v1/Chassis/HGX_Chassis_0",
-                    "component": "HMC",
-                    "bundle": "bundle-hmc",
-                    "firmware_type": "prod",
-                    "version": "1.0.0"
-                },
-                "BMC_prod": {
-                    "filename": "bmc-prod.bin",
-                    "target": "FW_BMC_0",
-                    "component": "BMC",
-                    "bundle": "bundle-bmc",
-                    "firmware_type": "prod",
-                    "version": "1.0.0"
-                }
-            }
-        }
-    })
-}
-
-async fn insert_default_rack_firmware(
-    pool: &sqlx::PgPool,
-    firmware_id: &str,
-    rack_hardware_type: RackHardwareType,
-    available: bool,
-) {
-    let mut txn = pool.begin().await.unwrap();
-    db::rack_firmware::create(
-        &mut txn,
-        firmware_id,
-        rack_hardware_type,
-        json!({ "Id": firmware_id }),
-        Some(default_lookup_table_json()),
-    )
-    .await
-    .unwrap();
-    if available {
-        db::rack_firmware::set_available(&mut txn, firmware_id, true)
-            .await
-            .unwrap();
-    }
-    db::rack_firmware::set_default(&mut txn, firmware_id)
-        .await
-        .unwrap();
-    txn.commit().await.unwrap();
 }
 
 async fn create_single_compute_rack(
