@@ -1068,54 +1068,6 @@ impl RmsApi for MockRmsApi {
         self.get_firmware_job_status_calls.lock().await.push(cmd);
         pop_or_err(&mut self.get_firmware_job_status_responses.lock().await)
     }
-    async fn add_firmware_object(
-        &self,
-        _cmd: rms::AddFirmwareObjectRequest,
-    ) -> Result<rms::FirmwareObject, RackManagerError> {
-        Ok(rms::FirmwareObject::default())
-    }
-    async fn get_firmware_object(
-        &self,
-        _cmd: rms::GetFirmwareObjectRequest,
-    ) -> Result<rms::FirmwareObject, RackManagerError> {
-        Ok(rms::FirmwareObject::default())
-    }
-    async fn list_firmware_objects(
-        &self,
-        _cmd: rms::ListFirmwareObjectsRequest,
-    ) -> Result<rms::ListFirmwareObjectsResponse, RackManagerError> {
-        Ok(rms::ListFirmwareObjectsResponse::default())
-    }
-    async fn delete_firmware_object(
-        &self,
-        _cmd: rms::DeleteFirmwareObjectRequest,
-    ) -> Result<rms::OperationResponse, RackManagerError> {
-        Ok(rms::OperationResponse::default())
-    }
-    async fn set_default_firmware_object(
-        &self,
-        _cmd: rms::SetDefaultFirmwareObjectRequest,
-    ) -> Result<rms::FirmwareObject, RackManagerError> {
-        Ok(rms::FirmwareObject::default())
-    }
-    async fn apply_firmware_object(
-        &self,
-        _cmd: rms::ApplyFirmwareObjectRequest,
-    ) -> Result<rms::ApplyFirmwareObjectResponse, RackManagerError> {
-        Ok(rms::ApplyFirmwareObjectResponse::default())
-    }
-    async fn apply_switch_system_image(
-        &self,
-        _cmd: rms::ApplySwitchSystemImageRequest,
-    ) -> Result<rms::ApplySwitchSystemImageResponse, RackManagerError> {
-        Ok(rms::ApplySwitchSystemImageResponse::default())
-    }
-    async fn get_firmware_object_history(
-        &self,
-        _cmd: rms::GetFirmwareObjectHistoryRequest,
-    ) -> Result<rms::GetFirmwareObjectHistoryResponse, RackManagerError> {
-        Ok(rms::GetFirmwareObjectHistoryResponse::default())
-    }
     async fn list_firmware_on_switch(
         &self,
         cmd: rms::ListFirmwareOnSwitchCommand,
