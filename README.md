@@ -77,3 +77,5 @@ your own risk in production environments. The software is provided "as is"
 without warranties of any kind. Features, APIs, and configurations may change
 without notice in future releases. For production deployments, thoroughly test
 in non-critical environments first.
+
+<!-- ci-gate test: both -->
