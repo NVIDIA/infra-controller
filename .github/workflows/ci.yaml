@@ -37,7 +37,7 @@ env:
 
 jobs:
   changes:
-    name: Detect Carbide CI Gate
+    name: Detect Core CI Gate
     runs-on: ubuntu-latest
     outputs:
       run_core_ci: ${{ steps.gate.outputs.run_core_ci }}
@@ -1442,8 +1442,8 @@ jobs:
   # `changes` + `prepare` are in needs so a gate or prepare failure doesn't
   # silently pass (downstream leaves become SKIPPED in those cases).
   # Branch protection ruleset should require ONLY this aggregator + rest-ci-pass.
-  carbide-ci-pass:
-    name: carbide-ci-pass
+  core-ci-pass:
+    name: core-ci-pass
     runs-on: ubuntu-latest
     if: always()
     needs:
