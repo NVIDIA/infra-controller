@@ -23,7 +23,6 @@ use db::measured_boot::bundle;
 use db::measured_boot::interface::bundle::{
     get_machines_for_bundle_id, get_machines_for_bundle_name, get_measurement_bundle_records,
 };
-use measured_boot::pcr::PcrRegisterValue;
 use measured_boot::records::MeasurementBundleState;
 use rpc::protos::measured_boot::{
     CreateMeasurementBundleRequest, CreateMeasurementBundleResponse,
@@ -41,6 +40,7 @@ use tonic::Status;
 
 use crate::api::Api;
 use crate::errors::CarbideError;
+use crate::measured_boot::convert_vec;
 
 /// handle_create_measurement_bundle handles the CreateMeasurementBundle
 /// API endpoint.
@@ -55,7 +55,7 @@ pub async fn handle_create_measurement_bundle(
         req.profile_id
             .ok_or(CarbideError::MissingArgument("profile_id"))?,
         req.name,
-        &PcrRegisterValue::from_pb_vec(req.pcr_values),
+        &convert_vec(req.pcr_values),
         Some(MeasurementBundleState::from(state)),
     )
     .await

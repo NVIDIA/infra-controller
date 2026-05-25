@@ -20,13 +20,13 @@
 
 use std::str::FromStr;
 
-use ::rpc::admin_cli::ToTable;
+use ::rpc::measured_boot::FromGrpcOpt;
 use ::rpc::protos::measured_boot::{
     ListMeasurementBundleMachinesRequest, RenameMeasurementBundleRequest,
     ShowMeasurementBundleRequest, UpdateMeasurementBundleRequest,
 };
 use carbide_uuid::machine::MachineId;
-use measured_boot::FromGrpcOpt;
+use measured_boot::ToTable;
 use measured_boot::bundle::MeasurementBundle;
 use measured_boot::records::MeasurementBundleRecord;
 use serde::Serialize;

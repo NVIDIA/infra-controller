@@ -1172,11 +1172,14 @@ dependencies = [
  "carbide-api-db",
  "carbide-api-model",
  "carbide-authn",
+ "carbide-dpa-interface-controller",
  "carbide-dpf",
  "carbide-firmware",
+ "carbide-health-metrics",
  "carbide-health-report",
  "carbide-host-support",
  "carbide-ib-fabric",
+ "carbide-ib-partition-controller",
  "carbide-ipmi",
  "carbide-ipxe-renderer",
  "carbide-libmlx",
@@ -1184,6 +1187,7 @@ dependencies = [
  "carbide-measured-boot",
  "carbide-metrics-utils",
  "carbide-network",
+ "carbide-network-segment-controller",
  "carbide-nvlink-manager",
  "carbide-preingestion-manager",
  "carbide-prost-builder",
@@ -1192,8 +1196,10 @@ dependencies = [
  "carbide-rpc-utils",
  "carbide-secrets",
  "carbide-site-explorer",
+ "carbide-spdm-controller",
  "carbide-sqlx-testing",
  "carbide-ssh",
+ "carbide-switch-controller",
  "carbide-tls",
  "carbide-utils",
  "carbide-uuid",
@@ -1312,7 +1318,6 @@ dependencies = [
  "carbide-macros",
  "carbide-measured-boot",
  "carbide-network",
- "carbide-rpc",
  "carbide-secrets",
  "carbide-sqlx-testing",
  "carbide-utils",
@@ -1342,7 +1347,6 @@ dependencies = [
  "time",
  "tokio",
  "tokio-util",
- "toml 1.1.2+spec-1.1.0",
  "tonic",
  "tracing",
  "tracing-subscriber",
@@ -1382,18 +1386,15 @@ dependencies = [
  "async-trait",
  "base64",
  "bmc-vendor",
- "carbide-dpf",
  "carbide-health-report",
  "carbide-ipxe-renderer",
  "carbide-libmlx-model",
  "carbide-network",
- "carbide-rpc",
  "carbide-secrets",
  "carbide-sqlx-testing",
  "carbide-utils",
  "carbide-uuid",
  "carbide-version",
- "casbin",
  "chrono",
  "config-version",
  "dns-record",
@@ -1421,7 +1422,6 @@ dependencies = [
  "tokio",
  "toml 1.1.2+spec-1.1.0",
  "tracing",
- "tss-esapi",
  "url",
  "uuid",
  "version-compare 0.2.1",
@@ -1485,14 +1485,13 @@ dependencies = [
  "axum",
  "axum-extra",
  "bytes",
- "carbide-api-db",
  "carbide-authn",
- "carbide-secrets",
+ "carbide-rpc",
+ "carbide-tls",
  "carbide-utils",
  "carbide-version",
  "casbin",
  "clap",
- "config-version",
  "figment",
  "futures",
  "futures-util",
@@ -1504,6 +1503,7 @@ dependencies = [
  "hyper-util",
  "lazy_static",
  "logfmt",
+ "mac_address",
  "metrics-endpoint",
  "opentelemetry",
  "opentelemetry-otlp",
@@ -1514,12 +1514,12 @@ dependencies = [
  "rustls-pemfile",
  "rustls-pki-types",
  "serde",
- "sqlx",
  "thiserror 2.0.18",
  "tokio",
  "tokio-rustls",
  "tokio-stream",
  "tokio-util",
+ "tonic",
  "tower",
  "tower-http",
  "tracing",
@@ -1637,6 +1637,30 @@ dependencies = [
  "trust-dns-resolver",
  "trust-dns-server",
  "uuid",
+]
+
+[[package]]
+name = "carbide-dpa-interface-controller"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "carbide-api-db",
+ "carbide-api-model",
+ "carbide-utils",
+ "carbide-uuid",
+ "chrono",
+ "config-version",
+ "duration-str",
+ "eyre",
+ "mac_address",
+ "mqttea",
+ "opentelemetry",
+ "prost",
+ "serde",
+ "sqlx",
+ "state-controller",
+ "tonic-prost-build",
+ "tracing",
 ]
 
 [[package]]
@@ -1887,6 +1911,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "carbide-health-metrics"
+version = "0.0.0"
+dependencies = [
+ "carbide-api-model",
+ "carbide-health-report",
+ "carbide-utils",
+ "opentelemetry",
+]
+
+[[package]]
 name = "carbide-health-report"
 version = "0.0.0"
 dependencies = [
@@ -1960,8 +1994,8 @@ dependencies = [
  "carbide-api-db",
  "carbide-api-model",
  "carbide-health-report",
- "carbide-rpc",
  "carbide-secrets",
+ "carbide-tls",
  "carbide-utils",
  "carbide-uuid",
  "chrono",
@@ -1986,6 +2020,22 @@ dependencies = [
  "tokio-util",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "carbide-ib-partition-controller"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "carbide-api-db",
+ "carbide-api-model",
+ "carbide-ib-fabric",
+ "carbide-uuid",
+ "config-version",
+ "eyre",
+ "sqlx",
+ "state-controller",
+ "tracing",
 ]
 
 [[package]]
@@ -2172,7 +2222,6 @@ dependencies = [
 name = "carbide-measured-boot"
 version = "0.0.0"
 dependencies = [
- "carbide-rpc",
  "carbide-uuid",
  "chrono",
  "clap",
@@ -2197,7 +2246,7 @@ dependencies = [
 name = "carbide-mockdpa"
 version = "0.0.1"
 dependencies = [
- "carbide-rpc",
+ "carbide-dpa-interface-controller",
  "chrono",
  "clap",
  "mqttea",
@@ -2224,6 +2273,25 @@ dependencies = [
  "serde_json",
  "sqlx",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "carbide-network-segment-controller"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "carbide-api-db",
+ "carbide-api-model",
+ "carbide-utils",
+ "carbide-uuid",
+ "chrono",
+ "config-version",
+ "eyre",
+ "ipnetwork",
+ "opentelemetry",
+ "sqlx",
+ "state-controller",
+ "tracing",
 ]
 
 [[package]]
@@ -2342,6 +2410,7 @@ dependencies = [
  "reqwest 0.13.3",
  "serde_json",
  "sqlx",
+ "state-controller",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -2353,9 +2422,13 @@ name = "carbide-rpc"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "base64",
+ "carbide-api-model",
  "carbide-health-report",
  "carbide-http-connector",
+ "carbide-ipxe-renderer",
  "carbide-libmlx-model",
+ "carbide-measured-boot",
  "carbide-network",
  "carbide-secrets",
  "carbide-tls",
@@ -2363,6 +2436,7 @@ dependencies = [
  "carbide-uuid",
  "chrono",
  "clap",
+ "config-version",
  "csv",
  "data-encoding",
  "dns-record",
@@ -2372,12 +2446,15 @@ dependencies = [
  "hyper-rustls",
  "hyper-util",
  "ipnetwork",
+ "itertools 0.14.0",
  "log",
  "mac_address",
  "nonempty",
+ "once_cell",
  "prettytable-rs",
  "prost",
  "prost-types",
+ "regex",
  "resolv-conf",
  "rustls",
  "rustls-pemfile",
@@ -2552,6 +2629,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "carbide-spdm-controller"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "carbide-api-db",
+ "carbide-api-model",
+ "carbide-redfish",
+ "carbide-utils",
+ "config-version",
+ "itertools 0.14.0",
+ "libredfish",
+ "nras",
+ "opentelemetry",
+ "sqlx",
+ "state-controller",
+ "tracing",
+]
+
+[[package]]
 name = "carbide-sqlx-testing"
 version = "0.0.0"
 dependencies = [
@@ -2651,6 +2747,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "carbide-switch-controller"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "carbide-api-db",
+ "carbide-api-model",
+ "carbide-health-metrics",
+ "carbide-secrets",
+ "carbide-site-explorer",
+ "carbide-utils",
+ "carbide-uuid",
+ "config-version",
+ "eyre",
+ "librms",
+ "mac_address",
+ "opentelemetry",
+ "sqlx",
+ "state-controller",
+ "tracing",
+]
+
+[[package]]
 name = "carbide-systemd"
 version = "0.0.0"
 dependencies = [
@@ -2663,6 +2781,7 @@ dependencies = [
 name = "carbide-tls"
 version = "0.0.0"
 dependencies = [
+ "rustls",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -6178,7 +6297,7 @@ dependencies = [
 [[package]]
 name = "libredfish"
 version = "0.0.0"
-source = "git+https://github.com/NVIDIA/libredfish.git?tag=v0.44.2#e2e047cf1fddb4ec8861d7e7f8bdcf7ecbbdb705"
+source = "git+https://github.com/NVIDIA/libredfish.git?tag=v0.44.4#dd2152ac5642c5256b893e396647e159003d0071"
 dependencies = [
  "chrono",
  "clap",
@@ -6210,7 +6329,7 @@ dependencies = [
 [[package]]
 name = "librms"
 version = "0.0.12"
-source = "git+https://github.com/NVIDIA/nv-rms-client.git?tag=v0.0.12-rc1#94a7d944e80075cd57d04bdf0ebf2db497e205db"
+source = "git+https://github.com/NVIDIA/nv-rms-client.git?tag=v0.0.12-rc3#88797e64f4fbf072b5844ed7b8d7e1e987d4aef6"
 dependencies = [
  "async-trait",
  "chrono",
@@ -6220,6 +6339,7 @@ dependencies = [
  "hyper-timeout",
  "hyper-util",
  "prost",
+ "prost-types",
  "rustls",
  "rustls-pemfile",
  "serde",
@@ -11237,7 +11357,7 @@ dependencies = [
 [[package]]
 name = "tonic-client-wrapper"
 version = "1.0.0"
-source = "git+https://github.com/NVIDIA/nv-rms-client.git?tag=v0.0.12-rc1#94a7d944e80075cd57d04bdf0ebf2db497e205db"
+source = "git+https://github.com/NVIDIA/nv-rms-client.git?tag=v0.0.12-rc3#88797e64f4fbf072b5844ed7b8d7e1e987d4aef6"
 dependencies = [
  "async-trait",
  "heck",

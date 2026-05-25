@@ -21,6 +21,7 @@ use carbide_network::virtualization::{VpcVirtualizationType, get_svi_ip};
 use carbide_uuid::instance::InstanceId;
 use carbide_uuid::machine::{MachineId, MachineInterfaceId};
 use carbide_uuid::network::NetworkSegmentId;
+use carbide_uuid::vpc::VpcId;
 use db::vpc::{self};
 use db::vpc_peering::get_prefixes_by_vpcs;
 use db::{self, ObjectColumnFilter, network_security_group};
@@ -33,10 +34,11 @@ use model::network_security_group::{
 };
 use model::network_segment::NetworkSegment;
 use model::resource_pool::common::CommonPools;
+use model::vpc::{ALL_VPC_VIRTUALIZATION_TYPES, VpcVirtualizationTypeCapabilities};
 use sqlx::PgConnection;
 
 use crate::CarbideError;
-use crate::cfg::file::VpcPeeringPolicy;
+use crate::cfg::file::{FnnConfig, FnnRoutingProfileConfig, VpcPeeringPolicy};
 
 #[derive(Default, Clone)]
 pub struct EthVirtData {
@@ -44,6 +46,14 @@ pub struct EthVirtData {
     pub dhcp_servers: Vec<String>,
     pub deny_prefixes: Vec<Ipv4Network>,
     pub site_fabric_prefixes: Option<SiteFabricPrefixList>,
+}
+
+pub struct AdminNetworkOptions<'a> {
+    pub fnn_enabled: bool,
+    pub common_pools: &'a CommonPools,
+    pub booturl: &'a Option<String>,
+    pub use_vpc_vrf_loopback: bool,
+    pub routing_profile: Option<&'a FnnRoutingProfileConfig>,
 }
 
 #[derive(Clone)]
@@ -202,11 +212,16 @@ pub async fn admin_network(
     txn: &mut PgConnection,
     snapshot: &ManagedHostStateSnapshot,
     dpu_machine_id: &MachineId,
-    fnn_enabled_on_admin: bool,
-    common_pools: &CommonPools,
-    booturl: &Option<String>,
-    use_vpc_vrf_loopback: bool,
+    options: AdminNetworkOptions<'_>,
 ) -> Result<(rpc::FlatInterfaceConfig, MachineInterfaceId), tonic::Status> {
+    let AdminNetworkOptions {
+        fnn_enabled: fnn_enabled_on_admin,
+        common_pools,
+        booturl,
+        use_vpc_vrf_loopback,
+        routing_profile: admin_vpc_routing_profile,
+    } = options;
+
     let admin_segments = db::network_segment::admin(txn).await?;
     let admin_segment_ids = admin_segments
         .iter()
@@ -401,6 +416,7 @@ pub async fn admin_network(
         internal_uuid: None,
         mtu: u32::try_from(admin_segment.config.mtu).ok(),
         ipv6_interface_config: None,
+        routing_profile: admin_vpc_routing_profile.map(rpc::RoutingProfile::from),
     };
     Ok((cfg, interface.id))
 }
@@ -418,6 +434,7 @@ pub async fn tenant_network(
     segment: &NetworkSegment,
     vpc_peering_policy_on_existing: Option<VpcPeeringPolicy>,
     booturl: &Option<String>,
+    fnn_config: Option<&FnnConfig>,
 ) -> Result<rpc::FlatInterfaceConfig, tonic::Status> {
     // Any stretchable segment is treated as L2 segment by FNN.
     let is_l2_segment = segment.status.can_stretch.unwrap_or(true);
@@ -470,41 +487,49 @@ pub async fn tenant_network(
     if let Some(policy) = vpc_peering_policy_on_existing
         && let Some(vpc_id) = segment.config.vpc_id
     {
-        match policy {
+        // The peer-ID universe depends on the site policy. Under
+        // `Exclusive`, the per-type capability layer dictates which
+        // peer types are compatible (e.g. an FNN VPC can have Flat
+        // peers via Flat's `peers_with` listing). Under `Mixed`, the
+        // operator opts out of capability enforcement and we accept
+        // any peering record. `None` disables peering entirely.
+        let vpc_peer_ids: Vec<VpcId> = match policy {
             VpcPeeringPolicy::Exclusive => {
-                // Under exclusive policy, VPC only allowed to peer with VPC of same network virtualization type.
-                let allowed_network_virtualization_types = vec![network_virtualization_type];
-                let vpc_peers = db::vpc_peering::get_vpc_peer_vnis(
-                    txn,
-                    vpc_id,
-                    allowed_network_virtualization_types,
-                )
-                .await?;
-
-                let vpc_peer_ids = vpc_peers.iter().map(|(vpc_id, _)| *vpc_id).collect();
-                vpc_peer_prefixes = get_prefixes_by_vpcs(txn, &vpc_peer_ids).await?;
-                if network_virtualization_type == VpcVirtualizationType::Fnn {
-                    vpc_peer_vnis = vpc_peers.iter().map(|(_, vni)| *vni as u32).collect();
-                }
-            }
-            VpcPeeringPolicy::Mixed => {
-                // Any combination of VPC peering allowed
-                let vpc_peer_ids = db::vpc_peering::get_vpc_peer_ids(txn, vpc_id).await?;
-                vpc_peer_prefixes = get_prefixes_by_vpcs(txn, &vpc_peer_ids).await?;
-                if network_virtualization_type == VpcVirtualizationType::Fnn {
-                    // Get vnis of all FNN peers for route import
-                    vpc_peer_vnis = db::vpc_peering::get_vpc_peer_vnis(
-                        txn,
-                        vpc_id,
-                        vec![VpcVirtualizationType::Fnn],
-                    )
+                let allowed_peer_types = network_virtualization_type
+                    .capabilities()
+                    .peers_with
+                    .to_vec();
+                db::vpc_peering::get_vpc_peer_vnis(txn, vpc_id, allowed_peer_types)
                     .await?
-                    .iter()
-                    .map(|(_, vni)| *vni as u32)
-                    .collect();
-                }
+                    .into_iter()
+                    .map(|(id, _)| id)
+                    .collect()
             }
-            VpcPeeringPolicy::None => {}
+            VpcPeeringPolicy::Mixed => db::vpc_peering::get_vpc_peer_ids(txn, vpc_id).await?,
+            VpcPeeringPolicy::None => vec![],
+        };
+
+        vpc_peer_prefixes = get_prefixes_by_vpcs(txn, &vpc_peer_ids).await?;
+
+        // VNI-based peer route imports are independent of peering
+        // policy: they're a per-type question on both sides.
+        // - Self: does this VPC's DPU plumb peer VNIs into its VRF?
+        //   (`imports_peer_vnis_into_overlay`, FNN-only today.)
+        // - Peer: should this peer's VNI be exposed for the self-side
+        //   to pick up? (`vni_advertised_to_peers`, FNN + Flat today --
+        //   Flat advertises its VNI so pluggable SDN integrations on
+        //   the network operator's fabric can use it.)
+        if network_virtualization_type.imports_peer_vnis_into_overlay() {
+            let vni_peer_types: Vec<_> = ALL_VPC_VIRTUALIZATION_TYPES
+                .iter()
+                .copied()
+                .filter(|t| t.vni_advertised_to_peers())
+                .collect();
+            vpc_peer_vnis = db::vpc_peering::get_vpc_peer_vnis(txn, vpc_id, vni_peer_types)
+                .await?
+                .iter()
+                .map(|(_, vni)| *vni as u32)
+                .collect();
         }
     }
     // Keep API responses deterministic so downstream config rendering
@@ -529,6 +554,27 @@ pub async fn tenant_network(
         .as_ref()
         .and_then(|v| v.status.as_ref().and_then(|vs| vs.vni))
         .unwrap_or_default() as u32;
+
+    // Resolve the routing profile from the VPC attached to this interface.
+    let routing_profile = match (vpc.as_ref(), fnn_config) {
+        (Some(vpc), Some(fnn)) if vpc.network_virtualization_type == VpcVirtualizationType::Fnn => {
+            let profile_type =
+                vpc.routing_profile_type
+                    .as_ref()
+                    .ok_or_else(|| CarbideError::Internal {
+                        message: "tenant routing profile type not found in VPC record".to_string(),
+                    })?;
+            let profile = fnn.routing_profiles.get(profile_type).ok_or_else(|| {
+                CarbideError::NotFoundError {
+                    kind: "routing_profile_type",
+                    id: profile_type.to_string(),
+                }
+            })?;
+
+            Some(rpc::RoutingProfile::from(profile))
+        }
+        _ => None,
+    };
 
     let rpc_ft: rpc::InterfaceFunctionType = iface.function_id.function_type().into();
     let (svi_ip, svi_ip_v6) = ds.svi_ips(network_virtualization_type, is_l2_segment)?;
@@ -640,6 +686,7 @@ pub async fn tenant_network(
                 .unwrap_or_default(),
             svi_ip: svi_ip_v6,
         }),
+        routing_profile,
     })
 }
 

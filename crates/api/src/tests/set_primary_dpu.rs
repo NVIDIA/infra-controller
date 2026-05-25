@@ -17,7 +17,6 @@
 
 use carbide_uuid::machine::{MachineId, MachineIdSource, MachineType};
 use ipnetwork::IpNetwork;
-use model::metadata::Metadata;
 use rpc::forge;
 use rpc::forge::forge_server::Forge;
 
@@ -28,7 +27,6 @@ use crate::tests::common::api_fixtures::network_segment::{
     FIXTURE_UNDERLAY_NETWORK_SEGMENT_GATEWAY, create_admin_network_segment,
     create_host_inband_network_segment, create_underlay_network_segment,
 };
-use crate::tests::common::rpc_builder::VpcCreationRequest;
 
 // On a zero-DPU host the handler's interface scan never finds a row with a
 // matching `attached_dpu_machine_id`, which previously bubbled up as a
@@ -67,18 +65,16 @@ async fn test_set_primary_dpu_rejects_zero_dpu_host(
         },
     )
     .await;
-    let vpc = env
-        .api
-        .create_vpc(
-            VpcCreationRequest::builder("2829bbe3-c169-4cd9-8b2a-19a8b1618a93")
-                .metadata(Metadata::new_with_default_name())
-                .tonic_request(),
-        )
-        .await?
-        .into_inner();
+    // HostInband segments must live in a Flat VPC. The test doesn't otherwise
+    // need a non-Flat VPC, so create only a Flat one for the segment.
+    let flat_vpc_id = api_fixtures::network_segment::create_default_flat_vpc(
+        &env.api,
+        "set-primary-dpu flat vpc",
+    )
+    .await;
     create_underlay_network_segment(&env.api).await;
     create_admin_network_segment(&env.api).await;
-    create_host_inband_network_segment(&env.api, vpc.id).await;
+    create_host_inband_network_segment(&env.api, Some(flat_vpc_id)).await;
     env.run_network_segment_controller_iteration().await;
     env.run_network_segment_controller_iteration().await;
 

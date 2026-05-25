@@ -7,7 +7,6 @@ package forge;
 
 import "common.proto";
 import "dns.proto";
-import "dpa_rpc.proto";
 import "google/protobuf/duration.proto";
 import "google/protobuf/empty.proto";
 import "google/protobuf/struct.proto";
@@ -234,6 +233,7 @@ service Forge {
   rpc FindConnectedDevicesByDpuMachineIds(common.MachineIdList) returns (ConnectedDeviceList);
   rpc FindMachineIdsByBmcIps(BmcIpList) returns (MachineIdBmcIpPairs);
   rpc FindMacAddressByBmcIp(BmcIp) returns (MacAddressBmcIp);
+  rpc FindBmcIps(FindBmcIpsRequest) returns (BmcIpList);
   rpc IdentifyUuid(IdentifyUuidRequest) returns (IdentifyUuidResponse);
   rpc IdentifyMac(IdentifyMacRequest) returns (IdentifyMacResponse);
   rpc IdentifySerial(IdentifySerialRequest) returns (IdentifySerialResponse);
@@ -401,23 +401,6 @@ service Forge {
   rpc GetExpectedMachine(ExpectedMachineRequest) returns (ExpectedMachine);
   // Get the BMC credentials for all expected machines
   rpc GetAllExpectedMachines(google.protobuf.Empty) returns (ExpectedMachineList);
-
-  // Rack Firmware Management
-  // Create or update a Rack firmware configuration
-  rpc CreateRackFirmware(RackFirmwareCreateRequest) returns (RackFirmware);
-  // Get a Rack firmware configuration by ID
-  rpc GetRackFirmware(RackFirmwareGetRequest) returns (RackFirmware);
-  // List all Rack firmware configurations
-  rpc ListRackFirmware(RackFirmwareSearchFilter) returns (RackFirmwareList);
-  // Delete a Rack firmware configuration
-  rpc DeleteRackFirmware(RackFirmwareDeleteRequest) returns (google.protobuf.Empty);
-  // Apply firmware to all devices in a rack
-  rpc ApplyRackFirmware(RackFirmwareApplyRequest) returns (RackFirmwareApplyResponse);
-  // Check the status of an async firmware update job
-  rpc GetRackFirmwareJobStatus(RackFirmwareJobStatusRequest) returns (RackFirmwareJobStatusResponse);
-  // Get the history of rack firmware apply operations
-  rpc GetRackFirmwareHistory(RackFirmwareHistoryRequest) returns (RackFirmwareHistoryResponse);
-  rpc RackFirmwareSetDefault(RackFirmwareSetDefaultRequest) returns (google.protobuf.Empty);
 
   // Replace all expected machines in site
   rpc ReplaceAllExpectedMachines(ExpectedMachineList) returns (google.protobuf.Empty);
@@ -1549,6 +1532,14 @@ enum VpcVirtualizationType {
   FNN_CLASSIC = 3;
   FNN_L3 = 4;
   FNN = 5;
+  // FLAT is for VPCs whose tenant instances live directly on the underlay
+  // (zero-DPU hosts, or hosts with their DPU in NIC mode). Their interfaces
+  // are bound to `HostInband` network segments rather than a Carbide-managed
+  // overlay. Flat VPCs are still real tenant VPCs with a VNI and NSGs, but
+  // Carbide doesn't drive their data plane -- routing and ACL enforcement
+  // between Flat VPCs and other VPCs is the network operator's
+  // responsibility.
+  FLAT = 6;
 }
 
 message VpcUpdateRequest {
@@ -1777,6 +1768,8 @@ enum TenantState {
 
   // Something Wrong happened at carbide. Check logs for more info.
   INVALID = 9;
+  // Instance is undergoing online repair (health override active).
+  REPAIRING = 10;
 }
 
 // Describe the desired configuration of an IBPartition
@@ -2217,6 +2210,9 @@ message ExpectedSwitch {
   // When true, site-explorer skips BMC password rotation and stores the
   // factory-default credentials in Vault as-is.
   optional bool bmc_retain_credentials = 12;
+  // Static IP reservation for the single wired NVOS port. Only meaningful
+  // when `nvos_mac_addresses` has exactly one entry.
+  optional string nvos_ip_address = 13;
 }
 
 message ExpectedSwitchRequest {
@@ -3971,6 +3967,7 @@ message ManagedHostNetworkConfigResponse {
 
   // Route imports and tagging details for exports
   // used by FNN configs.
+  // Deprecated: use FlatInterfaceConfig.routing_profile for per-VPC routing.
   // NOTE: This will replace internet_l3_vni and common_internal_route_target but could allow
   //       common_internal_route_target to be renamed/repurposed as a site-level RT.
   //       to become a site-level common route target.
@@ -4194,6 +4191,10 @@ message FlatInterfaceConfig {
 
   // IPv6 configuration for dual-stack FNN interfaces.
   optional FlatInterfaceIpv6Config ipv6_interface_config = 19;
+
+  // Route imports and tagging details for exports used by FNN configs.
+  // This is scoped to the VPC that owns this interface.
+  optional RoutingProfile routing_profile = 20;
 
   // The details of the network security group associated with
   // either the instance or its parent VPC.
@@ -5182,6 +5183,13 @@ enum UuidType {
   UuidTypeComputeAllocationId = 6;
 }
 
+message FindBmcIpsRequest {
+  oneof lookup_by {
+    string mac_address = 1;
+    string serial = 2;
+  }
+}
+
 message IdentifyMacRequest {
   string mac_address = 1;
 }
@@ -5821,17 +5829,28 @@ message MachineValidationOnDemandResponse {
 }
 
 message FirmwareUpgradeActivity {
-  // Target firmware version. When empty, RMS uses its default/latest version.
+  // SOT JSON string passed to the backend.
+  // Explicit firmware-upgrade maintenance requests must set this and access_token.
+  // Implicit all-activity maintenance skips firmware update when no JSON is configured.
   string firmware_version = 1;
   // Firmware components to update (e.g. "BMC", "CPLD", "BIOS").
   // When empty, all components are updated.
   repeated string components = 2;
+  // Used only by the backend for artifact download when firmware_version contains SOT JSON.
+  // NICo stores it as a maintenance credential, not in rack maintenance state.
+  optional string access_token = 3;
+  bool force_update = 4;
 }
 
 message NvosUpdateActivity {
-  // Rack firmware entry containing the switch system image to install.
-  // When empty, the default rack firmware for the rack hardware type is used.
-  string rack_firmware_id = 1;
+  reserved 1;
+  reserved "firmware_object_id";
+  // SOT JSON string passed to RMS ApplySwitchSystemImageFromJSON.
+  // Required for nvos-update activity.
+  string config_json = 2;
+  // Used only by the backend for artifact download when config_json is set.
+  // NICo stores it as a maintenance credential, not in rack maintenance state.
+  optional string access_token = 3;
 }
 
 message ConfigureNmxClusterActivity {
@@ -7825,118 +7844,6 @@ message MachinePositionInfo {
   optional common.PowerShelfId power_shelf_id = 7;
 }
 
-// Rack Firmware Management Messages
-
-message RackFirmware {
-  string id = 1;
-  string config_json = 2;
-  bool available = 3;
-  string created = 4;
-  string updated = 5;
-  string parsed_components = 6; // JSON string of firmware lookup table
-  common.RackHardwareType rack_hardware_type = 7;
-  bool is_default = 8;
-}
-
-message RackFirmwareSetDefaultRequest {
-  string firmware_id = 1;
-}
-
-message FirmwareComponentInfo {
-  string device_type = 1;
-  string component = 2;
-  string bundle = 3;
-  string filename = 4;
-  string target = 5;
-  string firmware_type = 6; // "prod" or "dev"
-}
-
-message RackFirmwareCreateRequest {
-  string config_json = 1;
-  string artifactory_token = 2;
-  common.RackHardwareType rack_hardware_type = 3;
-}
-
-message RackFirmwareGetRequest {
-  string id = 1;
-}
-
-message RackFirmwareSearchFilter {
-  bool only_available = 1;
-  common.RackHardwareType rack_hardware_type = 2; // Optional: filter by rack hardware type. Unspecified means no filter.
-}
-
-message RackFirmwareList {
-  repeated RackFirmware configs = 1;
-}
-
-message RackFirmwareDeleteRequest {
-  string id = 1;
-}
-
-message RackFirmwareApplyRequest {
-  common.RackId rack_id = 1;
-  string firmware_id = 2;
-  string firmware_type = 3; // "dev" or "prod"
-}
-
-message RackFirmwareApplyResponse {
-  int32 total_updates = 1;
-  int32 successful_updates = 2;
-  int32 failed_updates = 3;
-  repeated DeviceUpdateResult device_results = 4;
-}
-
-message DeviceUpdateResult {
-  string device_id = 1;
-  string device_type = 2;
-  bool success = 3;
-  string message = 4;
-  string job_id = 5; // Parent job ID for async firmware updates (use with RMS GetFirmwareJobStatus)
-  repeated NodeJobInfo node_jobs = 6; // Per-node job IDs for tracking individual node progress
-}
-
-message NodeJobInfo {
-  string node_id = 1;
-  string job_id = 2;
-}
-
-message RackFirmwareJobStatusRequest {
-  string job_id = 1;
-}
-
-message RackFirmwareJobStatusResponse {
-  string job_id = 1;
-  string state = 2; // QUEUED, RUNNING, COMPLETED, FAILED
-  string state_description = 3; // Human-readable description
-  string rack_id = 4;
-  string node_id = 5;
-  string error_message = 6; // Populated if state is FAILED
-  string result_json = 7; // Detailed result data on completion
-}
-
-message RackFirmwareHistoryRequest {
-  string firmware_id = 1; // Optional: filter by firmware ID. Empty string means no filter.
-  repeated string rack_ids = 2; // Optional: filter by rack IDs. Empty list returns all racks.
-}
-
-message RackFirmwareHistoryResponse {
-  map<string, RackFirmwareHistoryRecords> histories = 1; // Keyed by rack ID
-}
-
-message RackFirmwareHistoryRecords {
-  repeated RackFirmwareHistoryRecord records = 1;
-}
-
-message RackFirmwareHistoryRecord {
-  string firmware_id = 1;
-  string rack_id = 2;
-  string firmware_type = 3;
-  string applied_at = 4;
-  bool firmware_available = 5; // Whether the firmware ID still exists and is available
-  common.RackHardwareType rack_hardware_type = 6;
-}
-
 message ModifyDPFStateRequest {
   common.MachineId machine_id = 1;
   bool dpf_enabled = 2;
@@ -8116,9 +8023,9 @@ message UpdatePowerShelfFirmwareTarget {
   repeated PowerShelfComponent components = 2;
 }
 
-// Whole-rack firmware update target. All eligible devices in each listed
-// rack are updated according to the SOT identified by `target_version`.
-message UpdateRackFirmwareTarget {
+// Whole-rack firmware update target. All eligible compute and switch devices
+// in each listed rack are updated.
+message UpdateFirmwareObjectTarget {
   RackIdList rack_ids = 1;
 }
 
@@ -8126,10 +8033,19 @@ message UpdateComponentFirmwareRequest {
   oneof target {
     UpdateComputeTrayFirmwareTarget compute_trays = 1;
     UpdateSwitchFirmwareTarget switches = 2;
+    // powershelf firmware update currently not implemented by state machine and backend
     UpdatePowerShelfFirmwareTarget power_shelves = 3;
-    UpdateRackFirmwareTarget racks = 5;
+    UpdateFirmwareObjectTarget racks = 5;
   }
+
+  // Target firmware version for direct component-manager dispatch.
+  // For targets routed through rack maintenance, this carries SOT JSON for
+  // the backend firmware apply path.
   string target_version = 4;
+  // Required for firmware targets routed through rack maintenance.
+  // Rejected for direct dispatch paths and currently unsupported for power shelves.
+  optional string access_token = 6;
+  bool force_update = 7;
 }
 
 message UpdateComponentFirmwareResponse {

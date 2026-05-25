@@ -17,12 +17,12 @@
 
 //!
 //! `measurement journal` subcommand dispatcher + backing functions.
-use ::rpc::admin_cli::{ToTable, just_print_summary};
+use ::rpc::measured_boot::{FromGrpc, FromGrpcOpt};
 use ::rpc::protos::measured_boot::ShowMeasurementJournalRequest;
 use measured_boot::bundle::MeasurementBundle;
 use measured_boot::journal::MeasurementJournal;
 use measured_boot::records::MeasurementJournalRecord;
-use measured_boot::{FromGrpc, FromGrpcOpt};
+use measured_boot::{ToTable, just_print_summary};
 use serde::Serialize;
 
 use crate::attestation::measured_boot::global;

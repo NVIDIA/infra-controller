@@ -23,38 +23,7 @@
 
 */
 
-use std::sync::atomic::{AtomicBool, Ordering};
-
 pub use output::OutputFormat;
-
-/// SUMMARY is a global variable that is being used by a few structs which
-/// implement serde::Serialize with skip_serialization_if.
-///
-/// I had wanted the ability to have summarized or extended versions of
-/// serialized output, and decided I could use skip_serialization_if along with
-/// a function that looks at a global variable.
-///
-/// You set --extended on the CLI, which controls whether or not to summarized
-/// (default is summarized).
-static SUMMARY: AtomicBool = AtomicBool::new(false);
-
-pub fn serde_just_print_summary<T>(_: &T) -> bool {
-    SUMMARY.load(Ordering::SeqCst)
-}
-
-pub fn just_print_summary() -> bool {
-    SUMMARY.load(Ordering::SeqCst)
-}
-
-pub fn set_summary(val: bool) {
-    SUMMARY.store(val, Ordering::SeqCst);
-}
-
-/// ToTable is a trait which is used alongside the cli_output command
-/// and being able to prettytable print results.
-pub trait ToTable {
-    fn into_table(self) -> eyre::Result<String>;
-}
 
 pub mod output {
     use std::fmt;

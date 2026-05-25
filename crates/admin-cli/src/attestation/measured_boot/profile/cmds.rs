@@ -20,7 +20,7 @@
 
 use std::str::FromStr;
 
-use ::rpc::admin_cli::ToTable;
+use ::rpc::measured_boot::FromGrpcOpt;
 use ::rpc::protos::measured_boot::{
     DeleteMeasurementSystemProfileRequest, ListMeasurementSystemProfileBundlesRequest,
     ListMeasurementSystemProfileMachinesRequest, RenameMeasurementSystemProfileRequest,
@@ -28,7 +28,7 @@ use ::rpc::protos::measured_boot::{
 };
 use carbide_uuid::machine::MachineId;
 use carbide_uuid::measured_boot::MeasurementBundleId;
-use measured_boot::FromGrpcOpt;
+use measured_boot::ToTable;
 use measured_boot::profile::MeasurementSystemProfile;
 use measured_boot::records::MeasurementSystemProfileRecord;
 use serde::Serialize;
