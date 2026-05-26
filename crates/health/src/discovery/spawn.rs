@@ -41,13 +41,12 @@ pub(super) async fn spawn_collectors_for_endpoint(
     data_sink: Option<Arc<dyn DataSink>>,
     metrics_prefix: &str,
 ) -> Result<(), HealthError> {
-    match endpoint.switch_data().map(|switch| switch.endpoint_role) {
-        Some(SwitchEndpointRole::Host) => {
-            spawn_switch_host_collectors(ctx, endpoint, data_sink, metrics_prefix)
-        }
-        Some(SwitchEndpointRole::Bmc) | None => {
-            spawn_generic_redfish_collectors(ctx, endpoint, data_sink, metrics_prefix)
-        }
+    let endpoint_role = endpoint.switch_data().map(|switch| switch.endpoint_role);
+
+    if matches!(endpoint_role, Some(SwitchEndpointRole::Host)) {
+        spawn_switch_host_collectors(ctx, endpoint, data_sink, metrics_prefix)
+    } else {
+        spawn_generic_redfish_collectors(ctx, endpoint, data_sink, metrics_prefix)
     }
 }
 

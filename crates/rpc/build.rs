@@ -851,6 +851,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "forge.GetSwitchNvosCredentialsRequest",
             "#[derive(serde::Serialize)]",
         )
+        .type_attribute("forge.SwitchNvosInfo", "#[derive(serde::Serialize)]")
         .type_attribute(
             "forge.PlacementInRack",
             "#[derive(serde::Serialize)]",
