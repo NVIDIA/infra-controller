@@ -19,6 +19,7 @@ use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 
+use carbide_dpa_interface_controller::DpaInfo;
 use carbide_utils::periodic_timer::PeriodicTimer;
 use carbide_uuid::machine::MachineId;
 use carbide_uuid::spx::NULL_SPX_PARTITION_ID;
@@ -39,7 +40,6 @@ use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
 use crate::cfg::file::DpaConfig;
-use crate::dpa::handler::DpaInfo;
 use crate::{CarbideError, CarbideResult};
 
 mod metrics;
@@ -841,7 +841,7 @@ impl DpaMonitor {
         let services = &self.db_services;
 
         // Send a heartbeat command, indicated by the revision string being "NIL".
-        match crate::dpa::handler::send_dpa_command(
+        match carbide_dpa_interface_controller::send_dpa_command(
             client,
             dpa_info,
             state.mac_address.to_string(),

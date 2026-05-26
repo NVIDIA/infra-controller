@@ -29,6 +29,9 @@ use async_trait::async_trait;
 use carbide_ib_fabric::IbFabricMonitor;
 use carbide_ib_fabric::config::{IBFabricConfig, IbFabricDefinition};
 use carbide_ib_fabric::ib::{self, IBFabricManagerImpl, IBFabricManagerType};
+use carbide_ib_partition_controller::context::IBPartitionStateHandlerServices;
+use carbide_ib_partition_controller::handler::IBPartitionStateHandler;
+use carbide_ib_partition_controller::io::IBPartitionStateControllerIO;
 use carbide_ipmi::IPMITool;
 use carbide_network_segment_controller::context::NetworkSegmentStateHandlerServices;
 use carbide_network_segment_controller::handler::NetworkSegmentStateHandler;
@@ -124,8 +127,6 @@ use crate::rack::rms_client::test_support::RmsSim;
 use crate::scout_stream;
 use crate::state_controller::common_services::CommonStateHandlerServices;
 use crate::state_controller::controller::{Enqueuer, StateController};
-use crate::state_controller::ib_partition::handler::IBPartitionStateHandler;
-use crate::state_controller::ib_partition::io::IBPartitionStateControllerIO;
 use crate::state_controller::machine::handler::{
     MachineStateHandler, MachineStateHandlerBuilder, PowerOptionConfig, ReachabilityParams,
 };
@@ -1754,7 +1755,14 @@ pub async fn create_test_env_with_overrides(
         .database(db_pool.clone(), work_lock_manager_handle.clone())
         .meter("carbide_machines", test_meter.meter())
         .processor_id(state_controller_id.clone())
-        .services(handler_services.clone())
+        .services(
+            IBPartitionStateHandlerServices {
+                db_pool: handler_services.db_pool.clone(),
+                ib_fabric_manager: handler_services.ib_fabric_manager.clone(),
+                ib_pools: handler_services.ib_pools.clone(),
+            }
+            .into(),
+        )
         .state_handler(Arc::new(ib_swap.clone()))
         .build_for_manual_iterations(cancel_token.clone())
         .expect("Unable to build state controller");
@@ -1880,6 +1888,7 @@ pub async fn create_test_env_with_overrides(
             switches_created_per_run: 1,
             rotate_switch_nvos_credentials: Arc::new(false.into()),
             force_dpu_nic_mode: Arc::new(false.into()),
+            dpu_mode: None,
             // Tests use MockEndpointExplorer. So this doesn't affect anything.
             explore_mode: SiteExplorerExploreMode::NvRedfish,
         },

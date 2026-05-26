@@ -17,7 +17,6 @@
 
 pub mod common_services;
 pub(crate) mod external_service_error;
-pub mod ib_partition;
 pub mod machine;
 pub mod power_shelf;
 pub mod rack;

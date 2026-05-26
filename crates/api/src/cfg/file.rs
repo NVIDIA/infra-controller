@@ -2807,6 +2807,7 @@ mod tests {
     use figment::providers::{Env, Format, Toml};
     use libmlx::variables::value::MlxValueType;
     use libredfish::model::service_root::RedfishVendor;
+    use model::expected_machine::DpuMode;
     use model::network_segment::NetworkDefinitionSegmentType;
     use model::resource_pool;
 
@@ -3166,6 +3167,7 @@ mod tests {
                 switches_created_per_run: 9,
                 rotate_switch_nvos_credentials: Arc::new(false.into()),
                 force_dpu_nic_mode: Arc::new(false.into()),
+                dpu_mode: None,
                 explore_mode: SiteExplorerExploreMode::LibRedfish,
             }
         );
@@ -3340,6 +3342,7 @@ mod tests {
                 switches_created_per_run: 9,
                 rotate_switch_nvos_credentials: Arc::new(false.into()),
                 force_dpu_nic_mode: Arc::new(false.into()),
+                dpu_mode: None,
                 explore_mode: SiteExplorerExploreMode::LibRedfish,
             }
         );
@@ -3649,6 +3652,7 @@ mod tests {
                 switches_created_per_run: 9,
                 rotate_switch_nvos_credentials: Arc::new(false.into()),
                 force_dpu_nic_mode: Arc::new(false.into()),
+                dpu_mode: None,
                 explore_mode: SiteExplorerExploreMode::LibRedfish,
             }
         );
@@ -3796,6 +3800,38 @@ mod tests {
         let deserialized = serde_json::from_str::<SiteExplorerConfig>("{}")?;
         assert_eq!(deserialized, SiteExplorerConfig::default());
         Ok(())
+    }
+
+    /// Verifies the new `[site_explorer] dpu_mode = ...` setting
+    /// parses correctly for every named variant. When unset (the
+    /// default), `site_explorer.dpu_mode` is `None` and resolution
+    /// falls back to the legacy `force_dpu_nic_mode` flag.
+    #[test]
+    fn site_explorer_dpu_mode_parses_and_defaults_to_none() {
+        let config: CarbideConfig = Figment::new()
+            .merge(Toml::file(format!("{TEST_DATA_DIR}/min_config.toml")))
+            .extract()
+            .unwrap();
+        assert_eq!(config.site_explorer.dpu_mode, None);
+
+        for (toml_value, expected) in [
+            ("dpu_mode", DpuMode::DpuMode),
+            ("nic_mode", DpuMode::NicMode),
+            ("no_dpu", DpuMode::NoDpu),
+        ] {
+            let config: CarbideConfig = Figment::new()
+                .merge(Toml::file(format!("{TEST_DATA_DIR}/min_config.toml")))
+                .merge(Toml::string(&format!(
+                    "[site_explorer]\ndpu_mode = \"{toml_value}\"\n"
+                )))
+                .extract()
+                .unwrap();
+            assert_eq!(
+                config.site_explorer.dpu_mode,
+                Some(expected),
+                "[site_explorer] dpu_mode = {toml_value:?} should parse to {expected:?}",
+            );
+        }
     }
 
     #[test]

@@ -21,11 +21,10 @@
  * received from the DPA via MQTT and code to start the MQTT client.
  */
 
-use std::net::Ipv4Addr;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use ::rpc::protos::dpa_rpc::{DpaMetadata, Pfvni, SetVni};
+use carbide_dpa_interface_controller::rpc::SetVni;
 use carbide_uuid::spx::NULL_SPX_PARTITION_ID;
 use config_version::ConfigVersion;
 use db::ObjectColumnFilter;
@@ -41,12 +40,6 @@ use tokio::time::{Duration, sleep};
 use tokio_util::sync::CancellationToken;
 
 use crate::api::Api;
-
-pub struct DpaInfo {
-    pub subnet_ip: Ipv4Addr,
-    pub subnet_mask: i32,
-    pub mqtt_client: Option<Arc<MqtteaClient>>,
-}
 
 // We just received a message from a DPA via the MQTT broker. Handle that message here.
 // We figure out the DPA interface belonging to this message and update the observed
@@ -257,58 +250,6 @@ async fn handle_dpa_message(services: Arc<Api>, message: SetVni, topic: String) 
             );
         }
     }
-}
-
-// Send a SetVni command to the DPA specified by the given macaddress.
-// The SetVni command to contain the given vni and revision string.
-pub async fn send_dpa_command(
-    client: Arc<MqtteaClient>,
-    dpa_info: &Arc<DpaInfo>,
-    macaddr: String,
-    revision: String,
-    vni: i32,
-) -> Result<(), eyre::Report> {
-    let pfvni = Pfvni {
-        pf_id: 0,
-        mac: macaddr.clone(),
-        vni,
-        subnet_ip: dpa_info.subnet_ip.to_string(),
-        subnet_mask: dpa_info.subnet_mask,
-        dhcp_ip: String::new(),
-        host_ip: String::new(),
-    };
-
-    let mdata = DpaMetadata {
-        dpa_id: macaddr.clone(),
-        host_id: String::new(),
-        revision: revision.clone(),
-        transaction: String::new(),
-    };
-
-    let svni = SetVni {
-        metadata: Some(mdata),
-        pf_info: Some(pfvni),
-    };
-
-    let maddr = macaddr.replace(":", "");
-
-    let topic = format!("dpa/command/{maddr}/SetVni");
-
-    match client.send_message(&topic, &svni).await {
-        Ok(()) => {
-            println!("send_dpa_command revision: {revision} vni: {vni}");
-        }
-        Err(e) => {
-            tracing::error!(
-                "send_dpa_command: error: {:#?} sending message: {:#?} to topic: {}",
-                e,
-                svni,
-                topic
-            );
-            return Err(eyre::eyre!("send_message error: {e}"));
-        }
-    }
-    Ok(())
 }
 
 // Create an MQTTEA client, and start up the thread that will do eventloop polling

@@ -1172,12 +1172,14 @@ dependencies = [
  "carbide-api-db",
  "carbide-api-model",
  "carbide-authn",
+ "carbide-dpa-interface-controller",
  "carbide-dpf",
  "carbide-firmware",
  "carbide-health-metrics",
  "carbide-health-report",
  "carbide-host-support",
  "carbide-ib-fabric",
+ "carbide-ib-partition-controller",
  "carbide-ipmi",
  "carbide-ipxe-renderer",
  "carbide-libmlx",
@@ -1638,6 +1640,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "carbide-dpa-interface-controller"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "carbide-api-db",
+ "carbide-api-model",
+ "carbide-utils",
+ "carbide-uuid",
+ "chrono",
+ "config-version",
+ "duration-str",
+ "eyre",
+ "mac_address",
+ "mqttea",
+ "opentelemetry",
+ "prost",
+ "serde",
+ "sqlx",
+ "state-controller",
+ "tonic-prost-build",
+ "tracing",
+]
+
+[[package]]
 name = "carbide-dpf"
 version = "0.0.1"
 dependencies = [
@@ -1997,6 +2023,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "carbide-ib-partition-controller"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "carbide-api-db",
+ "carbide-api-model",
+ "carbide-ib-fabric",
+ "carbide-uuid",
+ "config-version",
+ "eyre",
+ "sqlx",
+ "state-controller",
+ "tracing",
+]
+
+[[package]]
 name = "carbide-ipmi"
 version = "0.0.1"
 dependencies = [
@@ -2204,7 +2246,7 @@ dependencies = [
 name = "carbide-mockdpa"
 version = "0.0.1"
 dependencies = [
- "carbide-rpc",
+ "carbide-dpa-interface-controller",
  "chrono",
  "clap",
  "mqttea",
@@ -6255,7 +6297,7 @@ dependencies = [
 [[package]]
 name = "libredfish"
 version = "0.0.0"
-source = "git+https://github.com/NVIDIA/libredfish.git?tag=v0.44.3#02f9c19148f4aa4c6b7c9e5efe8f40361c9a3167"
+source = "git+https://github.com/NVIDIA/libredfish.git?tag=v0.44.4#dd2152ac5642c5256b893e396647e159003d0071"
 dependencies = [
  "chrono",
  "clap",
@@ -6287,7 +6329,7 @@ dependencies = [
 [[package]]
 name = "librms"
 version = "0.0.12"
-source = "git+https://github.com/NVIDIA/nv-rms-client.git?tag=v0.0.12-rc1#94a7d944e80075cd57d04bdf0ebf2db497e205db"
+source = "git+https://github.com/NVIDIA/nv-rms-client.git?tag=v0.0.12-rc3#88797e64f4fbf072b5844ed7b8d7e1e987d4aef6"
 dependencies = [
  "async-trait",
  "chrono",
@@ -6297,6 +6339,7 @@ dependencies = [
  "hyper-timeout",
  "hyper-util",
  "prost",
+ "prost-types",
  "rustls",
  "rustls-pemfile",
  "serde",
@@ -11314,7 +11357,7 @@ dependencies = [
 [[package]]
 name = "tonic-client-wrapper"
 version = "1.0.0"
-source = "git+https://github.com/NVIDIA/nv-rms-client.git?tag=v0.0.12-rc1#94a7d944e80075cd57d04bdf0ebf2db497e205db"
+source = "git+https://github.com/NVIDIA/nv-rms-client.git?tag=v0.0.12-rc3#88797e64f4fbf072b5844ed7b8d7e1e987d4aef6"
 dependencies = [
  "async-trait",
  "heck",

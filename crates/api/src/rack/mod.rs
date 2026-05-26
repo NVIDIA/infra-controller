@@ -20,6 +20,7 @@ use librms::RackManagerError;
 use crate::state_controller::state_handler::{ExternalServiceError, StateHandlerError};
 
 pub mod bms_client;
+pub mod firmware_object;
 pub mod firmware_update;
 pub mod rms_client;
 

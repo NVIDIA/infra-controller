@@ -43,6 +43,11 @@ pub struct ExpectedSwitch {
     pub nvos_password: Option<String>,
     #[serde(default)]
     pub bmc_ip_address: Option<IpAddr>,
+    /// Static IP reservation for the single wired NVOS port. Only meaningful
+    /// when `nvos_mac_addresses` has exactly one entry; handlers reject this
+    /// being set otherwise so the (mac, ip) pairing stays unambiguous.
+    #[serde(default)]
+    pub nvos_ip_address: Option<IpAddr>,
     #[serde(default = "default_metadata_for_deserializer")]
     pub metadata: Metadata,
     pub rack_id: Option<RackId>,
@@ -74,6 +79,7 @@ impl<'r> FromRow<'r, PgRow> for ExpectedSwitch {
             nvos_username: row.try_get("nvos_username")?,
             nvos_password: row.try_get("nvos_password")?,
             bmc_ip_address: row.try_get("bmc_ip_address").ok(),
+            nvos_ip_address: row.try_get("nvos_ip_address").ok(),
             metadata,
             rack_id: row.try_get("rack_id")?,
             bmc_retain_credentials: row.try_get("bmc_retain_credentials")?,

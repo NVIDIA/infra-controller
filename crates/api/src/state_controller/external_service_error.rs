@@ -22,7 +22,3 @@ use crate::state_controller::state_handler::{ExternalServiceError, StateHandlerE
 pub(crate) fn dpf_error(error: DpfError) -> StateHandlerError {
     ExternalServiceError::with_source("dpf", "", error.to_string(), "dpf_error", error).into()
 }
-
-pub(crate) fn ufm_error(operation: &'static str, error: eyre::Report) -> StateHandlerError {
-    ExternalServiceError::new("ufm", operation, error.to_string(), "ib_fabric_error").into()
-}

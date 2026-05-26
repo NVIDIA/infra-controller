@@ -18,13 +18,70 @@
 //! Handler for SwitchControllerState::ReProvisioning.
 
 use carbide_uuid::switch::SwitchId;
-use db::switch as db_switch;
+use db::db_read::PgPoolReader;
+use db::{ObjectColumnFilter, rack as db_rack, switch as db_switch};
+use model::rack::RackState;
 use model::switch::{ReProvisioningState, Switch, SwitchControllerState};
 use state_controller::state_handler::{
     StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
 
 use crate::context::SwitchStateHandlerContextObjects;
+
+/// Returns true if the switch reprovisioning request was initiated by a
+/// rack-level service (i.e. the rack firmware upgrade flow).
+fn is_rack_level_reprovisioning(state: &Switch) -> bool {
+    state
+        .switch_reprovisioning_requested
+        .as_ref()
+        .is_some_and(|req| req.initiator.starts_with("rack-"))
+}
+
+/// If the parent rack is in `RackState::Error`, clear
+/// `switch_reprovisioning_requested` and short-circuit to `Ready`. The
+/// rack will never advance the remaining `ReProvisioning` sub-states once
+/// it has bailed out, so waiting on them would leave the switch stuck.
+///
+/// Only applies to rack-level reprovisioning requests; non-rack-initiated
+/// reprovisions are independent of the rack's lifecycle.
+async fn rack_failed_abort_outcome(
+    switch_id: &SwitchId,
+    state: &Switch,
+    ctx: &mut StateHandlerContext<'_, SwitchStateHandlerContextObjects>,
+) -> Result<Option<StateHandlerOutcome<SwitchControllerState>>, StateHandlerError> {
+    if !is_rack_level_reprovisioning(state) {
+        return Ok(None);
+    }
+
+    let Some(rack_id) = state.rack_id.as_ref() else {
+        return Ok(None);
+    };
+
+    let mut reader: PgPoolReader = ctx.services.db_pool.clone().into();
+    let racks = db_rack::find_by(
+        reader.as_mut(),
+        ObjectColumnFilter::One(db_rack::IdColumn, rack_id),
+    )
+    .await?;
+    let Some(rack) = racks.into_iter().next() else {
+        return Ok(None);
+    };
+    if !matches!(rack.controller_state.value, RackState::Error { .. }) {
+        return Ok(None);
+    }
+
+    tracing::info!(
+        switch_id = %switch_id,
+        rack_id = %rack_id,
+        "Rack is in Error; aborting switch ReProvisioning and returning to Ready",
+    );
+
+    let mut txn = ctx.services.db_pool.begin().await?;
+    db_switch::clear_switch_reprovisioning_requested(txn.as_mut(), *switch_id).await?;
+    Ok(Some(
+        StateHandlerOutcome::transition(SwitchControllerState::Ready).with_txn(txn),
+    ))
+}
 
 /// Handles the ReProvisioning state for a switch.
 pub async fn handle_reprovisioning(
@@ -38,6 +95,10 @@ pub async fn handle_reprovisioning(
         } => reprovisioning_state,
         _ => unreachable!("handle_reprovisioning called with non-ReProvisioning state"),
     };
+
+    if let Some(outcome) = rack_failed_abort_outcome(switch_id, state, ctx).await? {
+        return Ok(outcome);
+    }
 
     match reprovisioning_state {
         ReProvisioningState::WaitingForRackFirmwareUpgrade => {

@@ -58,28 +58,38 @@ impl DpuMode {
         matches!(self, DpuMode::DpuMode)
     }
 
-    /// Resolve a host's effective DPU mode from its (optional) per-host
-    /// `ExpectedMachine.dpu_mode` value and the site-wide
-    /// `force_dpu_nic_mode` "fallback" flag, which is deprecated more
-    /// than a fallback, but for now I'm treating it as a fallback.
+    /// Resolve a host's effective DPU mode from three inputs, in precedence:
+    /// 1. The (optional) per-host `ExpectedMachine.dpu_mode` value.
+    /// 2. The (optional) site-wide `dpu_mode` default (new top-level
+    ///    setting on `CarbideConfig` that lets an operator flip an entire
+    ///    site to e.g. `NicMode` without per-host overrides).
+    /// 3. The deprecated site-wide `force_dpu_nic_mode` flag, kept as a
+    ///    final fallback. This isn't used by any of our deployments,
+    ///    and will be cleaned up in a subsequent PR.
     ///
     /// Notes!
     /// - An explicit per-host `NicMode` or `NoDpu` always wins.
-    /// - `DpuMode` (the default) or no `ExpectedMachine` at all means
-    ///   back back to the site flag, where `force_dpu_nic_mode=true` means
-    ///   `NicMode`, otherwise `DpuMode`.
-    ///
-    /// This keeps backwards compatibility with deployments that still rely
-    /// on the `force_dpu_nic_mode` site-level flag; once all hosts have explicit
-    /// modes configured (or we're happy with the `None` default), the flag can
-    /// be retired.
-    pub fn resolve(expected_mode: Option<DpuMode>, site_force_nic_mode: bool) -> DpuMode {
+    /// - Per-host `DpuMode` (the default variant) or no `ExpectedMachine`
+    ///   at all == defer to the site-level default.
+    /// - Site-level `NicMode` or `NoDpu` then wins over the legacy flag.
+    /// - Site-level `DpuMode` or missing == let `force_dpu_nic_mode` decide
+    ///   (`true` -> `NicMode`, `false` -> `DpuMode`).
+    pub fn resolve(
+        expected_mode: Option<DpuMode>,
+        site_default_mode: Option<DpuMode>,
+        site_force_nic_mode: bool,
+    ) -> DpuMode {
         match expected_mode {
             Some(DpuMode::NicMode) => DpuMode::NicMode,
             Some(DpuMode::NoDpu) => DpuMode::NoDpu,
-            // `DpuMode` (default) or missing == let the site flag decide.
-            _ if site_force_nic_mode => DpuMode::NicMode,
-            _ => DpuMode::DpuMode,
+            // `DpuMode` (default) or missing == defer to site-level default.
+            _ => match site_default_mode {
+                Some(DpuMode::NicMode) => DpuMode::NicMode,
+                Some(DpuMode::NoDpu) => DpuMode::NoDpu,
+                // Site-level `DpuMode` or missing == let the legacy flag decide.
+                _ if site_force_nic_mode => DpuMode::NicMode,
+                _ => DpuMode::DpuMode,
+            },
         }
     }
 }
@@ -248,58 +258,126 @@ pub struct UnexpectedMachine {
 mod tests {
     use super::*;
 
-    /// A completely-unset mode (client didn't set the field) should behave
-    /// the same as `DpuMode` (default) for resolution purposes: the site
-    /// flag decides.
+    /// A completely-unset mode (client didn't set the field) with no
+    /// site-level default should behave the same as `DpuMode` (default)
+    /// for resolution purposes: the legacy flag decides.
     #[test]
-    fn resolve_no_expected_mode_with_site_flag_off_returns_dpu_mode() {
-        assert_eq!(DpuMode::resolve(None, false), DpuMode::DpuMode);
+    fn resolve_no_expected_mode_no_site_default_with_flag_off_returns_dpu_mode() {
+        assert_eq!(DpuMode::resolve(None, None, false), DpuMode::DpuMode);
     }
 
     #[test]
-    fn resolve_no_expected_mode_with_site_flag_on_returns_nic_mode() {
-        assert_eq!(DpuMode::resolve(None, true), DpuMode::NicMode);
+    fn resolve_no_expected_mode_no_site_default_with_flag_on_returns_nic_mode() {
+        assert_eq!(DpuMode::resolve(None, None, true), DpuMode::NicMode);
     }
 
     /// Explicit per-host `DpuMode` is indistinguishable from "not set" in
-    /// the storage type (the default). So it also defers to the site flag
-    /// -- existing `force_dpu_nic_mode` deployments keep working.
+    /// the storage type (the default). So it also defers to the site
+    /// default / legacy flag -- existing `force_dpu_nic_mode` usage
+    /// is maintained, even though we're not using it in any of our
+    /// sites, and I don't think it even really does what we'd want
+    /// anyway.
     #[test]
-    fn resolve_explicit_dpu_mode_defers_to_site_flag() {
+    fn resolve_explicit_dpu_mode_defers_to_site_default_and_flag() {
         assert_eq!(
-            DpuMode::resolve(Some(DpuMode::DpuMode), false),
+            DpuMode::resolve(Some(DpuMode::DpuMode), None, false),
             DpuMode::DpuMode
         );
         assert_eq!(
-            DpuMode::resolve(Some(DpuMode::DpuMode), true),
+            DpuMode::resolve(Some(DpuMode::DpuMode), None, true),
             DpuMode::NicMode
         );
     }
 
-    /// An explicit per-host `NicMode` always wins, regardless of the site
-    /// flag. This is the "I want this specific host in NIC mode" override.
+    /// An explicit per-host `NicMode` always wins, regardless of the
+    /// site-level default or the legacy flag. This is the "I want this
+    /// specific host in NIC mode" override.
     #[test]
-    fn resolve_nic_mode_always_wins() {
-        assert_eq!(
-            DpuMode::resolve(Some(DpuMode::NicMode), false),
-            DpuMode::NicMode
-        );
-        assert_eq!(
-            DpuMode::resolve(Some(DpuMode::NicMode), true),
-            DpuMode::NicMode
-        );
+    fn resolve_per_host_nic_mode_always_wins() {
+        for site_default in [None, Some(DpuMode::DpuMode), Some(DpuMode::NoDpu)] {
+            for flag in [false, true] {
+                assert_eq!(
+                    DpuMode::resolve(Some(DpuMode::NicMode), site_default, flag),
+                    DpuMode::NicMode,
+                    "site_default={site_default:?} flag={flag}"
+                );
+            }
+        }
     }
 
     /// An explicit per-host `NoDpu` always wins. Useful for hosts where
     /// the operator knows there's genuinely no DPU hardware (as opposed
     /// to "DPU present but used as NIC", which is `NicMode`).
     #[test]
-    fn resolve_no_dpu_always_wins() {
+    fn resolve_per_host_no_dpu_always_wins() {
+        for site_default in [None, Some(DpuMode::DpuMode), Some(DpuMode::NicMode)] {
+            for flag in [false, true] {
+                assert_eq!(
+                    DpuMode::resolve(Some(DpuMode::NoDpu), site_default, flag),
+                    DpuMode::NoDpu,
+                    "site_default={site_default:?} flag={flag}"
+                );
+            }
+        }
+    }
+
+    /// Site-level `NicMode` becomes the new default for hosts that don't
+    /// declare a per-host mode -- this is the whole point of the new
+    /// site-level setting (flip an entire site without per-host edits).
+    #[test]
+    fn resolve_site_level_nic_mode_applies_when_per_host_is_unset() {
         assert_eq!(
-            DpuMode::resolve(Some(DpuMode::NoDpu), false),
+            DpuMode::resolve(None, Some(DpuMode::NicMode), false),
+            DpuMode::NicMode
+        );
+        assert_eq!(
+            DpuMode::resolve(Some(DpuMode::DpuMode), Some(DpuMode::NicMode), false),
+            DpuMode::NicMode
+        );
+    }
+
+    /// Same as above for `NoDpu`: site-level setting applies when the
+    /// per-host value is unset (or the default `DpuMode` placeholder).
+    #[test]
+    fn resolve_site_level_no_dpu_applies_when_per_host_is_unset() {
+        assert_eq!(
+            DpuMode::resolve(None, Some(DpuMode::NoDpu), false),
             DpuMode::NoDpu
         );
-        assert_eq!(DpuMode::resolve(Some(DpuMode::NoDpu), true), DpuMode::NoDpu);
+        assert_eq!(
+            DpuMode::resolve(Some(DpuMode::DpuMode), Some(DpuMode::NoDpu), false),
+            DpuMode::NoDpu
+        );
+    }
+
+    /// Site-level `NicMode` / `NoDpu` overrides the legacy
+    /// `force_dpu_nic_mode` flag -- explicit beats implicit.
+    #[test]
+    fn resolve_site_level_overrides_legacy_force_flag() {
+        assert_eq!(
+            DpuMode::resolve(None, Some(DpuMode::NoDpu), true),
+            DpuMode::NoDpu
+        );
+        // Site explicitly says NicMode; legacy flag agreeing is moot.
+        assert_eq!(
+            DpuMode::resolve(None, Some(DpuMode::NicMode), true),
+            DpuMode::NicMode
+        );
+    }
+
+    /// Site-level `DpuMode` is indistinguishable from "not set" -- both
+    /// defer to the legacy flag. Symmetric with the per-host `DpuMode`
+    /// behavior.
+    #[test]
+    fn resolve_site_level_dpu_mode_defers_to_legacy_flag() {
+        assert_eq!(
+            DpuMode::resolve(None, Some(DpuMode::DpuMode), false),
+            DpuMode::DpuMode
+        );
+        assert_eq!(
+            DpuMode::resolve(None, Some(DpuMode::DpuMode), true),
+            DpuMode::NicMode
+        );
     }
 
     /// `is_dpu_managed()` returns true only for the default `DpuMode`
