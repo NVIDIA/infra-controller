@@ -1328,7 +1328,6 @@ pub fn get_config() -> CarbideConfig {
             ..Default::default()
         },
         dsx_exchange_event_bus: None,
-        force_dpu_nic_mode: Arc::new(false.into()),
         dpf: crate::cfg::file::DpfConfig::default(),
         x86_pxe_boot_url_override: None,
         arm_pxe_boot_url_override: None,
@@ -1888,7 +1887,6 @@ pub async fn create_test_env_with_overrides(
             create_switches: Arc::new(true.into()),
             switches_created_per_run: 1,
             rotate_switch_nvos_credentials: Arc::new(false.into()),
-            force_dpu_nic_mode: Arc::new(false.into()),
             dpu_mode: None,
             // Tests use MockEndpointExplorer. So this doesn't affect anything.
             explore_mode: SiteExplorerExploreMode::NvRedfish,
