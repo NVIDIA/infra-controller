@@ -76,14 +76,14 @@ func TestNewAPITenant(t *testing.T) {
 
 func TestNewAPITenantStats_maps_repairing_instance_count(t *testing.T) {
 	instanceStats := map[string]int{
-		"total":                          3,
-		cdbm.InstanceStatusReady:         1,
-		cdbm.InstanceStatusRepairing:     2,
-		cdbm.InstanceStatusUpdating:      0,
-		cdbm.InstanceStatusPending:       0,
-		cdbm.InstanceStatusTerminating:   0,
-		cdbm.InstanceStatusError:         0,
-		cdbm.InstanceStatusProvisioning:  0,
+		"total":                         3,
+		cdbm.InstanceStatusReady:        1,
+		cdbm.InstanceStatusRepairing:    2,
+		cdbm.InstanceStatusUpdating:     0,
+		cdbm.InstanceStatusPending:      0,
+		cdbm.InstanceStatusTerminating:  0,
+		cdbm.InstanceStatusError:        0,
+		cdbm.InstanceStatusProvisioning: 0,
 	}
 
 	stats := NewAPITenantStats(instanceStats, map[string]int{}, map[string]int{}, map[string]int{})

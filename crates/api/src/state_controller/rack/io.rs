@@ -17,6 +17,8 @@
 
 //! State Controller IO implementation for Racks
 
+use carbide_rack_controller::context::RackStateHandlerContextObjects;
+use carbide_rack_controller::metrics::RackMetricsEmitter;
 use carbide_uuid::rack::RackId;
 use config_version::{ConfigVersion, Versioned};
 use db::rack::IdColumn;
@@ -27,10 +29,9 @@ use model::rack::{
     Rack, RackMaintenanceState, RackSearchFilter, RackState, RackValidationState, state_sla,
 };
 use sqlx::PgConnection;
+use state_controller::io::StateControllerIO;
 
-use crate::state_controller::io::StateControllerIO;
-use crate::state_controller::rack::context::RackStateHandlerContextObjects;
-use crate::state_controller::rack::metrics::RackMetricsEmitter;
+use crate::state_controller::rack as carbide_rack_controller;
 
 /// State Controller IO implementation for Racks
 #[derive(Default, Debug)]

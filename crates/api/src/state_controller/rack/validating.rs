@@ -19,15 +19,16 @@
 
 use std::collections::HashMap;
 
+use carbide_rack_controller::context::RackStateHandlerContextObjects;
 use carbide_uuid::rack::RackId;
 use model::machine::Machine;
 use model::metadata::Metadata;
 use model::rack::{MachineRvLabels, Rack, RackState, RackValidationState};
-
-use crate::state_controller::rack::context::RackStateHandlerContextObjects;
-use crate::state_controller::state_handler::{
+use state_controller::state_handler::{
     StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
+
+use crate::state_controller::rack as carbide_rack_controller;
 
 //------------------------------------------------------------------------------
 // Helper types
