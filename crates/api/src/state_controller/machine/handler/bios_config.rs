@@ -363,7 +363,11 @@ fn try_bios_recovery_attempt(
             %failure,
             "BIOS recovery budget exhausted; moving host to Failed for manual remediation"
         );
-        return Ok(BiosConfigJobAdvanceOutcome::Failed { failure });
+        return Ok(BiosConfigJobAdvanceOutcome::Failed {
+            failure: format!(
+                "{failure} (automated BIOS recovery exhausted after {MAX_BIOS_CONFIG_RETRIES} attempts)"
+            ),
+        });
     }
     Ok(BiosConfigJobAdvanceOutcome::Continue(BiosConfigInfo {
         bios_job_id,
