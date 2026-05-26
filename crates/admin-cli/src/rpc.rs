@@ -823,6 +823,7 @@ impl ApiClient {
                         .bmc_ip_address
                         .map(|ip| ip.to_string())
                         .unwrap_or_default(),
+                    nvos_ip_address: switch.nvos_ip_address.map(|ip| ip.to_string()),
                     metadata: switch.metadata,
                     rack_id: switch.rack_id,
                     bmc_retain_credentials: switch.bmc_retain_credentials,

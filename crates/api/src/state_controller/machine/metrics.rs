@@ -20,15 +20,15 @@
 use std::collections::{HashMap, HashSet};
 
 use ::carbide_utils::metrics::SharedMetricsHolder;
+use carbide_health_metrics::{
+    HealthIterationMetrics, HealthMetricDimension, HealthObjectMetrics,
+    register_alerts_suppressed_gauge, register_health_gauges,
+};
 use model::hardware_info::MachineInventorySoftwareComponent;
 use model::tenant::TenantOrganizationId;
 use opentelemetry::KeyValue;
 use opentelemetry::metrics::{Histogram, Meter};
 
-use crate::state_controller::health_metrics::{
-    HealthIterationMetrics, HealthMetricDimension, HealthObjectMetrics,
-    register_alerts_suppressed_gauge, register_health_gauges,
-};
 use crate::state_controller::metrics::MetricsEmitter;
 
 #[derive(Debug, Default)]

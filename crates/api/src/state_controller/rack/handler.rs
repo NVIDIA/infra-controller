@@ -17,20 +17,21 @@
 
 //! State Handler implementation for Racks.
 
+use carbide_rack_controller::context::RackStateHandlerContextObjects;
+use carbide_rack_controller::created::handle_created;
+use carbide_rack_controller::deleting::handle_deleting;
+use carbide_rack_controller::discovering::handle_discovering;
+use carbide_rack_controller::error_state::handle_error;
+use carbide_rack_controller::maintenance::handle_maintenance;
+use carbide_rack_controller::ready::handle_ready;
+use carbide_rack_controller::validating::handle_validating;
 use carbide_uuid::rack::RackId;
 use model::rack::{Rack, RackState, derive_rack_aggregate_health};
-
-use crate::state_controller::rack::context::RackStateHandlerContextObjects;
-use crate::state_controller::rack::created::handle_created;
-use crate::state_controller::rack::deleting::handle_deleting;
-use crate::state_controller::rack::discovering::handle_discovering;
-use crate::state_controller::rack::error_state::handle_error;
-use crate::state_controller::rack::maintenance::handle_maintenance;
-use crate::state_controller::rack::ready::handle_ready;
-use crate::state_controller::rack::validating::handle_validating;
-use crate::state_controller::state_handler::{
+use state_controller::state_handler::{
     StateHandler, StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
+
+use crate::state_controller::rack as carbide_rack_controller;
 
 //------------------------------------------------------------------------------
 

@@ -103,10 +103,6 @@
                   any: {}
           DPU_TO_EVPN_DROP_PREFIX_LIST:
             rule:
-              '10':
-                action: permit
-                match:
-                  10.0.0.2/32: {}
               '65535':
                 action: deny
                 match:
@@ -403,7 +399,7 @@
         loopback:
           ip:
             address:
-              10.0.0.2/32: {} 
+              10.0.0.2/32: {}
         router:
           bgp:
             path-selection:
