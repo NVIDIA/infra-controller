@@ -51,6 +51,8 @@ navigation:
           contents:
             - page: Reference Installation
               path: getting-started/installation-options/reference-install.md
+            - page: Day 0 IP and Network Configuration
+              path: getting-started/installation-options/day0-ip-network-config.md
           slug: installation-options
 
     - section: Provisioning (Day 0 Operations)
@@ -179,6 +181,8 @@ navigation:
           path: development/vm_pxe_client.md
         - page: TLS and SPIFFE Certificates
           path: development/tls.md
+        - page: SPIFFE and casbin policies with admin-cli
+          path: manuals/carbide-admin-cli.md
         - page: Re-creating Issuer/CA in Local Dev
           path: development/issuer_ca_recreate.md
         - page: Visual Studio Code Remote Development

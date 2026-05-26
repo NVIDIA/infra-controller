@@ -823,7 +823,7 @@ impl<'a> MockExploredHost<'a> {
                                         mode: LockdownMode::Enable,
                                     },
                                 },
-                            }
+                            } | ManagedHostState::BomValidating { .. }
                         )
                 },
             )
@@ -833,13 +833,19 @@ impl<'a> MockExploredHost<'a> {
             return self;
         }
 
-        // We use forge_dpu_agent's health reporting as a signal that
-        // DPU has rebooted.
-        super::network_configured(
-            self.test_env,
-            &self.dpu_machine_ids.values().copied().collect(),
-        )
-        .await;
+        // Zero-DPU hosts skip the WaitForDPUUp lockdown state and land
+        // directly in BomValidating (see `is_zero_dpu` short-circuit in
+        // `LockdownState::TimeWaitForDPUDown`). There are no DPUs to
+        // signal as configured, so skip the network_configured handshake.
+        if !self.dpu_machine_ids.is_empty() {
+            // We use carbide-dpu-agent health reporting as a signal that
+            // DPU has rebooted.
+            super::network_configured(
+                self.test_env,
+                &self.dpu_machine_ids.values().copied().collect(),
+            )
+            .await;
+        }
 
         if self.test_env.config.bom_validation.enabled
             && !self

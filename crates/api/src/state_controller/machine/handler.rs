@@ -21,7 +21,6 @@ use std::collections::{HashMap, HashSet};
 use std::mem::discriminant as enum_discr;
 use std::net::IpAddr;
 use std::str::FromStr;
-use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use attestation::{
@@ -731,32 +730,17 @@ impl MachineStateHandler {
                         },
                     ))
                 } else {
+                    // There used to be a `force_dpu_nic_mode` related return
+                    // here that skipped DPU discovery entirely for operator-flagged
+                    // NIC-mode hosts (site or individual), but we dropped it,
+                    // becuse site-explorer doesn't have DPU IDs associated with
+                    // the host in the first place; `associated_dpu_machine_ids`
+                    // is empty, and the outer branch above already transitions
+                    // to HostInit before we ever reach this. What's nice is, this
+                    // also allows NicMode hosts to get actively reconfigured to
+                    // NIC mode via `set_nic_mode` during site-explorer ingestion,
+                    // which is something we do, but `force_dpu_nic_mode` never did.
                     let mut state_handler_outcome = StateHandlerOutcome::do_nothing();
-                    if ctx
-                        .services
-                        .site_config
-                        .force_dpu_nic_mode
-                        .load(Ordering::Relaxed)
-                    {
-                        // skip dpu discovery and init entirely, treat it as a nic
-                        return Ok(StateHandlerOutcome::transition(
-                            ManagedHostState::HostInit {
-                                machine_state: MachineState::WaitingForPlatformConfiguration {
-                                    retry_count: 0,
-                                },
-                            },
-                        ));
-                        /*
-                        // todo: check for machine type before skipping? not sure site explorer is setting this
-                        if let Some(hwinfo) = mh_snapshot.host_snapshot.hardware_info.clone() {
-                            if let Some(dmi_data) = hwinfo.dmi_data {
-                                if dmi_data.product_name.contains("GB200 NVL") {
-
-                                }
-                            }
-                        }
-                         */
-                    }
                     for dpu_snapshot in &mh_snapshot.dpu_snapshots {
                         state_handler_outcome = self
                             .dpu_handler
@@ -5164,14 +5148,13 @@ impl StateHandler for HostMachineStateHandler {
                             ))
                         }
                         LockdownState::TimeWaitForDPUDown => {
-                            if ctx
-                                .services
-                                .site_config
-                                .force_dpu_nic_mode
-                                .load(Ordering::Relaxed)
-                            {
-                                // skip wait for dpu reboot TimeWaitForDPUDown, WaitForDPUUp
-                                // GB200/300, etc with dpu disconnected or in nic mode
+                            if mh_snapshot.is_zero_dpu() {
+                                // No DPU to wait for going down/up -- skip
+                                // straight to BomValidating. Covers
+                                // NicMode/NoDpu hosts and anything else
+                                // with no DPU snapshots; otherwise we'd
+                                // wait `dpu_wait_time` for a DPU that's
+                                // never going to come up.
                                 let next_state = ManagedHostState::BomValidating {
                                     bom_validating_state: BomValidating::MatchingSku(
                                         BomValidatingContext {
@@ -10432,21 +10415,18 @@ async fn set_host_boot_order(
 ) -> Result<SetBootOrderOutcome, StateHandlerError> {
     match set_boot_order_info.set_boot_order_state {
         SetBootOrderState::SetBootOrder => {
-            if mh_snapshot.dpu_snapshots.is_empty() {
-                // MachineState::SetBootOrder is a NO-OP for the Zero-DPU case
-                if ctx
-                    .services
-                    .site_config
-                    .force_dpu_nic_mode
-                    .load(Ordering::Relaxed)
-                {
-                    redfish_client
-                        .boot_first(Boot::UefiHttp)
-                        .await
-                        .map_err(|e| redfish_error("boot_first", e))?;
-                    return Ok(SetBootOrderOutcome::Done);
-                }
-            }
+            // There used to be a `force_dpu_nic_mode`-gated short-circuit
+            // here that, for zero-DPU hosts when the flag was set, called
+            // `boot_first(Boot::UefiHttp)` and returned `Done` to skip
+            // the rest of the SetBootOrder flow. Dropped along with the
+            // flag. We don't extend the `boot_first(UefiHttp)` call to
+            // all zero-DPU hosts because libredfish doesn't implement
+            // `boot_first` for every vendor yet (Dell currently returns
+            // `NotSupported`); zero-DPU hosts fall through to the
+            // `set_boot_order_dpu_first` path below, which downgrades
+            // the resulting `NoDpu` error via `allow_zero_dpu_hosts`
+            // and still hits `CheckBootOrder` for verification.
+            //
             // Resolve the boot NIC MAC the same way `CheckHostConfig` does,
             // supporting hosts with DPU(s) and zero DPUs alike.
             let boot_interface_mac = mh_snapshot.boot_interface_mac().ok_or_else(|| {
