@@ -155,6 +155,56 @@ Provides outbound HTTP/HTTPS connectivity for Kubernetes workloads launched by t
 
 ---
 
+## Resolution Flow for DPU Agents and Unallocated Managed Hosts
+
+This section describes how DNS queries flow from the two client types that consume the `.nico` zone: DPU agents (during DPU provisioning and steady-state operation) and managed hosts that have been ingested but not yet allocated to a tenant.
+
+### DPU Agents
+
+The DPU agent (`nico-agent`) issues DNS queries at startup and periodically thereafter — for fetching FMDS configuration, pulling boot artifacts from the PXE service, reaching NTP, exporting telemetry to the OTel receiver, and dialing the SOCKS proxy used by extension-service pods.
+
+How it finds its resolver:
+
+- The DPU's network interface receives an IP and DHCP options from `nico-dhcp` (the Kea + carbide hook combination).
+- DHCP option 6 (Domain Name Server) is set to the `unbound.nico` VIP. This value comes from the Kea hook parameter `nico-nameserver`.
+- The DPU agent uses this as its sole resolver. The agent has no compiled-in resolver address; changing the resolver is a DHCP-side configuration change.
+
+What it resolves:
+
+| Query | How it's answered |
+|---|---|
+| `nico-api.nico`, `nico-pxe.nico`, `nico-static-pxe.nico`, `nico-ntp.nico`, `socks.nico`, `otel-receiver.nico` | Served locally by Unbound from `local_data.conf` |
+| Names in the site domain (e.g., a `<machine-id>` record under `initial_domain_name`) | Reaches `nico-dns` via upstream delegation of the site zone to the `nico-dns` VIPs, or via an explicit forward zone in Unbound |
+| External names (package mirrors, public NTP fallbacks, etc.) | Unbound forwards or recurses to the upstream resolver configured in `forwarders.conf` |
+
+The DPU agent does not query the Kubernetes cluster DNS (CoreDNS); it has no awareness of the `*.svc.cluster.local` namespace.
+
+### Unallocated Managed Hosts
+
+A managed host that has been ingested but not yet allocated to a tenant remains on the admin network. Its DNS configuration mirrors a DPU agent's:
+
+- The host receives DHCP from `nico-dhcp` on its admin-network interface.
+- DHCP option 6 hands out the `unbound.nico` VIP.
+- The host OS's resolver (`/etc/resolv.conf`, populated by NetworkManager, systemd-networkd, or cloud-init depending on the image) uses Unbound for all queries.
+
+What it resolves:
+
+- The same set of `.nico` service names as DPU agents — for example, `nico-pxe.nico` for cloud-init userdata and the internal APT repository, `nico-ntp.nico` for time synchronisation, `nico-api.nico` for any in-band tooling that targets the NICo API.
+- The host's own hostname and other site-zone records, through the same delegation or forward-zone path that DPU agents use.
+- External names, through Unbound's upstream forwarder.
+
+Once a tenant is assigned to the host, the host typically receives tenant-provided cloud-init userdata that may reconfigure DNS. Tenant-allocated DNS behaviour is outside the scope of this page.
+
+### Common Properties
+
+For both client types:
+
+- All resolution flows through Unbound. Neither DPU agents nor unallocated hosts contact `nico-dns` directly — they reach it (when they need to) only via the upstream delegation chain or an Unbound forward zone.
+- Reachability requires the `unbound.nico` VIP to be routable on the OOB/admin management network.
+- Site-zone names resolve only if the `initial_domain_name` zone is delegated to the `nico-dns` VIPs at the upstream authoritative DNS, or if Unbound is configured with an explicit `forward-zone:` (or `stub-zone:`) pointing at those VIPs. If neither is in place, site-zone queries fail silently from the client's perspective — DPU agents will still resolve the hardcoded `.nico` names but cannot look up per-machine records.
+
+---
+
 ## Hardcoded vs. Configurable Endpoints
 
 | Hostname | Hardcoded in | Configurable at deploy time? |
