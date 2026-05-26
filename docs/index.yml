@@ -110,8 +110,18 @@ navigation:
       contents:
         - page: NVLink Partitioning
           path: manuals/nvlink_partitioning.md
-        - page: Release Instance API Enhancements
-          path: manuals/breakfix_integration.md
+        - section: Repair Workflows
+          contents:
+            - page: Overview
+              path: manuals/repair/overview.md
+            - page: Online Repair
+              path: manuals/repair/online_repair.md
+            - page: Release Instance for Full Repair
+              path: manuals/repair/release_instance_for_repair.md
+            - page: Repair Tenant Workflow
+              path: manuals/repair/repair_tenant_workflow.md
+            - page: Repair System Integration
+              path: manuals/repair/repair_integration.md
         - page: IP Resource Pools
           path: manuals/networking/ip_resource_pools.md
         - page: BGP Peering
