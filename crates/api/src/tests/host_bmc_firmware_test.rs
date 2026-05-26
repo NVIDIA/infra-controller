@@ -49,8 +49,9 @@ use tokio::time::sleep;
 use tonic::Request;
 
 use crate::CarbideResult;
-use crate::cfg::file::{CarbideConfig, FirmwareGlobal, TimePeriod};
+use crate::cfg::file::{CarbideConfig, TimePeriod};
 use crate::machine_update_manager::MachineUpdateManager;
+use crate::state_controller::machine::config::FirmwareGlobal;
 use crate::state_controller::machine::handler::MAX_FIRMWARE_UPGRADE_RETRIES;
 use crate::tests::common;
 use crate::tests::common::api_fixtures::managed_host::HardwareInfoTemplate;

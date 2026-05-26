@@ -1201,6 +1201,7 @@ dependencies = [
  "carbide-spdm-controller",
  "carbide-sqlx-testing",
  "carbide-ssh",
+ "carbide-state-controller-common",
  "carbide-switch-controller",
  "carbide-tls",
  "carbide-utils",
@@ -2786,6 +2787,16 @@ dependencies = [
  "tonic-prost-build",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "carbide-state-controller-common"
+version = "0.0.0"
+dependencies = [
+ "carbide-utils",
+ "duration-str",
+ "serde",
+ "state-controller",
 ]
 
 [[package]]

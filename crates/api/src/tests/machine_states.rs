@@ -2038,7 +2038,7 @@ async fn test_update_reboot_requested_time_off(pool: sqlx::PgPool) {
     let mut txn = env.db_txn().await;
     let snapshot = mh.snapshot(&mut txn).await;
     let mut write_batch = DbWriteBatch::new();
-    let mut services = env.state_handler_services();
+    let mut services = env.machine_state_handler_services();
     let mut metrics = MachineMetrics::default();
     let mut ctx = StateHandlerContext::<MachineStateHandlerContextObjects> {
         services: &mut services,
@@ -2075,7 +2075,7 @@ async fn test_update_reboot_requested_time_off(pool: sqlx::PgPool) {
 
     let mut txn = env.db_txn().await;
     let mut write_batch = DbWriteBatch::new();
-    let mut services = env.state_handler_services();
+    let mut services = env.machine_state_handler_services();
     let mut metrics = MachineMetrics::default();
     let mut ctx = StateHandlerContext::<MachineStateHandlerContextObjects> {
         services: &mut services,
@@ -2107,7 +2107,7 @@ async fn test_update_reboot_requested_time_off(pool: sqlx::PgPool) {
 
     let mut txn = env.db_txn().await;
     let mut write_batch = DbWriteBatch::new();
-    let mut services = env.state_handler_services();
+    let mut services = env.machine_state_handler_services();
     let mut metrics = MachineMetrics::default();
     let mut ctx = StateHandlerContext::<MachineStateHandlerContextObjects> {
         services: &mut services,

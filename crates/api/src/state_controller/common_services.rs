@@ -24,14 +24,11 @@ use carbide_rack::rms_client::SwitchSystemImageRmsClient;
 use carbide_redfish::libredfish::RedfishClientPool;
 use db::db_read::PgPoolReader;
 use forge_secrets::credentials::CredentialManager;
-use libredfish::Redfish;
 use librms::RmsApi;
-use model::machine::Machine;
 use model::resource_pool::common::IbPools;
 use sqlx::PgPool;
 
 use crate::cfg::file::CarbideConfig;
-use crate::state_controller::state_handler::StateHandlerError;
 
 /// Services that are accessible to all statehandlers within carbide-core
 #[derive(Clone)]
@@ -69,16 +66,4 @@ pub struct CommonStateHandlerServices {
 
     /// Credential manager (Vault) for fetching BMC credentials
     pub credential_manager: Arc<dyn CredentialManager>,
-}
-
-impl CommonStateHandlerServices {
-    pub async fn create_redfish_client_from_machine(
-        &self,
-        machine: &Machine,
-    ) -> Result<Box<dyn Redfish>, StateHandlerError> {
-        self.redfish_client_pool
-            .create_client_from_machine(machine, &self.db_pool)
-            .await
-            .map_err(StateHandlerError::from)
-    }
 }

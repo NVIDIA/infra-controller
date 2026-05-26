@@ -94,6 +94,7 @@ use crate::mqtt_state_change_hook::hook::MqttStateChangeHook;
 use crate::scout_stream::ConnectionRegistry;
 use crate::state_controller::common_services::CommonStateHandlerServices;
 use crate::state_controller::controller::{Enqueuer, StateController};
+use crate::state_controller::machine::context::MachineStateHandlerServices;
 use crate::state_controller::machine::handler::MachineStateHandlerBuilder;
 use crate::state_controller::machine::io::MachineStateControllerIO;
 use crate::state_controller::power_shelf::context::PowerShelfStateHandlerServices;
@@ -1063,7 +1064,19 @@ pub async fn initialize_and_start_controllers<'a>(
         .database(db_pool.clone(), work_lock_manager_handle.clone())
         .meter("carbide_machines", meter.clone())
         .processor_id(state_controller_id.clone())
-        .services(handler_services.clone())
+        .services(
+            MachineStateHandlerServices {
+                db_pool: handler_services.db_pool.clone(),
+                db_reader: handler_services.db_reader.clone(),
+                redfish_client_pool: handler_services.redfish_client_pool.clone(),
+                ipmi_tool: handler_services.ipmi_tool.clone(),
+                site_config: handler_services
+                    .site_config
+                    .machine_state_handler_site_config()
+                    .into(),
+            }
+            .into(),
+        )
         .iteration_config((&carbide_config.machine_state_controller.controller).into())
         .state_handler(Arc::new(
             MachineStateHandlerBuilder::builder()

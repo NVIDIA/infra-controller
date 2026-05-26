@@ -54,6 +54,7 @@ carbide-redfish = { path = "../redfish" }
 carbide-network-segment-controller = { path = "../network-segment-controller" }
 carbide-site-explorer = { path = "../site-explorer" }
 carbide-spdm-controller = { path = "../spdm-controller" }
+carbide-state-controller-common = { path = "../state-controller-common" }
 carbide-switch-controller = { path = "../switch-controller" }
 carbide-preingestion-manager = { path = "../preingestion-manager" }
 carbide-nvlink-manager = { path = "../nvlink-manager" }
