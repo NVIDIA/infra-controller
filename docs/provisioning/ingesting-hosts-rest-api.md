@@ -2,8 +2,6 @@
 
 Provider-side hardware onboarding for NICo using the REST API and `nicocli`. This is the Day 0 prequel to the Typical API Call Flows in the REST API Reference -- it covers how physical machines become discoverable so that subsequent calls like Retrieve All Machines return real hardware to allocate and provision.
 
-For the carbide-admin-cli (Core gRPC) variant of this workflow, see [Ingesting Hosts](ingesting-hosts.md). Both flows produce the same end state; this page documents the REST flow because that is the supported API surface for new deployments.
-
 ## Before You Start
 
 Make sure the following are in place before you begin:
@@ -11,9 +9,8 @@ Make sure the following are in place before you begin:
 1. NICo is deployed and the REST API service is reachable at a known URL.
 2. You have `nicocli` installed (`make nico-cli` from the infra-controller repo) and a working config under `~/.nico/`. For setup, authentication, and config conventions, see the [Quick Start Guide](../getting-started/quick-start.md) and the nicocli reference guide.
 3. You hold the `PROVIDER_ADMIN` role in the org you are operating in. Tenant Admins with `targetedInstanceCreation` capability can also register Expected Machines, but the canonical path is provider-side.
-4. You have the `carbide-admin-cli` available for the steps that do not yet have a REST equivalent (site-wide credential setup, TPM trust policy, DPU rshim operations).
-5. DHCP requests from all managed host BMC networks have been forwarded to the NICo DHCP service.
-6. For every host you plan to register, you have:
+4. DHCP requests from all managed host BMC networks have been forwarded to the NICo DHCP service.
+5. For every host you plan to register, you have:
    - The MAC address of the host BMC
    - The chassis serial number
    - The host BMC factory default username and password
@@ -26,19 +23,6 @@ nicocli user get
 ```
 
 `nicocli site list` returns the Sites the calling org has access to. Pick the Site UUID for the data center you are onboarding hardware into -- you will pass it as `--site-id` in every Expected Machine create call.
-
-## Setting Site-Wide Credentials
-
-The REST API does not currently expose site-wide credential management. Use `carbide-admin-cli` to set the BMC and UEFI passwords NICo will rotate onto hosts during ingestion:
-
-```bash
-carbide-admin-cli -c <api-url> credential add-bmc --kind=site-wide-root --password='<bmc-password>'
-carbide-admin-cli -c <api-url> host generate-host-uefi-password
-carbide-admin-cli -c <api-url> credential add-uefi --kind=host --password='<uefi-password>'
-carbide-admin-cli -c <api-url> credential add-uefi --kind=dpu --password='<dpu-uefi-password>'
-```
-
-These are one-time site setup operations. Without them, NICo cannot rotate hosts away from their factory default credentials during ingestion. The `<api-url>` value follows the pattern in the [carbide-admin-cli ingestion guide](ingesting-hosts.md#update-site).
 
 ## Registering Expected Machines
 
@@ -124,26 +108,6 @@ Where `expected-machines.json` is a JSON array of `ExpectedMachineCreateRequest`
 ```
 
 For sites with more than 100 machines, send multiple `batch-create` calls.
-
-### Per-Host Lifecycle Overrides (Not Available via REST)
-
-The REST `ExpectedMachineCreateRequest` does not currently expose per-host lifecycle overrides such as `disable_lockdown`, `dpu_mode`, `dpf_enabled`, `bmc_retain_credentials`, or `default_pause_ingestion_and_poweron`. These fields exist only in the Core gRPC schema and must be set via `carbide-admin-cli`:
-
-```bash
-carbide-admin-cli -c <api-url> em update --bmc-mac-address <mac> --disable-lockdown=true
-```
-
-If you need these overrides at scale, set them with the JSON-file form of `carbide-admin-cli em replace-all` (see the [carbide-admin-cli flow](ingesting-hosts.md#add-expected-machines-table) for the JSON schema). REST-API parity for these fields is tracked separately.
-
-## Configuring Trust Policy (TPM Approval)
-
-NICo uses Measured Boot via the on-host TPM v2.0 to enforce cryptographic identity of host hardware and firmware. There is no REST endpoint for trust policy; configure it with `carbide-admin-cli`:
-
-```bash
-carbide-admin-cli -c <api-url> att mb site trusted-machine approve \* persist --pcr-registers="0,3,5,6"
-```
-
-This approves all incoming machines based on PCR registers 0, 3, 5, and 6. Run it once per site before ingestion begins.
 
 ## What Happens After Approval: Ingestion to Ready
 
@@ -235,18 +199,6 @@ The following are the conditions in which Site Explorer cannot complete pairing 
 | `boot_interface_mac_mismatch` | Host boot MAC does not match the pf0 MAC of any discovered DPU | Check exploration reports and `carbide-api` logs for both host and DPU BMC IPs |
 | `viking_cpld_version_issue` | NVIDIA Viking (DGX): `CPLDMB_0` firmware below minimum required version (`0.2.1.9`) | Contact the data center team for a full DC power cycle |
 
-### DPU-Related Issues: Installing a Fresh DPU OS
-
-For DPU pairing failures, a common fix is to install a vanilla pre-ingestion BFB image via rshim. This is currently `carbide-admin-cli` only:
-
-```bash
-carbide-admin-cli -c <api-url> site-explorer copy-bfb-to-dpu-rshim \
-  --host-bmc-ip <host-bmc-ip> \
-  <dpu-bmc-ip>
-```
-
-The `--host-bmc-ip` flag is required so NICo can power-cycle the host after the BFB copy completes. Use `--pre-copy-powercycle` if the host needs to release rshim control to the DPU BMC before the copy can start.
-
 For more DPU-specific troubleshooting (Secure Boot configuration, BMC password resets, firmware version checks), see [Adding New Machines to an Existing Site](../playbooks/stuck_objects/adding_new_machines.md).
 
 ## Managing the Expected Machines Table
@@ -287,4 +239,4 @@ To dump the current table as JSON:
 nicocli expected-machine list --all --output json
 ```
 
-This is the REST equivalent of `carbide-admin-cli em show` and is suitable for backup or import-into-another-site workflows.
+Suitable for backup or import-into-another-site workflows.
