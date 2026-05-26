@@ -1509,6 +1509,8 @@ pub enum FailureCause {
     DpfProvisioning { err: String },
 
     SpdmAttestationFailed { err: String },
+
+    BiosSetupFailed { err: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -2053,6 +2055,7 @@ impl Display for FailureCause {
             FailureCause::SpdmAttestationFailed { .. } => {
                 write!(f, "SpdmAttestationFailed")
             }
+            FailureCause::BiosSetupFailed { .. } => write!(f, "BiosSetupFailed"),
         }
     }
 }

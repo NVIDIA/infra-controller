@@ -2380,6 +2380,144 @@ async fn test_polling_bios_setup_full_recovery_reruns_machine_setup_and_succeeds
     );
 }
 
+/// When HostInit/PollingBiosSetup retry budget is exhausted, enter Failed and recover via is_bios_setup.
+#[crate::sqlx_test]
+async fn test_polling_bios_setup_exhausted_enters_failed_and_recovers_when_bios_setup_true(
+    pool: sqlx::PgPool,
+) {
+    let env = create_test_env(pool).await;
+
+    let mh = common::api_fixtures::create_managed_host(&env).await;
+    let host_id = mh.host().id;
+
+    env.redfish_sim.set_is_bios_setup(false);
+
+    set_host_controller_state_stuck_in(
+        &env,
+        host_id,
+        &ManagedHostState::HostInit {
+            machine_state: MachineState::PollingBiosSetup { retry_count: 3 },
+        },
+        16,
+    )
+    .await;
+
+    env.run_machine_state_controller_iteration().await;
+
+    {
+        let mut txn = env.db_txn().await;
+        let host = mh.host().db_machine(&mut txn).await;
+        assert!(
+            matches!(
+                host.current_state(),
+                ManagedHostState::Failed {
+                    details: FailureDetails {
+                        cause: FailureCause::BiosSetupFailed { .. },
+                        source: FailureSource::StateMachineArea(StateMachineArea::HostInit),
+                        ..
+                    },
+                    ..
+                }
+            ),
+            "expected ManagedHostState::Failed with BiosSetupFailed/HostInit, got: {:?}",
+            host.current_state()
+        );
+    }
+
+    env.redfish_sim.set_is_bios_setup(true);
+    env.run_machine_state_controller_iteration().await;
+
+    {
+        let mut txn = env.db_txn().await;
+        let host = mh.host().db_machine(&mut txn).await;
+        assert!(
+            matches!(
+                host.current_state(),
+                ManagedHostState::HostInit {
+                    machine_state: MachineState::SetBootOrder { .. },
+                }
+            ),
+            "expected recovery to reach HostInit/SetBootOrder, got: {:?}",
+            host.current_state()
+        );
+    }
+}
+
+/// Assigned/HostPlatformConfiguration/PollingBiosSetup retry exhaustion enters InstanceState::Failed.
+#[crate::sqlx_test]
+async fn test_hpc_polling_bios_setup_exhausted_enters_failed_and_recovers_when_bios_setup_true(
+    pool: sqlx::PgPool,
+) {
+    let env = create_test_env(pool).await;
+
+    let mh = common::api_fixtures::create_managed_host(&env).await;
+    let segment_id = env.create_vpc_and_tenant_segment().await;
+    create_instance(&env, &mh, false, segment_id).await;
+    let host_id = mh.host().id;
+
+    env.redfish_sim.set_is_bios_setup(false);
+
+    set_host_controller_state_stuck_in(
+        &env,
+        host_id,
+        &ManagedHostState::Assigned {
+            instance_state: InstanceState::HostPlatformConfiguration {
+                platform_config_state: HostPlatformConfigurationState::PollingBiosSetup {
+                    retry_count: 3,
+                },
+            },
+        },
+        16,
+    )
+    .await;
+
+    env.run_machine_state_controller_iteration().await;
+
+    {
+        let mut txn = env.db_txn().await;
+        let host = mh.host().db_machine(&mut txn).await;
+        assert!(
+            matches!(
+                host.current_state(),
+                ManagedHostState::Assigned {
+                    instance_state: InstanceState::Failed {
+                        details: FailureDetails {
+                            cause: FailureCause::BiosSetupFailed { .. },
+                            source: FailureSource::StateMachineArea(
+                                StateMachineArea::AssignedInstance
+                            ),
+                            ..
+                        },
+                        ..
+                    },
+                }
+            ),
+            "expected Assigned/InstanceState::Failed with BiosSetupFailed/AssignedInstance, got: {:?}",
+            host.current_state()
+        );
+    }
+
+    env.redfish_sim.set_is_bios_setup(true);
+    env.run_machine_state_controller_iteration().await;
+
+    {
+        let mut txn = env.db_txn().await;
+        let host = mh.host().db_machine(&mut txn).await;
+        assert!(
+            matches!(
+                host.current_state(),
+                ManagedHostState::Assigned {
+                    instance_state: InstanceState::HostPlatformConfiguration {
+                        platform_config_state: HostPlatformConfigurationState::SetBootOrder { .. },
+                    },
+                }
+            ),
+            "expected recovery to reach HostPlatformConfiguration/SetBootOrder, got: {:?}",
+            host.current_state()
+        );
+    }
+}
+
 async fn set_host_controller_state_stuck_in(
     env: &TestEnv,
     host_id: MachineId,

@@ -119,6 +119,7 @@ mod sku;
 use bios_config::{
     BiosConfigJobAdvanceOutcome, BiosConfigOutcome, PollingBiosSetupOutcome,
     advance_bios_config_job, advance_polling_bios_setup, configure_host_bios,
+    handle_bios_setup_failed_recovery,
 };
 use helpers::{
     DpuDiscoveringStateHelper, DpuInitStateHelper, ManagedHostStateHelper, NextState,
@@ -1430,6 +1431,19 @@ impl MachineStateHandler {
                             Some(outcome) => Ok(outcome),
                             None => Ok(StateHandlerOutcome::do_nothing()),
                         }
+                    }
+                    FailureCause::BiosSetupFailed { .. } if machine_id.machine_type().is_host() => {
+                        let recovered = ManagedHostState::HostInit {
+                            machine_state: MachineState::SetBootOrder {
+                                set_boot_order_info: Some(SetBootOrderInfo {
+                                    set_boot_order_jid: None,
+                                    set_boot_order_state: SetBootOrderState::SetBootOrder,
+                                    retry_count: 0,
+                                }),
+                            },
+                        };
+                        handle_bios_setup_failed_recovery(ctx, mh_snapshot, machine_id, recovered)
+                            .await
                     }
                     _ => {
                         // Do nothing.
@@ -4905,14 +4919,26 @@ impl StateHandler for HostMachineStateHandler {
                                 },
                             }),
                         ),
-                        BiosConfigJobAdvanceOutcome::Done
-                        | BiosConfigJobAdvanceOutcome::DeferToPollingBiosSetup => Ok(
-                            StateHandlerOutcome::transition(ManagedHostState::HostInit {
+                        BiosConfigJobAdvanceOutcome::Done => Ok(StateHandlerOutcome::transition(
+                            ManagedHostState::HostInit {
                                 machine_state: MachineState::PollingBiosSetup {
                                     retry_count: bios_config_info.retry_count,
                                 },
-                            }),
-                        ),
+                            },
+                        )),
+                        BiosConfigJobAdvanceOutcome::Failed { failure } => {
+                            Ok(StateHandlerOutcome::transition(ManagedHostState::Failed {
+                                details: FailureDetails {
+                                    cause: FailureCause::BiosSetupFailed { err: failure },
+                                    failed_at: Utc::now(),
+                                    source: FailureSource::StateMachineArea(
+                                        StateMachineArea::HostInit,
+                                    ),
+                                },
+                                machine_id: mh_snapshot.host_snapshot.id,
+                                retry_count: 0,
+                            }))
+                        }
                         BiosConfigJobAdvanceOutcome::RetryPlatformConfiguration { retry_count } => {
                             Ok(StateHandlerOutcome::transition(
                                 ManagedHostState::HostInit {
@@ -4958,6 +4984,19 @@ impl StateHandler for HostMachineStateHandler {
                                 machine_state: MachineState::WaitingForBiosJob { bios_config_info },
                             }),
                         ),
+                        PollingBiosSetupOutcome::Failed { failure } => {
+                            Ok(StateHandlerOutcome::transition(ManagedHostState::Failed {
+                                details: FailureDetails {
+                                    cause: FailureCause::BiosSetupFailed { err: failure },
+                                    failed_at: Utc::now(),
+                                    source: FailureSource::StateMachineArea(
+                                        StateMachineArea::HostInit,
+                                    ),
+                                },
+                                machine_id: mh_snapshot.host_snapshot.id,
+                                retry_count: 0,
+                            }))
+                        }
                         PollingBiosSetupOutcome::Wait(reason) => {
                             Ok(StateHandlerOutcome::wait(reason))
                         }
@@ -6197,20 +6236,38 @@ impl StateHandler for InstanceStateHandler {
                 InstanceState::Failed {
                     details,
                     machine_id,
-                } => {
-                    // Only way to proceed is to
-                    // 1. Force-delete the machine.
-                    // 2. If failed during reprovision, fix the config/hw issue and
-                    //    retrigger DPU reprovision.
-                    tracing::warn!(
-                        "Instance id {}/machine: {} stuck in failed state. details: {:?}, failed machine: {}",
-                        instance.id,
-                        host_machine_id,
-                        details,
-                        machine_id
-                    );
-                    Ok(StateHandlerOutcome::do_nothing())
-                }
+                } => match details.cause {
+                    FailureCause::BiosSetupFailed { .. } if machine_id.machine_type().is_host() => {
+                        let recovered = ManagedHostState::Assigned {
+                            instance_state: InstanceState::HostPlatformConfiguration {
+                                platform_config_state:
+                                    HostPlatformConfigurationState::SetBootOrder {
+                                        set_boot_order_info: SetBootOrderInfo {
+                                            set_boot_order_jid: None,
+                                            set_boot_order_state: SetBootOrderState::SetBootOrder,
+                                            retry_count: 0,
+                                        },
+                                    },
+                            },
+                        };
+                        handle_bios_setup_failed_recovery(ctx, mh_snapshot, machine_id, recovered)
+                            .await
+                    }
+                    _ => {
+                        // Only way to proceed for other causes is to
+                        // 1. Force-delete the machine.
+                        // 2. If failed during reprovision, fix the config/hw issue and
+                        //    retrigger DPU reprovision.
+                        tracing::warn!(
+                            "Instance id {}/machine: {} stuck in failed state. details: {:?}, failed machine: {}",
+                            instance.id,
+                            host_machine_id,
+                            details,
+                            machine_id
+                        );
+                        Ok(StateHandlerOutcome::do_nothing())
+                    }
+                },
                 InstanceState::HostReprovision { .. } => {
                     self.host_upgrade
                         .handle_host_reprovision(
@@ -9932,11 +9989,26 @@ async fn handle_instance_host_platform_config(
                         bios_config_info: updated,
                     }
                 }
-                BiosConfigJobAdvanceOutcome::Done
-                | BiosConfigJobAdvanceOutcome::DeferToPollingBiosSetup => {
+                BiosConfigJobAdvanceOutcome::Done => {
                     HostPlatformConfigurationState::PollingBiosSetup {
                         retry_count: bios_config_info.retry_count,
                     }
+                }
+                BiosConfigJobAdvanceOutcome::Failed { failure } => {
+                    return Ok(StateHandlerOutcome::transition(
+                        ManagedHostState::Assigned {
+                            instance_state: InstanceState::Failed {
+                                details: FailureDetails {
+                                    cause: FailureCause::BiosSetupFailed { err: failure },
+                                    failed_at: Utc::now(),
+                                    source: FailureSource::StateMachineArea(
+                                        StateMachineArea::AssignedInstance,
+                                    ),
+                                },
+                                machine_id: mh_snapshot.host_snapshot.id,
+                            },
+                        },
+                    ));
                 }
                 BiosConfigJobAdvanceOutcome::RetryPlatformConfiguration {
                     retry_count: next_count,
@@ -9979,6 +10051,22 @@ async fn handle_instance_host_platform_config(
                                     HostPlatformConfigurationState::WaitingForBiosJob {
                                         bios_config_info,
                                     },
+                            },
+                        },
+                    ));
+                }
+                PollingBiosSetupOutcome::Failed { failure } => {
+                    return Ok(StateHandlerOutcome::transition(
+                        ManagedHostState::Assigned {
+                            instance_state: InstanceState::Failed {
+                                details: FailureDetails {
+                                    cause: FailureCause::BiosSetupFailed { err: failure },
+                                    failed_at: Utc::now(),
+                                    source: FailureSource::StateMachineArea(
+                                        StateMachineArea::AssignedInstance,
+                                    ),
+                                },
+                                machine_id: mh_snapshot.host_snapshot.id,
                             },
                         },
                     ));
