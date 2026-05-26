@@ -75,11 +75,12 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 use carbide_redfish::nv_redfish::{BmcError, NvRedfishClientPool, RedfishBmc};
-use db::bmc_redfish_session::{self, StoredSession};
+use db::bmc_redfish_session;
 use forge_secrets::credentials::{
     BmcCredentialType, CredentialKey, CredentialManager, Credentials,
 };
 use mac_address::MacAddress;
+use model::bmc_redfish_session::StoredSession;
 use nv_redfish::Error as NvError;
 use nv_redfish::core::{EntityTypeRef as _, ODataId};
 use nv_redfish::session_service::SessionCreate;

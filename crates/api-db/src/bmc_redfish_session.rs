@@ -24,20 +24,11 @@
 //! caller once and the only durable artifact is the session's `@odata.id`.
 
 use mac_address::MacAddress;
+use model::bmc_redfish_session::StoredSession;
 use sqlx::PgConnection;
-use sqlx::types::chrono::{DateTime, Utc};
 
 use crate::db_read::DbReader;
 use crate::{DatabaseError, DatabaseResult};
-
-/// A row in the `bmc_redfish_sessions` table.
-#[derive(Debug, Clone, sqlx::FromRow)]
-pub struct StoredSession {
-    pub spiffe_service_id: String,
-    pub bmc_mac_address: MacAddress,
-    pub session_odata_id: String,
-    pub issued_at: DateTime<Utc>,
-}
 
 /// Returns the outstanding session row for `(spiffe_service_id, bmc_mac)`
 /// if any has been recorded.
