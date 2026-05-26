@@ -2140,7 +2140,7 @@ message Switch {
   bool is_primary = 14;
 
   // NVOS host endpoint
-  BmcInfo nvos_info = 15;
+  SwitchNvosInfo nvos_info = 15;
 }
 
 message SwitchList {
@@ -3321,6 +3321,12 @@ message BmcInfo {
   optional string firmware_version = 4;
   optional uint32 port = 5;
   optional common.MachineInterfaceId machine_interface_id = 6;
+}
+
+message SwitchNvosInfo {
+  optional string ip = 1;
+  optional string mac = 2;
+  optional uint32 port = 3;
 }
 
 message Machine {

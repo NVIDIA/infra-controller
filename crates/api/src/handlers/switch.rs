@@ -107,13 +107,10 @@ pub async fn find_switch(
                         return None;
                     };
 
-                    Some(rpc::BmcInfo {
+                    Some(rpc::SwitchNvosInfo {
                         ip: Some(nvos_ip.to_string()),
                         mac: Some(nvos_mac.to_string()),
-                        version: None,
-                        firmware_version: None,
                         port: None,
-                        machine_interface_id: None,
                     })
                 });
                 rpc_switch
@@ -201,13 +198,10 @@ pub async fn find_by_ids(
                         return None;
                     };
 
-                    Some(rpc::BmcInfo {
+                    Some(rpc::SwitchNvosInfo {
                         ip: Some(nvos_ip.to_string()),
                         mac: Some(nvos_mac.to_string()),
-                        version: None,
-                        firmware_version: None,
                         port: None,
-                        machine_interface_id: None,
                     })
                 });
                 rpc_switch

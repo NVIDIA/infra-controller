@@ -296,6 +296,7 @@ async fn test_find_switches_by_ids_includes_resolved_nvos_info(
     );
 
     let nvos_info = switch.nvos_info.as_ref().expect("nvos info");
+    let _: &rpc::forge::SwitchNvosInfo = nvos_info;
     assert_eq!(nvos_info.mac, Some(host_mac.to_string()));
     assert_eq!(nvos_info.ip, Some(host_ip.to_string()));
 
@@ -325,6 +326,7 @@ async fn test_find_switches_includes_resolved_nvos_info(
 
     assert_eq!(response.switches.len(), 1);
     let nvos_info = response.switches[0].nvos_info.as_ref().expect("nvos info");
+    let _: &rpc::forge::SwitchNvosInfo = nvos_info;
     assert_eq!(nvos_info.mac, Some(host_mac.to_string()));
     assert_eq!(nvos_info.ip, Some(host_ip.to_string()));
 
