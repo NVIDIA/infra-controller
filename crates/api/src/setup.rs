@@ -644,51 +644,58 @@ pub async fn start_api(
 
     // Create DPF SDK and initialize CRs if enabled
     // If we end up having static DPUDeployments, we could move the static CRs outside of the API.
-    let dpf_sdk: Option<Arc<dyn crate::dpf::DpfOperations>> = if carbide_config.dpf.enabled {
-        tracing::info!("Initializing DPF SDK");
-        let repo = carbide_dpf::KubeRepository::new()
-            .await
-            .map_err(|e| eyre::eyre!("Failed to create DPF repository: {e}"))?;
+    let dpf_sdk: Option<Arc<dyn crate::state_controller::machine::dpf::DpfOperations>> =
+        if carbide_config.dpf.enabled {
+            tracing::info!("Initializing DPF SDK");
+            let repo = carbide_dpf::KubeRepository::new()
+                .await
+                .map_err(|e| eyre::eyre!("Failed to create DPF repository: {e}"))?;
 
-        let provider = crate::dpf::CarbideBmcPasswordProvider::new(credential_manager.clone());
+            let provider = crate::state_controller::machine::dpf::CarbideBmcPasswordProvider::new(
+                credential_manager.clone(),
+            );
 
-        let mandatory_services = carbide_config.dpf.services.clone();
-        let dpf_mandatory_services = vec![
-            crate::dpf_services::dts_service(&mandatory_services.dts),
-            crate::dpf_services::doca_hbn_service(&mandatory_services.doca_hbn),
-            crate::dpf_services::dhcp_server_service(&mandatory_services.dhcp_server),
-            crate::dpf_services::dpu_agent_service(&mandatory_services.dpu_agent),
-            crate::dpf_services::fmds_service(&mandatory_services.fmds),
-            crate::dpf_services::otelcol_service(&mandatory_services.otel),
-        ];
+            let mandatory_services = carbide_config.dpf.services.clone();
+            let dpf_mandatory_services = vec![
+                crate::dpf_services::dts_service(&mandatory_services.dts),
+                crate::dpf_services::doca_hbn_service(&mandatory_services.doca_hbn),
+                crate::dpf_services::dhcp_server_service(&mandatory_services.dhcp_server),
+                crate::dpf_services::dpu_agent_service(&mandatory_services.dpu_agent),
+                crate::dpf_services::fmds_service(&mandatory_services.fmds),
+                crate::dpf_services::otelcol_service(&mandatory_services.otel),
+            ];
 
-        // This is just temparary code until we make v2 only option. (just 2 weeks)
-        // Soon v2 flag will be removed and will become only mode for dpf handling.
-        let init_config = carbide_dpf::InitDpfResourcesConfig {
-            bfb_url: carbide_config.dpf.bfb_url.clone(),
-            flavor_name: carbide_config.dpf.flavor_name.clone(),
-            deployment_name: carbide_config.dpf.deployment_name.clone(),
-            services: dpf_mandatory_services,
-        };
+            // This is just temparary code until we make v2 only option. (just 2 weeks)
+            // Soon v2 flag will be removed and will become only mode for dpf handling.
+            let init_config = carbide_dpf::InitDpfResourcesConfig {
+                bfb_url: carbide_config.dpf.bfb_url.clone(),
+                flavor_name: carbide_config.dpf.flavor_name.clone(),
+                deployment_name: carbide_config.dpf.deployment_name.clone(),
+                services: dpf_mandatory_services,
+            };
 
-        let sdk = carbide_dpf::DpfSdkBuilder::new(repo, carbide_dpf::NAMESPACE, provider)
-            .with_labeler(crate::dpf::CarbideDPFLabeler::new(
-                carbide_config.dpf.node_label_key.clone(),
+            let sdk = carbide_dpf::DpfSdkBuilder::new(repo, carbide_dpf::NAMESPACE, provider)
+                .with_labeler(
+                    crate::state_controller::machine::dpf::CarbideDPFLabeler::new(
+                        carbide_config.dpf.node_label_key.clone(),
+                    ),
+                )
+                .with_bmc_password_refresh_interval(std::time::Duration::from_secs(60))
+                .with_join_set(join_set)
+                .initialize(&init_config)
+                .await
+                .map_err(|err| eyre::eyre!("Failed to initialize DPF SDK: {err}"))?;
+
+            Some(Arc::new(
+                crate::state_controller::machine::dpf::DpfSdkOps::new(
+                    Arc::new(sdk),
+                    db_pool.clone(),
+                    join_set,
+                )?,
             ))
-            .with_bmc_password_refresh_interval(std::time::Duration::from_secs(60))
-            .with_join_set(join_set)
-            .initialize(&init_config)
-            .await
-            .map_err(|err| eyre::eyre!("Failed to initialize DPF SDK: {err}"))?;
-
-        Some(Arc::new(crate::dpf::DpfSdkOps::new(
-            Arc::new(sdk),
-            db_pool.clone(),
-            join_set,
-        )?))
-    } else {
-        None
-    };
+        } else {
+            None
+        };
 
     let component_manager = if let Some(cd_config) = &carbide_config.component_manager {
         match component_manager::component_manager::build_component_manager(

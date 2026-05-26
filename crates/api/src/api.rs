@@ -52,12 +52,12 @@ use tonic::{Request, Response, Status, Streaming};
 use self::metrics::ApiMetricsEmitter;
 use self::rpc::forge_server::Forge;
 use crate::cfg::file::CarbideConfig;
-use crate::dpf::DpfOperations;
 use crate::dynamic_settings::DynamicSettings;
 use crate::ethernet_virtualization::EthVirtData;
 use crate::logging::log_limiter::LogLimiter;
 use crate::scout_stream::ConnectionRegistry;
 use crate::state_controller::controller::Enqueuer;
+use crate::state_controller::machine::dpf::DpfOperations;
 use crate::state_controller::machine::io::MachineStateControllerIO;
 use crate::{CarbideError, CarbideResult};
 

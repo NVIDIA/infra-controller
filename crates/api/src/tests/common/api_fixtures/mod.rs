@@ -126,7 +126,6 @@ use crate::cfg::file::{
     SpdmStateControllerConfig, SwitchStateControllerConfig, VmaasConfig, VpcPeeringPolicy,
     default_max_find_by_ids,
 };
-use crate::dpf::DpfOperations;
 use crate::ethernet_virtualization::{EthVirtData, SiteFabricPrefixList};
 use crate::logging::level_filter::ActiveLevel;
 use crate::logging::log_limiter::LogLimiter;
@@ -138,6 +137,7 @@ use crate::state_controller::machine::config::{
     BomValidationConfig, FirmwareGlobal, MachineStateControllerConfig, PowerManagerOptions,
 };
 use crate::state_controller::machine::context::MachineStateHandlerServices;
+use crate::state_controller::machine::dpf::DpfOperations;
 use crate::state_controller::machine::handler::{
     MachineStateHandler, MachineStateHandlerBuilder, PowerOptionConfig, ReachabilityParams,
 };

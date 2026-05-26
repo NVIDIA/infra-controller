@@ -96,11 +96,11 @@ use tracing::instrument;
 use version_compare::Cmp;
 
 use crate::cfg::file::{MachineValidationConfig, TimePeriod};
-use crate::dpf::DpfOperations;
 use crate::state_controller::machine::config::{FirmwareGlobal, MachineStateHandlerSiteConfig};
 use crate::state_controller::machine::context::{
     MachineStateHandlerContextObjects, MachineStateHandlerServices,
 };
+use crate::state_controller::machine::dpf::DpfOperations;
 use crate::state_controller::machine::redfish::{
     did_dpu_finish_booting, host_power_control, host_power_control_with_location,
 };
