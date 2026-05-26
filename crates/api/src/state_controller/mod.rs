@@ -18,4 +18,4 @@
 pub mod common_services;
 pub mod machine;
 
-pub use ::state_controller::{controller, db_write_batch, state_change_emitter, state_handler};
+pub use ::state_controller::{controller, state_change_emitter, state_handler};

@@ -34,6 +34,7 @@ pub mod config;
 pub mod context;
 pub mod dpf;
 pub mod handler;
+pub mod health_report;
 pub mod io;
 pub mod metrics;
 pub mod redfish;

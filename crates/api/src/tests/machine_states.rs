@@ -57,11 +57,11 @@ use rpc::forge::{HealthReportEntry, InsertMachineHealthReportRequest, TpmCaCert,
 use rpc::forge_agent_control_response::{Action, LegacyAction};
 use rpc::machine_discovery::AttestKeyInfo;
 use rpc::{DiscoveryData, DiscoveryInfo};
+use state_controller::db_write_batch::DbWriteBatch;
 use tonic::{Code, Request};
 
 use crate::handlers::measured_boot::rpc_forge::MachineDiscoveryInfo;
 use crate::measured_boot::convert_vec;
-use crate::state_controller::db_write_batch::DbWriteBatch;
 use crate::state_controller::machine::context::MachineStateHandlerContextObjects;
 use crate::state_controller::machine::handler::{
     MachineStateHandlerBuilder, handler_host_power_control,

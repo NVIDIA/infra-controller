@@ -101,6 +101,9 @@ use crate::state_controller::machine::context::{
     MachineStateHandlerContextObjects, MachineStateHandlerServices,
 };
 use crate::state_controller::machine::dpf::DpfOperations;
+use crate::state_controller::machine::health_report::{
+    create_host_update_health_report_dpufw, create_host_update_health_report_hostfw,
+};
 use crate::state_controller::machine::redfish::{
     did_dpu_finish_booting, host_power_control, host_power_control_with_location,
 };
@@ -821,8 +824,7 @@ impl MachineStateHandler {
                         )
                         .await?;
                     if matches!(outcome, StateHandlerOutcome::Transition { .. }) {
-                        let health_report =
-                        crate::machine_update_manager::machine_update_module::create_host_update_health_report_hostfw();
+                        let health_report = create_host_update_health_report_hostfw();
                         let host_machine_id = *host_machine_id;
 
                         // The health report alert gets generated here, the machine update manager
@@ -891,7 +893,7 @@ impl MachineStateHandler {
                         dpus_for_reprov.iter().map(|x| &x.id).collect_vec(),
                     )?;
 
-                    let health_override = crate::machine_update_manager::machine_update_module::create_host_update_health_report_dpufw();
+                    let health_override = create_host_update_health_report_dpufw();
 
                     // Mark the Host as in update.
                     let mut txn = ctx.services.db_pool.begin().await?;
@@ -5751,8 +5753,7 @@ impl StateHandler for InstanceStateHandler {
                         };
 
                         if host_firmware_requested {
-                            let health_override =
-                                        crate::machine_update_manager::machine_update_module::create_host_update_health_report_hostfw();
+                            let health_override = create_host_update_health_report_hostfw();
                             let machine_id = *host_machine_id;
                             // The health report alert gets generated here, the machine update manager retains responsibilty for clearing it when we're done.
                             db::machine::insert_health_report(
@@ -5766,7 +5767,7 @@ impl StateHandler for InstanceStateHandler {
                         }
 
                         if reprov_can_be_started {
-                            let health_override = crate::machine_update_manager::machine_update_module::create_host_update_health_report_dpufw();
+                            let health_override = create_host_update_health_report_dpufw();
                             let machine_id = *host_machine_id;
                             // Mark the Host as in update.
                             db::machine::insert_health_report(
