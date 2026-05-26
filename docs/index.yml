@@ -62,11 +62,6 @@ navigation:
         - page: SKU Validation
           path: provisioning/sku-validation.md
 
-    - section: Configuration (Day 1)
-      contents:
-        - page: Day One Operations
-          path: manuals/day_one_operations.md
-
     - section: DPU Management
       contents:
         - page: DPU Lifecycle Management
@@ -75,6 +70,11 @@ navigation:
           path: dpu-management/dpu_configuration.md
         - page: BlueField DPU Operations
           path: dpu-management/dpu-operations.md
+
+    - section: Configuration (Day 1 Operations)
+      contents:
+        - page: Tenant Management
+          path: configuration/tenant_management.md
 
     - section: Architecture
       contents:

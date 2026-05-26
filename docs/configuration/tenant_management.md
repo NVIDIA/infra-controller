@@ -1,8 +1,8 @@
-# Day One Operations: Tenant Management and Instance Provisioning
+# Tenant Management
 
-Day One operator guide for tenant management, resource allocation, and instance provisioning on NICo, using nicocli (REST API CLI) as the primary tool.
+Operator guide for tenant creation, resource allocation, and instance provisioning on NICo, using nicocli (REST API CLI) as the primary tool.
 
-"Day One" in NICo's lifecycle model is the phase after hardware has been discovered, validated, and ingested (Day Zero) -- it is when operators configure tenant boundaries, define resource allocations, and provision instances so tenants can consume bare-metal infrastructure.
+This is a Day 1 (Configuration) activity in NICo's lifecycle model -- the phase after hardware has been discovered, validated, and ingested (Day 0). Day 1 is when operators configure tenant boundaries, define resource allocations, and provision instances so tenants can consume bare-metal infrastructure.
 
 The primary tool throughout this guide is `nicocli`, the CLI client that wraps the NICo REST API. Every REST endpoint is available as a CLI command, and nicocli handles authentication, token refresh, and multi-environment configuration automatically. The carbide-admin-cli (which talks to the Core gRPC API) is referenced only where an operation has no REST API equivalent.
 
