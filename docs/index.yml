@@ -110,8 +110,18 @@ navigation:
 
     - section: Operations
       contents:
-        - page: NVLink Partitioning
-          path: manuals/nvlink_partitioning.md
+        - section: Network Isolation
+          contents:
+            - page: Overview
+              path: manuals/network_isolation.md
+            - page: Ethernet Isolation
+              path: manuals/networking/ethernet_isolation.md
+            - page: Network Security Groups
+              path: manuals/networking/network_security_groups.md
+            - page: InfiniBand Isolation
+              path: manuals/networking/infiniband_isolation.md
+            - page: NVLink Partitioning
+              path: manuals/nvlink_partitioning.md
         - page: Release Instance API Enhancements
           path: manuals/breakfix_integration.md
         - page: IP Resource Pools

@@ -84,6 +84,115 @@ If you want finer control, leave `nvLinkLogicalPartitionId` unset on the VPC and
 | VPC doesn't have `nvLinkLogicalPartitionId` set, Instance specifies `nvLinkInterfaces` | Per-GPU NVLink Logical Partition assignments are used |
 | Same `nvLinkLogicalPartitionId` on multiple VPCs | Allowed — no implicit exclusivity |
 
+### How NICo Reconciles NVLink State
+
+NICo runs a periodic reconciler against NMX-M and NMX-C to keep the actual
+NVLink partition topology aligned with the desired state implied by tenant
+instance configurations. The behaviour matters whenever an operator is
+diagnosing latency between an API call and an instance becoming `Ready`.
+
+Each reconciliation pass does the following:
+
+1. Loads every NVLink Logical Partition and every NVLink Physical Partition
+   from the NICo database.
+2. Queries each configured NMX-M and / or NMX-C endpoint for the current
+   partition list and GPU membership on that endpoint's chassis or domain.
+3. Compares observed state against desired state.
+4. Issues create / update / remove operations to the fabric-management
+   service to converge it onto desired state.
+5. Updates per-machine GPU status observations in the NICo database. The
+   per-instance `configs_synced.nvlink` field is derived from these
+   observations and is what gates the instance's `Ready` state.
+
+Cadence is set by `nvlink_config.monitor_run_interval` (default `60s`).
+
+The reconciler exposes metrics under the
+`carbide_nvlink_partition_monitor_*` namespace. Useful ones:
+
+| Metric | Use |
+|---|---|
+| `carbide_nvlink_partition_monitor_iteration_latency` | Time per reconcile pass |
+| `carbide_nvlink_partition_monitor_nmxc_op_latency` | Per-operation latency against NMX-C |
+| `carbide_nvlink_partition_monitor_nmxc_changes_applied` | Counter of changes issued; nonzero in steady state is an anomaly |
+| `carbide_nvlink_partition_monitor_nmxc_connect_error_count` | Connection failures to any NMX-C endpoint |
+| `carbide_nvlink_partition_monitor_nmxm_connect_error_count` | Connection failures to NMX-M |
+| `carbide_nvlink_partition_monitor_num_logical_partitions` | Logical-partition count NICo is tracking |
+| `carbide_nvlink_partition_monitor_num_physical_partitions` | Physical-partition count NICo is tracking |
+| `carbide_nvlink_partition_monitor_nmxc_partition_count` | Partition count NMX-C reports |
+| `carbide_nvlink_partition_monitor_nmxc_gpu_count` | GPU count NMX-C reports across managed partitions |
+
+### Instance Release and Logical Partition Deletion
+
+When an instance is released (via `ReleaseInstance`):
+
+1. The instance's NVLink configuration is cleared from the database.
+2. The reconciler observes that GPUs previously assigned to the instance
+   are no longer requested in any live partition.
+3. The reconciler removes those GPUs from their NMX-M / NMX-C partitions.
+4. Once all NVLink state is removed, the machine's GPU status observation
+   reflects an empty domain assignment and the host becomes eligible for
+   reuse.
+
+When a Logical Partition is deleted, every underlying NVLink Physical
+Partition on each NMX-M / NMX-C endpoint backing it is also deleted. The
+deletion is rejected if any instance still references the Logical
+Partition.
+
+When a host is force-deleted, the instance running on it is implicitly
+released and the above cleanup path runs. Operators do not need to detach
+NVLink configuration manually before force-deleting.
+
+### Enabling NMX-C-based NVLink Partitioning
+
+NMX-C is the gRPC control path for NVLink partition management and is the
+current default for new deployments. NMX-M remains supported and is
+covered in the next section; the two are not mutually exclusive and a
+single site may use both.
+
+The TOML toggles live alongside the NMX-M ones under `[nvlink_config]`:
+
+```toml
+[nvlink_config]
+enabled = true
+monitor_run_interval = "60s"
+
+# Optional TLS material for NMX-C. Leave unset to use the system trust
+# store and present no client certificate.
+nmx_c_tls_ca_cert_path     = "/etc/nico/nmxc/ca.pem"
+nmx_c_tls_client_cert_path = "/etc/nico/nmxc/client.crt"
+nmx_c_tls_client_key_path  = "/etc/nico/nmxc/client.key"
+nmx_c_tls_authority        = "nmxc.example.internal"
+
+allow_insecure = false
+```
+
+| Field | Purpose |
+|---|---|
+| `nmx_c_tls_ca_cert_path` | Optional PEM containing additional CAs for verifying the NMX-C endpoint's certificate |
+| `nmx_c_tls_client_cert_path` | Optional client certificate for mTLS to NMX-C |
+| `nmx_c_tls_client_key_path` | Optional client key matching the certificate above |
+| `nmx_c_tls_authority` | Optional override for the expected server name during certificate verification (SNI / hostname check) |
+| `allow_insecure` | When `true`, disables TLS verification entirely. Intended for development |
+
+Unlike NMX-M, where a single endpoint URL is set in TOML, NMX-C endpoints
+are **per-chassis** and stored in the NICo database. Register them with
+`nico-admin-cli`, keyed by the chassis serial:
+
+```bash
+nico-admin-cli nvlink-nmxc-endpoints create \
+    --chassis-serial <serial> \
+    --endpoint https://nmxc-host:443
+
+nico-admin-cli nvlink-nmxc-endpoints show
+```
+
+`update` and `delete` subcommands follow the same pattern. The reconciler
+picks up new endpoints on the next iteration; no restart is required.
+
+The TLS material in TOML applies uniformly to every NMX-C endpoint NICo
+talks to. Per-endpoint credential overrides are not currently supported;
+deploy a uniform trust posture across the site's NMX-C control plane.
+
 ### Enabling NMX-M-based NVLink Partitioning
 
 This section describes how to enable NVLink support via the [NMX-M platform](https://docs.nvidia.com/networking/display/nmxmv8513000).
@@ -133,3 +242,42 @@ This section describes how to enable NVLink support via the [NMX-M platform](htt
     * carbide-core logs should not show "Failed to create NMXM client".
     * Logs should not show failures getting NMX-M partitions or GPU list.
     * Metrics show that `carbide_nvlink_partition_monitor_nmxm_connect_error_count` is `0`.
+
+### Verifying a Tenant's NVLink Placement
+
+After an instance has been created and the reconciler has had at least one
+opportunity to run, an operator can confirm correct placement with the
+following checks. There is no single all-in-one health command; the steps
+below should be repeatable as a checklist.
+
+1. **Reconciler is running.**
+   `carbide_nvlink_partition_monitor_iteration_latency` is being recorded
+   and both `carbide_nvlink_partition_monitor_nmxc_connect_error_count`
+   and `carbide_nvlink_partition_monitor_nmxm_connect_error_count` are
+   flat.
+2. **Logical-partition count matches expectation.**
+   `carbide_nvlink_partition_monitor_num_logical_partitions` reflects
+   the partitions a site planner expects to exist. A sudden change is
+   worth correlating with recent tenant API activity.
+3. **Per-instance configuration has converged.** The instance's
+   `InstanceStatus` reports `configs_synced.nvlink = true` and the
+   `nvLinkInterfaces` list on the instance shows the expected
+   `nvLinkLogicalPartitionId` and `nvLinkDomainId` for each GPU.
+4. **Per-machine GPU placement.**
+
+    ```
+    carbide-admin-cli machine nvlink-info --machine-id <machine-id>
+    ```
+
+    Returns the machine's NVLink GPU status observations, including the
+    Domain each GPU is currently assigned to. Use this to confirm that
+    two instances expected to share an NVLink Logical Partition have
+    actually landed in the same NVLink Domain — instances in different
+    Domains cannot share GPU memory regardless of having the same
+    Logical Partition ID.
+5. **Cleanup after release.** After releasing an instance, the same
+   `machine nvlink-info` output should show an empty Domain assignment
+   on the affected GPUs within one or two reconcile intervals. Failure
+   to clear indicates the reconciler could not remove the GPU from its
+   NMX-M / NMX-C partition; investigate the corresponding connect-error
+   and op-latency metrics.
