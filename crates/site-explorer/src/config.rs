@@ -26,6 +26,7 @@ use carbide_utils::config::{
 };
 use chrono::Duration;
 use duration_str::{deserialize_duration, deserialize_duration_chrono};
+use model::expected_machine::DpuMode;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// SiteExplorer related configuration for hardware discovery and ingestion.
@@ -185,6 +186,18 @@ pub struct SiteExplorerConfig {
         serialize_with = "serialize_arc_atomic_bool"
     )]
     pub force_dpu_nic_mode: Arc<AtomicBool>,
+    /// Site-wide default DPU operating mode. When set, applies to every
+    /// host that doesn't declare a per-host `ExpectedMachine.dpu_mode`
+    /// override (or that declares the default `DpuMode` variant, which is
+    /// indistinguishable from "unset"). Per-host `NicMode` / `NoDpu`
+    /// always overrides this. `None` means "no site default declared" and
+    /// resolution falls back to the legacy `force_dpu_nic_mode` flag.
+    ///
+    /// This setting is mirrored from the top-level `CarbideConfig.dpu_mode`
+    /// during config parsing so operators can set it once at the site
+    /// level without nesting under `[site_explorer]`.
+    #[serde(default)]
+    pub dpu_mode: Option<DpuMode>,
     /// Controls which Redfish client implementation is used
     /// for hardware discovery (LibRedfish, NvRedfish, or
     /// CompareResult for side-by-side validation).
@@ -216,6 +229,7 @@ impl Default for SiteExplorerConfig {
             switches_created_per_run: Self::default_switches_created_per_run(),
             rotate_switch_nvos_credentials: Self::default_rotate_switch_nvos_credentials(),
             force_dpu_nic_mode: Arc::new(false.into()),
+            dpu_mode: None,
             explore_mode: Self::default_explore_mode(),
         }
     }

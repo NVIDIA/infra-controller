@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use ::rpc::measured_boot::FromGrpc;
 use askama::Template;
 use axum::extract::{Path as AxumPath, Query as AxumQuery, State as AxumState};
 use axum::response::{Html, IntoResponse};
@@ -25,7 +26,7 @@ use carbide_uuid::measured_boot::MeasurementReportId;
 use hyper::http::StatusCode;
 use measured_boot::site::{MachineAttestationSummary, MachineAttestationSummaryList};
 use measured_boot::{
-    FromGrpc, bundle as mbbundle, journal as mbjournal, profile as mbprofile, report as mbreport,
+    bundle as mbbundle, journal as mbjournal, profile as mbprofile, report as mbreport,
 };
 use rpc::forge::forge_server::Forge;
 use rpc::protos::measured_boot as mbprotos;

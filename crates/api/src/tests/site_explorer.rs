@@ -1035,6 +1035,7 @@ async fn test_site_explorer_audit_exploration_results(
         switches_created_per_run: 1,
         rotate_switch_nvos_credentials: Arc::new(false.into()),
         force_dpu_nic_mode: Arc::new(false.into()),
+        dpu_mode: None,
         // Tests use MockEndpointExplorer. So this doesn't affect anything.
         explore_mode: SiteExplorerExploreMode::NvRedfish,
     };
@@ -3177,6 +3178,7 @@ async fn test_site_explorer_switch_discovery(
         nvos_username: None,
         nvos_password: None,
         bmc_ip_address: None,
+        nvos_ip_address: None,
         metadata: Metadata {
             name: format!("Test Switch {}", serial_number),
             description: format!("A test switch with serial {}", serial_number),
@@ -5412,6 +5414,7 @@ fn expected_switch_fixture(
         nvos_username: None,
         nvos_password: None,
         bmc_ip_address: None,
+        nvos_ip_address: None,
         metadata: Metadata {
             name: format!("Test Switch {serial}"),
             description: String::new(),
@@ -5671,6 +5674,396 @@ async fn power_shelf_skips_creation_when_bmc_mac_already_used(
     txn.commit().await?;
     assert_eq!(after_second.len(), 1, "exactly one power_shelves row");
     assert_eq!(after_second[0].id, original_id, "original ID preserved");
+
+    Ok(())
+}
+
+/// Site-explorer reconciles every `expected_*` row's configured static IPs into
+/// `machine_interface` rows by calling `try_preallocate_one` per static IP during
+/// `update_explored_endpoints`. This test drives the same per-row materialization directly,
+/// covering the static-assignments-segment counterpart to the DHCP `discover()` recovery hook:
+/// devices whose IP lives outside any Carbide-managed network never reach `discover()`, so this
+/// per-row preallocation is what gets their rows onto the books.
+#[crate::sqlx_test]
+async fn test_site_explorer_reconcile_creates_missing_preallocations(
+    pool: sqlx::PgPool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let env = common::api_fixtures::create_test_env(pool.clone()).await;
+
+    let machine_bmc_mac: MacAddress = "AA:BB:CC:DD:E0:01".parse().unwrap();
+    let machine_bmc_ip: IpAddr = "10.99.0.10".parse().unwrap();
+    let switch_bmc_mac: MacAddress = "AA:BB:CC:DD:E0:02".parse().unwrap();
+    let switch_bmc_ip: IpAddr = "10.99.0.11".parse().unwrap();
+    let power_shelf_bmc_mac: MacAddress = "AA:BB:CC:DD:E0:03".parse().unwrap();
+    let power_shelf_bmc_ip: IpAddr = "10.99.0.12".parse().unwrap();
+
+    // Seed each expected_* row WITHOUT a corresponding machine_interface. The gRPC `add`
+    // handlers don't preallocate inline; site-explorer's reconciliation pass is what
+    // materializes the rows.
+    let mut txn = env.pool.begin().await?;
+    db::expected_machine::create(
+        &mut txn,
+        ExpectedMachine {
+            id: None,
+            bmc_mac_address: machine_bmc_mac,
+            data: ExpectedMachineData {
+                serial_number: "reconcile-m-001".to_string(),
+                bmc_ip_address: Some(machine_bmc_ip),
+                ..Default::default()
+            },
+        },
+    )
+    .await?;
+    db::expected_switch::create(
+        &mut txn,
+        model::expected_switch::ExpectedSwitch {
+            expected_switch_id: None,
+            bmc_mac_address: switch_bmc_mac,
+            nvos_mac_addresses: vec![],
+            bmc_username: "ADMIN".into(),
+            serial_number: "reconcile-sw-001".into(),
+            bmc_password: "PASS".into(),
+            nvos_username: None,
+            nvos_password: None,
+            bmc_ip_address: Some(switch_bmc_ip),
+            nvos_ip_address: None,
+            metadata: Metadata::default(),
+            rack_id: None,
+            bmc_retain_credentials: None,
+        },
+    )
+    .await?;
+    db::expected_power_shelf::create(
+        &mut txn,
+        model::expected_power_shelf::ExpectedPowerShelf {
+            expected_power_shelf_id: None,
+            bmc_mac_address: power_shelf_bmc_mac,
+            bmc_username: "ADMIN".into(),
+            serial_number: "reconcile-ps-001".into(),
+            bmc_password: "PASS".into(),
+            bmc_ip_address: Some(power_shelf_bmc_ip),
+            metadata: Metadata::default(),
+            rack_id: None,
+            bmc_retain_credentials: None,
+        },
+    )
+    .await?;
+    txn.commit().await?;
+
+    // Baseline: no interfaces yet.
+    let mut txn = env.pool.begin().await?;
+    for mac in [machine_bmc_mac, switch_bmc_mac, power_shelf_bmc_mac] {
+        let before = db::machine_interface::find_by_mac_address(&mut *txn, mac).await?;
+        assert!(
+            before.is_empty(),
+            "no machine_interface should exist before site-explorer reconciles for {mac}"
+        );
+    }
+    txn.commit().await?;
+
+    for (mac, ip, kind) in [
+        (machine_bmc_mac, machine_bmc_ip, "expected_machine BMC"),
+        (switch_bmc_mac, switch_bmc_ip, "expected_switch BMC"),
+        (
+            power_shelf_bmc_mac,
+            power_shelf_bmc_ip,
+            "expected_power_shelf BMC",
+        ),
+    ] {
+        carbide_site_explorer::try_preallocate_one(
+            &env.pool,
+            mac,
+            ip,
+            model::machine_interface::InterfaceType::Bmc,
+            kind,
+        )
+        .await;
+    }
+
+    let mut txn = env.pool.begin().await?;
+    for (mac, ip) in [
+        (machine_bmc_mac, machine_bmc_ip),
+        (switch_bmc_mac, switch_bmc_ip),
+        (power_shelf_bmc_mac, power_shelf_bmc_ip),
+    ] {
+        let after = db::machine_interface::find_by_mac_address(&mut *txn, mac).await?;
+        assert_eq!(after.len(), 1, "should be preallocated for {mac}");
+        assert!(
+            after[0].addresses.contains(&ip),
+            "preallocated row for {mac} should carry {ip}, got {:?}",
+            after[0].addresses,
+        );
+        assert_eq!(
+            after[0].interface_type,
+            model::machine_interface::InterfaceType::Bmc,
+            "BMC IPs should be preallocated with InterfaceType::Bmc, not Data ({mac})"
+        );
+    }
+
+    Ok(())
+}
+
+/// Site-explorer's reconciliation pass must materialize `ExpectedHostNic.fixed_ip`
+/// reservations too, not just BMC IPs.
+#[crate::sqlx_test]
+async fn test_site_explorer_reconcile_preallocates_host_nic_fixed_ip(
+    pool: sqlx::PgPool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let env = common::api_fixtures::create_test_env(pool.clone()).await;
+
+    let bmc_mac: MacAddress = "AA:BB:CC:DD:E1:01".parse().unwrap();
+    let nic_mac: MacAddress = "AA:BB:CC:DD:E1:02".parse().unwrap();
+    let fixed_ip = "10.99.0.20";
+
+    let mut txn = env.pool.begin().await?;
+    db::expected_machine::create(
+        &mut txn,
+        ExpectedMachine {
+            id: None,
+            bmc_mac_address: bmc_mac,
+            data: ExpectedMachineData {
+                serial_number: "reconcile-hostnic-001".to_string(),
+                host_nics: vec![model::expected_machine::ExpectedHostNic {
+                    mac_address: nic_mac,
+                    nic_type: Some("onboard".into()),
+                    fixed_ip: Some(fixed_ip.into()),
+                    fixed_mask: None,
+                    fixed_gateway: None,
+                    primary: None,
+                }],
+                ..Default::default()
+            },
+        },
+    )
+    .await?;
+    txn.commit().await?;
+
+    let parsed_fixed_ip: IpAddr = fixed_ip.parse().unwrap();
+    carbide_site_explorer::try_preallocate_one(
+        &env.pool,
+        nic_mac,
+        parsed_fixed_ip,
+        model::machine_interface::InterfaceType::Data,
+        "expected_machine host NIC",
+    )
+    .await;
+
+    let mut txn = env.pool.begin().await?;
+    let nic_iface = db::machine_interface::find_by_mac_address(&mut *txn, nic_mac).await?;
+    assert_eq!(
+        nic_iface.len(),
+        1,
+        "host NIC interface should be preallocated"
+    );
+    assert!(
+        nic_iface[0].addresses.contains(&parsed_fixed_ip),
+        "preallocated host NIC interface should carry the fixed_ip"
+    );
+    assert_eq!(
+        nic_iface[0].interface_type,
+        model::machine_interface::InterfaceType::Data,
+        "host NIC preallocation should mark the interface as InterfaceType::Data, not Bmc"
+    );
+
+    Ok(())
+}
+
+/// Running `try_preallocate_one` twice for the same (mac, ip) must be a no-op the second time
+/// -- no new rows, no errors. This is the steady-state behavior since site-explorer iterates
+/// continuously and re-issues the same calls on every pass.
+#[crate::sqlx_test]
+async fn test_site_explorer_reconcile_is_idempotent(
+    pool: sqlx::PgPool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let env = common::api_fixtures::create_test_env(pool.clone()).await;
+
+    let bmc_mac: MacAddress = "AA:BB:CC:DD:E2:01".parse().unwrap();
+    let bmc_ip: IpAddr = "10.99.0.30".parse().unwrap();
+
+    let mut txn = env.pool.begin().await?;
+    db::expected_machine::create(
+        &mut txn,
+        ExpectedMachine {
+            id: None,
+            bmc_mac_address: bmc_mac,
+            data: ExpectedMachineData {
+                serial_number: "reconcile-idem-001".to_string(),
+                bmc_ip_address: Some(bmc_ip),
+                ..Default::default()
+            },
+        },
+    )
+    .await?;
+    txn.commit().await?;
+
+    for _ in 0..2 {
+        carbide_site_explorer::try_preallocate_one(
+            &env.pool,
+            bmc_mac,
+            bmc_ip,
+            model::machine_interface::InterfaceType::Bmc,
+            "expected_machine BMC",
+        )
+        .await;
+    }
+
+    let mut txn = env.pool.begin().await?;
+    let interfaces = db::machine_interface::find_by_mac_address(&mut *txn, bmc_mac).await?;
+    assert_eq!(
+        interfaces.len(),
+        1,
+        "two preallocate calls should not create duplicate machine_interface rows"
+    );
+    assert!(interfaces[0].addresses.contains(&bmc_ip));
+
+    Ok(())
+}
+
+/// A per-entry conflict (e.g., two expected_machines configured with the same static IP -- a
+/// genuine operator misconfiguration) must not abort the whole reconciliation pass. The
+/// conflicting entry gets logged and skipped; the rest of the iteration continues.
+#[crate::sqlx_test]
+async fn test_site_explorer_reconcile_tolerates_per_entry_conflicts(
+    pool: sqlx::PgPool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let env = common::api_fixtures::create_test_env(pool.clone()).await;
+
+    let mac_a: MacAddress = "AA:BB:CC:DD:E3:01".parse().unwrap();
+    let mac_b: MacAddress = "AA:BB:CC:DD:E3:02".parse().unwrap();
+    let mac_c: MacAddress = "AA:BB:CC:DD:E3:03".parse().unwrap();
+    let shared_ip: IpAddr = "10.99.0.40".parse().unwrap();
+    let ok_ip: IpAddr = "10.99.0.41".parse().unwrap();
+
+    let mut txn = env.pool.begin().await?;
+    // Two machines configured with the SAME bmc_ip_address -- the second will conflict at
+    // preallocate time. A third has its own valid IP and should still get preallocated.
+    for (mac, ip, sn) in [
+        (mac_a, shared_ip, "reconcile-conflict-a"),
+        (mac_b, shared_ip, "reconcile-conflict-b"),
+        (mac_c, ok_ip, "reconcile-conflict-c"),
+    ] {
+        db::expected_machine::create(
+            &mut txn,
+            ExpectedMachine {
+                id: None,
+                bmc_mac_address: mac,
+                data: ExpectedMachineData {
+                    serial_number: sn.to_string(),
+                    bmc_ip_address: Some(ip),
+                    ..Default::default()
+                },
+            },
+        )
+        .await?;
+    }
+    txn.commit().await?;
+
+    // try_preallocate_one swallows per-entry errors -- the conflict between mac_a and mac_b
+    // gets logged and the third call still succeeds.
+    for (mac, ip) in [(mac_a, shared_ip), (mac_b, shared_ip), (mac_c, ok_ip)] {
+        carbide_site_explorer::try_preallocate_one(
+            &env.pool,
+            mac,
+            ip,
+            model::machine_interface::InterfaceType::Bmc,
+            "expected_machine BMC",
+        )
+        .await;
+    }
+
+    let mut txn = env.pool.begin().await?;
+    // Exactly one of {mac_a, mac_b} won the race for the shared IP.
+    let a = db::machine_interface::find_by_mac_address(&mut *txn, mac_a).await?;
+    let b = db::machine_interface::find_by_mac_address(&mut *txn, mac_b).await?;
+    let winners = a.len() + b.len();
+    assert_eq!(
+        winners, 1,
+        "exactly one of the two conflicting MACs should have a preallocated row"
+    );
+    // The third, non-conflicting entry must still be preallocated.
+    let c = db::machine_interface::find_by_mac_address(&mut *txn, mac_c).await?;
+    assert_eq!(
+        c.len(),
+        1,
+        "non-conflicting expected_machine should still be preallocated despite the upstream conflict"
+    );
+    assert!(c[0].addresses.contains(&ok_ip));
+
+    Ok(())
+}
+
+/// Site-explorer's reconciliation pass must materialize the (nvos_mac, nvos_ip_address)
+/// pairing for expected switches, mirroring how it handles `bmc_ip_address` and the
+/// host-NIC `fixed_ip` paths. Calls `try_preallocate_one` directly the same way the
+/// expected_switches loop does, and verifies the resulting row carries the configured
+/// IP with `InterfaceType::Data`.
+#[crate::sqlx_test]
+async fn test_site_explorer_reconcile_preallocates_nvos_ip(
+    pool: sqlx::PgPool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let env = common::api_fixtures::create_test_env(pool.clone()).await;
+
+    let bmc_mac: MacAddress = "AA:BB:CC:DD:E4:01".parse().unwrap();
+    let nvos_mac: MacAddress = "AA:BB:CC:DD:E4:02".parse().unwrap();
+    let nvos_ip: IpAddr = "10.99.0.50".parse().unwrap();
+
+    let mut txn = env.pool.begin().await?;
+    db::expected_switch::create(
+        &mut txn,
+        model::expected_switch::ExpectedSwitch {
+            expected_switch_id: None,
+            bmc_mac_address: bmc_mac,
+            nvos_mac_addresses: vec![nvos_mac],
+            bmc_username: "ADMIN".into(),
+            serial_number: "reconcile-nvos-001".into(),
+            bmc_password: "PASS".into(),
+            nvos_username: None,
+            nvos_password: None,
+            bmc_ip_address: None,
+            nvos_ip_address: Some(nvos_ip),
+            metadata: Metadata::default(),
+            rack_id: None,
+            bmc_retain_credentials: None,
+        },
+    )
+    .await?;
+    txn.commit().await?;
+
+    // Baseline: no NVOS interface yet.
+    let mut txn = env.pool.begin().await?;
+    let before = db::machine_interface::find_by_mac_address(&mut *txn, nvos_mac).await?;
+    assert!(
+        before.is_empty(),
+        "no machine_interface should exist before site-explorer reconciles for {nvos_mac}"
+    );
+    txn.commit().await?;
+
+    carbide_site_explorer::try_preallocate_one(
+        &env.pool,
+        nvos_mac,
+        nvos_ip,
+        model::machine_interface::InterfaceType::Data,
+        "expected_switch NVOS",
+    )
+    .await;
+
+    let mut txn = env.pool.begin().await?;
+    let after = db::machine_interface::find_by_mac_address(&mut *txn, nvos_mac).await?;
+    assert_eq!(
+        after.len(),
+        1,
+        "expected_switch NVOS should be preallocated for {nvos_mac}"
+    );
+    assert!(
+        after[0].addresses.contains(&nvos_ip),
+        "preallocated row should carry {nvos_ip}, got {:?}",
+        after[0].addresses,
+    );
+    assert_eq!(
+        after[0].interface_type,
+        model::machine_interface::InterfaceType::Data,
+        "NVOS IPs should be preallocated with InterfaceType::Data, not Bmc"
+    );
 
     Ok(())
 }

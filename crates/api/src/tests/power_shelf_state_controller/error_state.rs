@@ -25,9 +25,10 @@ use forge_secrets::credentials::TestCredentialManager;
 use model::power_shelf::{PowerShelf, PowerShelfControllerState, PowerShelfMaintenanceOperation};
 use sqlx::PgConnection;
 
-use crate::state_controller::common_services::CommonStateHandlerServices;
 use crate::state_controller::db_write_batch::DbWriteBatch;
-use crate::state_controller::power_shelf::context::PowerShelfStateHandlerContextObjects;
+use crate::state_controller::power_shelf::context::{
+    PowerShelfStateHandlerContextObjects, PowerShelfStateHandlerServices,
+};
 use crate::state_controller::power_shelf::handler::PowerShelfStateHandler;
 use crate::state_controller::power_shelf::metrics::PowerShelfMetrics;
 use crate::state_controller::state_handler::{
@@ -41,10 +42,13 @@ use crate::tests::power_shelf_state_controller::fixtures::power_shelf::{
 
 const TEST_ERROR_CAUSE: &str = "test error";
 
-fn services(env: &crate::tests::common::api_fixtures::TestEnv) -> CommonStateHandlerServices {
-    let mut services = env.state_handler_services();
-    services.credential_manager = Arc::new(TestCredentialManager::default());
-    services
+fn services(env: &crate::tests::common::api_fixtures::TestEnv) -> PowerShelfStateHandlerServices {
+    let services = env.state_handler_services();
+    PowerShelfStateHandlerServices {
+        db_pool: services.db_pool.clone(),
+        rms_client: services.rms_client.clone(),
+        credential_manager: Arc::new(TestCredentialManager::default()),
+    }
 }
 
 async fn load_power_shelf(pool: &sqlx::PgPool, id: &PowerShelfId) -> PowerShelf {
@@ -68,7 +72,7 @@ async fn park_in_error(txn: &mut PgConnection, power_shelf_id: &PowerShelfId) {
 }
 
 async fn run_handler(
-    services: &mut CommonStateHandlerServices,
+    services: &mut PowerShelfStateHandlerServices,
     state: &mut PowerShelf,
 ) -> StateHandlerOutcome<PowerShelfControllerState> {
     let handler = PowerShelfStateHandler::default();

@@ -31,7 +31,9 @@ use carbide_firmware::{FirmwareConfig, FirmwareConfigSnapshot, FirmwareDownloade
 use carbide_redfish::libredfish::conv::{
     IntoLibredfish, IntoModel, machine_last_reboot_requested_mode,
 };
+use carbide_redfish::libredfish::error::state_handler_redfish_error as redfish_error;
 use carbide_uuid::machine::MachineId;
+use carbide_uuid::vpc::VpcId;
 use chrono::{DateTime, Duration, Utc};
 use config_version::{ConfigVersion, Versioned};
 use db::DatabaseError;
@@ -100,7 +102,6 @@ use crate::redfish::{
     self, host_power_control, host_power_control_with_location, set_host_uefi_password,
 };
 use crate::state_controller::common_services::CommonStateHandlerServices;
-use crate::state_controller::external_service_error::redfish_error;
 use crate::state_controller::machine::context::MachineStateHandlerContextObjects;
 use crate::state_controller::machine::{
     MeasuringOutcome, get_measuring_prerequisites, handle_measuring_state,
@@ -6478,6 +6479,13 @@ async fn handle_instance_network_config_update_request(
                 .collect_vec();
 
             if !resources_to_be_released.is_empty() {
+                // Resolve VPC membership before old VPC-prefix segments are marked deleted.
+                let old_vpc_ids =
+                    vpc_ids_for_interfaces(&update_request.old_config.interfaces, &mut txn).await?;
+                let new_vpc_ids =
+                    vpc_ids_for_interfaces(&update_request.new_config.interfaces, &mut txn).await?;
+                let released_vpc_ids = old_vpc_ids.difference(&new_vpc_ids).copied().collect_vec();
+
                 let addresses = resources_to_be_released
                     .iter()
                     .flat_map(|x| x.ip_addrs.values().copied().collect_vec())
@@ -6491,14 +6499,13 @@ async fn handle_instance_network_config_update_request(
                 db::instance_address::delete_addresses(&mut txn, &addresses).await?;
                 release_network_segments_with_vpc_prefix(&resources_to_be_released, &mut txn)
                     .await?;
-
-                // TODO: This is not the best way, but will work fine. If you delete all loopback IPs
-                // associated with all DPUs, dpu_agent will assign new IPs during next managed_host_network_config
-                // iteration.
-                // The best way would be to find out the VPCs per DPU which are not used in new config
-                // and delete them only. This can be taken care once multi-dpu instance allocation is
-                // completed.
-                release_vpc_dpu_loopback(mh_snapshot, common_pools.as_deref(), &mut txn).await?;
+                release_vpc_dpu_loopback_for_vpcs(
+                    mh_snapshot,
+                    common_pools.as_deref(),
+                    &mut txn,
+                    &released_vpc_ids,
+                )
+                .await?;
             }
             db::instance::delete_update_network_config_request(&instance.id, &mut txn).await?;
             let next_state = ManagedHostState::Assigned {
@@ -6680,6 +6687,67 @@ pub async fn release_vpc_dpu_loopback(
     Ok(())
 }
 
+/// Releases VPC DPU loopbacks for selected VPCs on every DPU in the managed host.
+async fn release_vpc_dpu_loopback_for_vpcs(
+    mh_snapshot: &ManagedHostStateSnapshot,
+    common_pools: Option<&CommonPools>,
+    txn: &mut PgConnection,
+    vpc_ids: &[VpcId],
+) -> Result<(), StateHandlerError> {
+    let Some(common_pools) = common_pools else {
+        return Ok(());
+    };
+
+    if vpc_ids.is_empty() {
+        return Ok(());
+    }
+
+    // Release the removed VPC loopbacks from every DPU that may have rendered them.
+    for dpu_snapshot in &mh_snapshot.dpu_snapshots {
+        db::vpc_dpu_loopback::delete_and_deallocate_for_vpcs(
+            common_pools,
+            &dpu_snapshot.id,
+            vpc_ids,
+            txn,
+        )
+        .await
+        .map_err(|e| StateHandlerError::ResourceCleanupError {
+            resource: "VpcLoopbackIp",
+            error: e.to_string(),
+        })?;
+    }
+
+    Ok(())
+}
+
+/// Returns the VPC IDs referenced by the assigned network segments on these interfaces.
+async fn vpc_ids_for_interfaces(
+    interfaces: &[InstanceInterfaceConfig],
+    txn: &mut PgConnection,
+) -> Result<HashSet<VpcId>, StateHandlerError> {
+    let segment_ids = interfaces
+        .iter()
+        .filter_map(|iface| iface.network_segment_id)
+        .collect_vec();
+
+    if segment_ids.is_empty() {
+        return Ok(HashSet::new());
+    }
+
+    // Load segment metadata so VPC-prefix and direct segment interfaces share one path.
+    let segments = db::network_segment::find_by(
+        txn,
+        db::ObjectColumnFilter::List(db::network_segment::IdColumn, &segment_ids),
+        model::network_segment::NetworkSegmentSearchConfig::default(),
+    )
+    .await?;
+
+    Ok(segments
+        .into_iter()
+        .filter_map(|segment| segment.config.vpc_id)
+        .collect())
+}
+
 async fn release_network_segments_with_vpc_prefix(
     interfaces: &[InstanceInterfaceConfig],
     txn: &mut PgConnection,
@@ -6771,6 +6839,68 @@ impl std::fmt::Debug for HostUpgradeState {
     }
 }
 
+/// If the machine's parent rack is in `RackState::Error`, clear
+/// `host_reprovisioning_requested` and short-circuit back to the machine's
+/// pre-reprovisioning steady state (`Ready`, or `Assigned { instance_state:
+/// Ready }` if currently assigned). The rack will never advance the
+/// remaining `HostReprovision` sub-states once it has bailed out.
+///
+/// Only applies to rack-level reprovisioning requests; non-rack-initiated
+/// reprovisions are independent of the rack's lifecycle.
+async fn rack_failed_abort_host_reprovision_outcome(
+    state: &ManagedHostStateSnapshot,
+    ctx: &mut StateHandlerContext<'_, MachineStateHandlerContextObjects>,
+    machine_id: &MachineId,
+) -> Result<Option<StateHandlerOutcome<ManagedHostState>>, StateHandlerError> {
+    if !is_rack_level_reprovisioning(state) {
+        return Ok(None);
+    }
+
+    let Some(rack_id) = state.host_snapshot.rack_id.as_ref() else {
+        return Ok(None);
+    };
+
+    let mut conn = ctx.services.db_pool.acquire().await?;
+    let racks = db::rack::find_by(
+        conn.as_mut(),
+        db::ObjectColumnFilter::One(db::rack::IdColumn, rack_id),
+    )
+    .await?;
+    drop(conn);
+    let Some(rack) = racks.into_iter().next() else {
+        return Ok(None);
+    };
+    if !matches!(
+        rack.controller_state.value,
+        model::rack::RackState::Error { .. }
+    ) {
+        return Ok(None);
+    }
+
+    let target_state = match &state.managed_state {
+        ManagedHostState::Assigned {
+            instance_state: InstanceState::HostReprovision { .. },
+        } => ManagedHostState::Assigned {
+            instance_state: InstanceState::Ready,
+        },
+        _ => ManagedHostState::Ready,
+    };
+
+    tracing::info!(
+        machine_id = %machine_id,
+        rack_id = %rack_id,
+        from = ?state.managed_state,
+        to = ?target_state,
+        "Rack is in Error; aborting machine HostReprovision and returning to Ready",
+    );
+
+    let mut txn = ctx.services.db_pool.begin().await?;
+    db::host_machine_update::clear_host_reprovisioning_request(txn.as_mut(), machine_id).await?;
+    Ok(Some(
+        StateHandlerOutcome::transition(target_state).with_txn(txn),
+    ))
+}
+
 impl HostUpgradeState {
     // Handles when in HostReprovisioning or when entering it
     async fn handle_host_reprovision(
@@ -6780,6 +6910,12 @@ impl HostUpgradeState {
         machine_id: &MachineId,
         scenario: HostFirmwareScenario,
     ) -> Result<StateHandlerOutcome<ManagedHostState>, StateHandlerError> {
+        if let Some(outcome) =
+            rack_failed_abort_host_reprovision_outcome(state, ctx, machine_id).await?
+        {
+            return Ok(outcome);
+        }
+
         // Treat Ready (but flagged to do updates) the same as HostReprovisionState/CheckingFirmware
         let original_state = &state.managed_state.clone();
         let (mut host_reprovision_state, retry_count) = match &state.managed_state {

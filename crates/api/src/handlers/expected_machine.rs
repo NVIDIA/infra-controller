@@ -62,9 +62,7 @@ pub(crate) async fn get(
     Ok(tonic::Response::new(response))
 }
 
-/// Adds an expected machine. When `bmc_ip_address` is present, pre-allocates a `machine_interface`
-/// for that BMC MAC and IP (shared helper with expected switches / power shelves) so discovery can
-/// proceed without waiting on DHCP.
+/// Adds an expected machine.
 pub(crate) async fn add(
     api: &Api,
     request: tonic::Request<rpc::ExpectedMachine>,
@@ -108,9 +106,9 @@ pub(crate) async fn add(
         data: db_data,
     };
 
-    let mut txn = api.txn_begin().await?;
+    validate_expected_machine_for_insert(&machine)?;
 
-    preallocate_interfaces_for(&mut txn, &machine).await?;
+    let mut txn = api.txn_begin().await?;
     db::expected_machine::create(&mut txn, machine).await?;
 
     txn.commit().await?;
@@ -118,32 +116,19 @@ pub(crate) async fn add(
     Ok(tonic::Response::new(()))
 }
 
-/// Validate the ExpectedMachine payload and pre-allocate `machine_interfaces`
-/// (and their addresses) for the BMC and any host NICs with a fixed-address
-/// via `fixed_ip`.
-///
-/// Shared between the `add` gRPC handler and `expected_machines.json`.
-pub(crate) async fn preallocate_interfaces_for(
-    txn: &mut sqlx::PgConnection,
+/// Validate the ExpectedMachine payload prior to insert.
+/// Shared between the `add` gRPC handler and the
+/// `expected_machines.json` import flow.
+pub(crate) fn validate_expected_machine_for_insert(
     machine: &ExpectedMachine,
 ) -> Result<(), CarbideError> {
     validate_at_most_one_primary_host_nic(&machine.data.host_nics)?;
 
-    if let Some(bmc_ip) = machine.data.bmc_ip_address {
-        db::machine_interface::preallocate_bmc_machine_interface(
-            txn,
-            machine.bmc_mac_address,
-            bmc_ip,
-        )
-        .await?;
-    }
-
     for nic in &machine.data.host_nics {
         if let Some(ref ip_str) = nic.fixed_ip {
-            let ip: std::net::IpAddr = ip_str.parse().map_err(|_| {
+            let _: std::net::IpAddr = ip_str.parse().map_err(|_| {
                 CarbideError::InvalidArgument(format!("invalid fixed_ip: {ip_str}"))
             })?;
-            db::machine_interface::preallocate_machine_interface(txn, nic.mac_address, ip).await?;
         }
     }
 
@@ -151,10 +136,10 @@ pub(crate) async fn preallocate_interfaces_for(
 }
 
 /// Create missing expected_machines that aren't already in the database,
-/// calling `preallocate_interfaces_for` for each new entry. This is currently
+/// calling `validate_expected_machine_for_insert` for each new entry. This is currently
 /// purely used by the expected_machines.json import path only, but lives
-/// here so it can re-leverage `preallocate_instances_for` and share the
-/// same allocation codepath as the API handler.
+/// here so it can re-leverage `validate_expected_machine_for_insert` and share the
+/// same validation codepath as the API handler.
 pub(crate) async fn create_missing_from(
     txn: &mut sqlx::PgConnection,
     expected_machines: &[ExpectedMachine],
@@ -174,7 +159,7 @@ pub(crate) async fn create_missing_from(
             );
             continue;
         }
-        preallocate_interfaces_for(&mut *txn, expected_machine).await?;
+        validate_expected_machine_for_insert(expected_machine)?;
         db::expected_machine::create(&mut *txn, expected_machine.clone()).await?;
     }
 
@@ -439,15 +424,7 @@ async fn create_expected_machine(
         data: db_data,
     };
 
-    if let Some(bmc_ip) = expected_machine.data.bmc_ip_address {
-        db::machine_interface::preallocate_bmc_machine_interface(
-            txn,
-            expected_machine.bmc_mac_address,
-            bmc_ip,
-        )
-        .await?;
-    }
-
+    validate_expected_machine_for_insert(&expected_machine)?;
     db::expected_machine::create(txn, expected_machine).await?;
 
     Ok(())

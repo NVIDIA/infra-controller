@@ -21,6 +21,11 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
+/// `HealthReportSources::merges` key for the auto-repair (`RequestRepair`) override.
+pub const REPAIR_REQUEST_MERGE_SOURCE: &str = "repair-request";
+/// `HealthReportSources::merges` key for online repair gating (`RequestOnlineRepair` override).
+pub const REQUEST_ONLINE_REPAIR_MERGE_SOURCE: &str = "request-online-repair";
+
 /// Reports the aggregate health of a system or subsystem
 #[derive(PartialEq, Eq, Debug, Clone, Serialize, Deserialize)]
 pub struct HealthReport {
@@ -763,13 +768,13 @@ mod tests {
         // Shape matches admin-cli `HealthReportTemplates::RequestOnlineRepair` (merge source
         // `request-online-repair`, probe id `RequestOnlineRepair`).
         let report = HealthReport {
-            source: "request-online-repair".to_string(),
+            source: REQUEST_ONLINE_REPAIR_MERGE_SOURCE.to_string(),
             triggered_by: None,
             observed_at: Some(chrono::Utc::now()),
             successes: vec![],
             alerts: vec![HealthProbeAlert {
                 id: HealthProbeId::from_str("RequestOnlineRepair").unwrap(),
-                target: Some("request-online-repair".to_string()),
+                target: Some(REQUEST_ONLINE_REPAIR_MERGE_SOURCE.to_string()),
                 in_alert_since: None,
                 message: "test".to_string(),
                 tenant_message: None,

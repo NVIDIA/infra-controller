@@ -448,15 +448,7 @@ impl InternalRBACRules {
         );
         x.perm("GetIpxeTemplate", vec![ForgeAdminCLI, SiteAgent]);
         x.perm("ListIpxeTemplates", vec![ForgeAdminCLI, SiteAgent]);
-        x.perm("CreateRackFirmware", vec![ForgeAdminCLI]);
-        x.perm("DeleteRackFirmware", vec![ForgeAdminCLI]);
         x.perm("FindRackStateHistories", vec![ForgeAdminCLI, Machineatron]);
-        x.perm("ListRackFirmware", vec![ForgeAdminCLI]);
-        x.perm("GetRackFirmware", vec![ForgeAdminCLI]);
-        x.perm("ApplyRackFirmware", vec![ForgeAdminCLI]);
-        x.perm("GetRackFirmwareJobStatus", vec![ForgeAdminCLI]);
-        x.perm("GetRackFirmwareHistory", vec![ForgeAdminCLI]);
-        x.perm("RackFirmwareSetDefault", vec![ForgeAdminCLI]);
         x.perm("RebootCompleted", vec![Machineatron, Scout]);
         x.perm("PersistValidationResult", vec![Scout, SiteAgent]);
         x.perm(
@@ -496,6 +488,7 @@ impl InternalRBACRules {
             vec![SiteAgent, ForgeAdminCLI],
         );
         x.perm("FindMacAddressByBmcIp", vec![SiteAgent, BmcProxy]);
+        x.perm("FindBmcIps", vec![ForgeAdminCLI, BmcProxy]);
         x.perm("BmcCredentialStatus", vec![ForgeAdminCLI, SiteAgent]);
         x.perm(
             "GetMachineValidationExternalConfigs",
@@ -944,7 +937,7 @@ impl RuleInfo {
                         Principal::SpiffeServiceIdentifier("carbide-hardware-health".to_string())
                     }
                     RulePrincipal::Flow => {
-                        Principal::SpiffeServiceIdentifier("carbide-rla".to_string())
+                        Principal::SpiffeServiceIdentifier("carbide-flow".to_string())
                     }
                     RulePrincipal::MaintenanceJobs => {
                         Principal::SpiffeServiceIdentifier("carbide-maintenance-jobs".to_string())
@@ -1116,25 +1109,25 @@ mod rbac_rule_tests {
         assert!(InternalRBACRules::allowed_from_static(
             "SetMaintenance",
             &[Principal::SpiffeServiceIdentifier(
-                "carbide-rla".to_string()
+                "carbide-flow".to_string()
             )]
         ));
         assert!(InternalRBACRules::allowed_from_static(
             "InsertMachineHealthReport",
             &[Principal::SpiffeServiceIdentifier(
-                "carbide-rla".to_string()
+                "carbide-flow".to_string()
             )]
         ));
         assert!(InternalRBACRules::allowed_from_static(
             "RemoveMachineHealthReport",
             &[Principal::SpiffeServiceIdentifier(
-                "carbide-rla".to_string()
+                "carbide-flow".to_string()
             )]
         ));
         assert!(InternalRBACRules::allowed_from_static(
             "MachineSetAutoUpdate",
             &[Principal::SpiffeServiceIdentifier(
-                "carbide-rla".to_string()
+                "carbide-flow".to_string()
             )]
         ));
         for method in ["FindMacAddressByBmcIp", "GetBmcCredentials"] {

@@ -63,10 +63,14 @@ pub use crate::protos::{fmds, health, site_explorer};
 pub mod errors;
 pub mod forge_tls_client;
 pub mod libmlx;
+pub mod measured_boot;
 pub mod network;
 pub mod protos;
 pub mod secrets;
 pub mod utils;
+
+#[cfg(feature = "model")]
+pub mod model;
 
 #[cfg(feature = "cli")]
 pub mod admin_cli;
@@ -877,6 +881,12 @@ impl forge_agent_control_response::Action {
             Self::MlxAction(_) => "MLX_ACTION",
             Self::FirmwareUpgrade(_) => "FIRMWARE_UPGRADE",
         }
+    }
+}
+
+impl From<MacAddress> for forge::find_bmc_ips_request::LookupBy {
+    fn from(addr: MacAddress) -> Self {
+        Self::MacAddress(addr.to_string())
     }
 }
 

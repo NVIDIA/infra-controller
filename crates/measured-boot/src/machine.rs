@@ -21,19 +21,15 @@
  */
 
 use std::collections::HashMap;
-use std::str::FromStr;
 
-use carbide_uuid::UuidEmptyStringError;
 use carbide_uuid::machine::MachineId;
 use chrono::Utc;
-#[cfg(feature = "cli")]
-use rpc::admin_cli::ToTable;
-use rpc::protos::measured_boot::{CandidateMachinePb, MeasurementMachineStatePb};
 use serde::Serialize;
 
 use super::journal::MeasurementJournal;
 use super::records::MeasurementMachineState;
-use crate::{FromGrpc, FromGrpcOpt};
+#[cfg(feature = "cli")]
+use crate::ToTable;
 
 /// CandidateMachine describes a machine that is a candidate for attestation,
 /// and is derived from machine information in the machine_toplogies table.
@@ -50,47 +46,6 @@ pub struct CandidateMachine {
 impl crate::DisplayName for CandidateMachine {
     fn display_name() -> &'static str {
         "machine"
-    }
-}
-
-impl FromGrpc<CandidateMachinePb> for CandidateMachine {}
-
-impl FromGrpcOpt<CandidateMachinePb> for CandidateMachine {}
-
-impl From<CandidateMachine> for CandidateMachinePb {
-    fn from(val: CandidateMachine) -> Self {
-        let pb_state: MeasurementMachineStatePb = val.state.into();
-        Self {
-            machine_id: val.machine_id.to_string(),
-            state: pb_state.into(),
-            journal: val.journal.map(|journal| journal.into()),
-            attrs: val.attrs,
-            created_ts: Some(val.created_ts.into()),
-            updated_ts: Some(val.updated_ts.into()),
-        }
-    }
-}
-
-impl TryFrom<CandidateMachinePb> for CandidateMachine {
-    type Error = Box<dyn std::error::Error>;
-
-    fn try_from(msg: CandidateMachinePb) -> Result<Self, Box<dyn std::error::Error>> {
-        if msg.machine_id.is_empty() {
-            return Err(UuidEmptyStringError {}.into());
-        }
-        let state = msg.state();
-
-        Ok(Self {
-            machine_id: MachineId::from_str(&msg.machine_id)?,
-            state: MeasurementMachineState::from(state),
-            journal: match msg.journal {
-                Some(journal_pb) => Some(MeasurementJournal::try_from(journal_pb)?),
-                None => None,
-            },
-            attrs: msg.attrs,
-            created_ts: chrono::DateTime::<chrono::Utc>::try_from(msg.created_ts.unwrap())?,
-            updated_ts: chrono::DateTime::<chrono::Utc>::try_from(msg.updated_ts.unwrap())?,
-        })
     }
 }
 

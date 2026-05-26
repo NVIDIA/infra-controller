@@ -21,6 +21,9 @@ use carbide_uuid::power_shelf::PowerShelfId;
 use model::power_shelf::{
     PowerShelf, PowerShelfControllerState, derive_power_shelf_aggregate_health,
 };
+use state_controller::state_handler::{
+    StateHandler, StateHandlerContext, StateHandlerError, StateHandlerOutcome,
+};
 use tracing::instrument;
 
 use crate::state_controller::power_shelf::configuring::handle_configuring;
@@ -31,9 +34,6 @@ use crate::state_controller::power_shelf::fetching_data::handle_fetching_data;
 use crate::state_controller::power_shelf::initializing::handle_initializing;
 use crate::state_controller::power_shelf::maintenance::handle_maintenance;
 use crate::state_controller::power_shelf::ready::handle_ready;
-use crate::state_controller::state_handler::{
-    StateHandler, StateHandlerContext, StateHandlerError, StateHandlerOutcome,
-};
 
 /// The actual PowerShelf State handler (structure mirrors SwitchStateHandler).
 #[derive(Debug, Default, Clone)]

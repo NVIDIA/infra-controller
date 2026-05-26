@@ -22,6 +22,7 @@ use std::sync::{Arc, atomic};
 
 use async_trait::async_trait;
 use carbide_uuid::machine::MachineId;
+use carbide_uuid::rack::RackId;
 use mac_address::MacAddress;
 use rand::RngExt;
 use rand::seq::SliceRandom;
@@ -385,9 +386,6 @@ pub enum CredentialKey {
     NmxM {
         nmxm_id: String,
     },
-    RackFirmware {
-        firmware_id: String,
-    },
     SwitchNvosAdmin {
         bmc_mac_address: MacAddress,
     },
@@ -398,6 +396,9 @@ pub enum CredentialKey {
     /// Returns `UsernamePassword { username: key_id, password: secret }`.
     MachineIdentityEncryptionKey {
         key_id: String,
+    },
+    RackMaintenanceAccessToken {
+        rack_id: RackId,
     },
 }
 
@@ -418,10 +419,10 @@ pub enum CredentialPrefix {
     BmcCredentials,
     ExtensionService,
     NmxM,
-    RackFirmware,
     SwitchNvosAdmin,
     MqttAuth,
     MachineIdentityEncryptionKey,
+    RackMaintenanceAccessToken,
 }
 
 impl CredentialPrefix {
@@ -440,10 +441,10 @@ impl CredentialPrefix {
             Self::BmcCredentials => "machines/bmc/",
             Self::ExtensionService => "machines/extension-services/",
             Self::NmxM => "nmxm/",
-            Self::RackFirmware => "rack_firmware/",
             Self::SwitchNvosAdmin => "switch_nvos/",
             Self::MqttAuth => "mqtt/",
             Self::MachineIdentityEncryptionKey => "machine_identity/",
+            Self::RackMaintenanceAccessToken => "racks/",
         }
     }
 
@@ -461,10 +462,10 @@ impl CredentialPrefix {
             Self::BmcCredentials,
             Self::ExtensionService,
             Self::NmxM,
-            Self::RackFirmware,
             Self::SwitchNvosAdmin,
             Self::MqttAuth,
             Self::MachineIdentityEncryptionKey,
+            Self::RackMaintenanceAccessToken,
         ]
     }
 }
@@ -485,12 +486,12 @@ impl CredentialKey {
             Self::BmcCredentials { .. } => CredentialPrefix::BmcCredentials,
             Self::ExtensionService { .. } => CredentialPrefix::ExtensionService,
             Self::NmxM { .. } => CredentialPrefix::NmxM,
-            Self::RackFirmware { .. } => CredentialPrefix::RackFirmware,
             Self::SwitchNvosAdmin { .. } => CredentialPrefix::SwitchNvosAdmin,
             Self::MqttAuth { .. } => CredentialPrefix::MqttAuth,
             Self::MachineIdentityEncryptionKey { .. } => {
                 CredentialPrefix::MachineIdentityEncryptionKey
             }
+            Self::RackMaintenanceAccessToken { .. } => CredentialPrefix::RackMaintenanceAccessToken,
         }
     }
 
@@ -564,9 +565,6 @@ impl CredentialKey {
                 "machines/extension-services/{service_id}/versions/{version}/credential"
             )),
             CredentialKey::NmxM { nmxm_id } => Cow::from(format!("nmxm/{nmxm_id}/auth")),
-            CredentialKey::RackFirmware { firmware_id } => {
-                Cow::from(format!("rack_firmware/{firmware_id}/token"))
-            }
             CredentialKey::SwitchNvosAdmin { bmc_mac_address } => {
                 Cow::from(format!("switch_nvos/{bmc_mac_address}/admin"))
             }
@@ -585,6 +583,9 @@ impl CredentialKey {
             CredentialKey::Bgp { credential_type } => match credential_type {
                 BgpCredentialType::SiteWideLeafPassword => Cow::from("bgp/leaf/site/auth"),
             },
+            CredentialKey::RackMaintenanceAccessToken { rack_id } => {
+                Cow::from(format!("racks/{rack_id}/maintenance/access-token"))
+            }
         }
     }
 }
@@ -690,6 +691,7 @@ mod tests {
     fn to_key_str_produces_valid_paths() {
         #[allow(deprecated)]
         let machine_id = MachineId::default();
+        let rack_id = RackId::new("rack-01");
         let mac: MacAddress = MacAddress::new([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
 
         let cases: Vec<(CredentialKey, &str)> = vec![
@@ -780,12 +782,6 @@ mod tests {
                 "nmxm/",
             ),
             (
-                CredentialKey::RackFirmware {
-                    firmware_id: "fw1".to_string(),
-                },
-                "rack_firmware/",
-            ),
-            (
                 CredentialKey::SwitchNvosAdmin {
                     bmc_mac_address: mac,
                 },
@@ -808,6 +804,10 @@ mod tests {
                     credential_type: MqttCredentialType::DsxExchangeConsumer,
                 },
                 "mqtt/",
+            ),
+            (
+                CredentialKey::RackMaintenanceAccessToken { rack_id },
+                "racks/",
             ),
         ];
 
@@ -835,6 +835,7 @@ mod tests {
     fn to_key_str_matches_prefix() {
         #[allow(deprecated)]
         let machine_id = MachineId::default();
+        let rack_id = RackId::new("rack-01");
         let mac = MacAddress::new([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
 
         let keys: Vec<CredentialKey> = vec![
@@ -868,9 +869,6 @@ mod tests {
             CredentialKey::NmxM {
                 nmxm_id: "n".to_string(),
             },
-            CredentialKey::RackFirmware {
-                firmware_id: "f".to_string(),
-            },
             CredentialKey::SwitchNvosAdmin {
                 bmc_mac_address: mac,
             },
@@ -880,6 +878,7 @@ mod tests {
             CredentialKey::MachineIdentityEncryptionKey {
                 key_id: "k".to_string(),
             },
+            CredentialKey::RackMaintenanceAccessToken { rack_id },
         ];
 
         for key in &keys {

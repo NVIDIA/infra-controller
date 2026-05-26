@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 use ::rpc::forge::ForgeAgentControlResponse;
+use ::rpc::model::machine::get_action_for_dpu_state;
 use ::rpc::{forge as rpc, forge_agent_control_response as fac};
 use model::machine::machine_search_config::MachineSearchConfig;
 use model::machine::{
@@ -23,7 +24,6 @@ use model::machine::{
     MeasuringState, StateMachineArea, ValidationState,
 };
 use model::machine_validation::{MachineValidationState, MachineValidationStatus};
-use model::rpc_conv::machine::get_action_for_dpu_state;
 use tonic::{Request, Response, Status};
 
 use crate::CarbideError;
