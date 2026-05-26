@@ -21,6 +21,7 @@ use carbide_network::virtualization::{VpcVirtualizationType, get_svi_ip};
 use carbide_uuid::instance::InstanceId;
 use carbide_uuid::machine::{MachineId, MachineInterfaceId};
 use carbide_uuid::network::NetworkSegmentId;
+use carbide_uuid::vpc::VpcId;
 use db::vpc::{self};
 use db::vpc_peering::get_prefixes_by_vpcs;
 use db::{self, ObjectColumnFilter, network_security_group};
@@ -33,6 +34,7 @@ use model::network_security_group::{
 };
 use model::network_segment::NetworkSegment;
 use model::resource_pool::common::CommonPools;
+use model::vpc::{ALL_VPC_VIRTUALIZATION_TYPES, VpcVirtualizationTypeCapabilities};
 use sqlx::PgConnection;
 
 use crate::CarbideError;
@@ -485,41 +487,49 @@ pub async fn tenant_network(
     if let Some(policy) = vpc_peering_policy_on_existing
         && let Some(vpc_id) = segment.config.vpc_id
     {
-        match policy {
+        // The peer-ID universe depends on the site policy. Under
+        // `Exclusive`, the per-type capability layer dictates which
+        // peer types are compatible (e.g. an FNN VPC can have Flat
+        // peers via Flat's `peers_with` listing). Under `Mixed`, the
+        // operator opts out of capability enforcement and we accept
+        // any peering record. `None` disables peering entirely.
+        let vpc_peer_ids: Vec<VpcId> = match policy {
             VpcPeeringPolicy::Exclusive => {
-                // Under exclusive policy, VPC only allowed to peer with VPC of same network virtualization type.
-                let allowed_network_virtualization_types = vec![network_virtualization_type];
-                let vpc_peers = db::vpc_peering::get_vpc_peer_vnis(
-                    txn,
-                    vpc_id,
-                    allowed_network_virtualization_types,
-                )
-                .await?;
-
-                let vpc_peer_ids = vpc_peers.iter().map(|(vpc_id, _)| *vpc_id).collect();
-                vpc_peer_prefixes = get_prefixes_by_vpcs(txn, &vpc_peer_ids).await?;
-                if network_virtualization_type == VpcVirtualizationType::Fnn {
-                    vpc_peer_vnis = vpc_peers.iter().map(|(_, vni)| *vni as u32).collect();
-                }
-            }
-            VpcPeeringPolicy::Mixed => {
-                // Any combination of VPC peering allowed
-                let vpc_peer_ids = db::vpc_peering::get_vpc_peer_ids(txn, vpc_id).await?;
-                vpc_peer_prefixes = get_prefixes_by_vpcs(txn, &vpc_peer_ids).await?;
-                if network_virtualization_type == VpcVirtualizationType::Fnn {
-                    // Get vnis of all FNN peers for route import
-                    vpc_peer_vnis = db::vpc_peering::get_vpc_peer_vnis(
-                        txn,
-                        vpc_id,
-                        vec![VpcVirtualizationType::Fnn],
-                    )
+                let allowed_peer_types = network_virtualization_type
+                    .capabilities()
+                    .peers_with
+                    .to_vec();
+                db::vpc_peering::get_vpc_peer_vnis(txn, vpc_id, allowed_peer_types)
                     .await?
-                    .iter()
-                    .map(|(_, vni)| *vni as u32)
-                    .collect();
-                }
+                    .into_iter()
+                    .map(|(id, _)| id)
+                    .collect()
             }
-            VpcPeeringPolicy::None => {}
+            VpcPeeringPolicy::Mixed => db::vpc_peering::get_vpc_peer_ids(txn, vpc_id).await?,
+            VpcPeeringPolicy::None => vec![],
+        };
+
+        vpc_peer_prefixes = get_prefixes_by_vpcs(txn, &vpc_peer_ids).await?;
+
+        // VNI-based peer route imports are independent of peering
+        // policy: they're a per-type question on both sides.
+        // - Self: does this VPC's DPU plumb peer VNIs into its VRF?
+        //   (`imports_peer_vnis_into_overlay`, FNN-only today.)
+        // - Peer: should this peer's VNI be exposed for the self-side
+        //   to pick up? (`vni_advertised_to_peers`, FNN + Flat today --
+        //   Flat advertises its VNI so pluggable SDN integrations on
+        //   the network operator's fabric can use it.)
+        if network_virtualization_type.imports_peer_vnis_into_overlay() {
+            let vni_peer_types: Vec<_> = ALL_VPC_VIRTUALIZATION_TYPES
+                .iter()
+                .copied()
+                .filter(|t| t.vni_advertised_to_peers())
+                .collect();
+            vpc_peer_vnis = db::vpc_peering::get_vpc_peer_vnis(txn, vpc_id, vni_peer_types)
+                .await?
+                .iter()
+                .map(|(_, vni)| *vni as u32)
+                .collect();
         }
     }
     // Keep API responses deterministic so downstream config rendering

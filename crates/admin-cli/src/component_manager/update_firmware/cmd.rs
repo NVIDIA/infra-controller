@@ -28,9 +28,10 @@ pub async fn update_firmware(
     format: OutputFormat,
     api_client: &ApiClient,
 ) -> Result<(), CarbideCliError> {
+    let request: rpc::forge::UpdateComponentFirmwareRequest = opts.try_into()?;
     let response = api_client
         .0
-        .update_component_firmware(opts)
+        .update_component_firmware(request)
         .await
         .map_err(CarbideCliError::from)?;
 

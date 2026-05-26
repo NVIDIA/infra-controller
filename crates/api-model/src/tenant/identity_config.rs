@@ -19,6 +19,7 @@ use std::marker::PhantomData;
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 /// JWT `alg` for per-tenant signing keys. Only ES256 (ECDSA P-256) is implemented end-to-end.
 pub const TENANT_IDENTITY_SIGNING_JWT_ALG: &str = "ES256";
@@ -286,13 +287,21 @@ pub type KeyId = NonEmptyStr<TenantIdentitySigningKeyIdTag>;
 impl KeyId {
     /// JWT `kid` from `hex(sha256(utf8_bytes(public_key_material)))`.
     ///
-    /// Delegates to [`forge_secrets::key_encryption::key_id_from_public_key`] (e.g. SPKI PEM from
+    /// Delegates to [`Self::key_id_from_public_key`] (e.g. SPKI PEM from
     /// ES256 key generation). Infallible: that function always yields 64 hex characters.
     pub fn from_public_key_material(public_key_material: &str) -> Self {
-        Self::try_from(forge_secrets::key_encryption::key_id_from_public_key(
-            public_key_material,
-        ))
-        .expect("key_id_from_public_key yields 64 hex chars, always non-empty")
+        Self::try_from(Self::key_id_from_public_key(public_key_material))
+            .expect("key_id_from_public_key yields 64 hex chars, always non-empty")
+    }
+
+    /// Computes key_id as hex(sha256(public_key)).
+    /// Works with any public key representation (PEM, DER, etc.).
+    ///
+    /// API domain code should prefer `KeyId::from_public_key_material` in `carbide-api-model`, which
+    /// delegates to this function (one implementation).
+    fn key_id_from_public_key(public_key: &str) -> String {
+        let hash = Sha256::digest(public_key.as_bytes());
+        hex::encode(hash)
     }
 }
 
@@ -467,6 +476,7 @@ pub type EncryptedTokenDelegationAuthConfig =
 
 #[cfg(test)]
 mod key_id_tests {
+    use p256::pkcs8::{DecodePrivateKey, DecodePublicKey};
     use serde_json::json;
 
     use super::{KeyId, SigningKeyPublicV1};
@@ -504,5 +514,26 @@ mod key_id_tests {
         let doc: SigningKeyPublicV1 = serde_json::from_value(v).expect("deserialize");
         assert_eq!(doc.kid(), canonical.kid());
         assert_eq!(doc, canonical);
+    }
+
+    #[test]
+    fn key_id_from_public_ke_yis_deterministic() {
+        let pub_key = "-----BEGIN PUBLIC KEY-----\nMFkw...\n-----END PUBLIC KEY-----";
+        let id1 = KeyId::key_id_from_public_key(pub_key);
+        let id2 = KeyId::key_id_from_public_key(pub_key);
+        assert_eq!(id1, id2);
+        assert_eq!(id1.len(), 64);
+    }
+
+    #[test]
+    fn generate_es256_key_pair_produces_valid_outputs() {
+        let (private_pem, public_pem) =
+            forge_secrets::key_encryption::generate_es256_key_pair().unwrap();
+        assert!(private_pem.starts_with(b"-----BEGIN"));
+        assert!(public_pem.contains("PUBLIC KEY"));
+        let key_id = KeyId::key_id_from_public_key(&public_pem);
+        assert_eq!(key_id.len(), 64);
+        p256::PublicKey::from_public_key_pem(public_pem.trim()).unwrap();
+        p256::SecretKey::from_pkcs8_pem(std::str::from_utf8(&private_pem).unwrap()).unwrap();
     }
 }

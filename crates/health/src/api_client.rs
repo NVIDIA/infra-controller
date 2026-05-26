@@ -582,6 +582,30 @@ impl TryFrom<&rpc::forge::BmcInfo> for BmcAddr {
     }
 }
 
+impl TryFrom<&rpc::forge::SwitchNvosInfo> for BmcAddr {
+    type Error = HealthError;
+
+    fn try_from(nvos_info: &rpc::forge::SwitchNvosInfo) -> Result<Self, Self::Error> {
+        let ip = nvos_info
+            .ip
+            .as_ref()
+            .ok_or_else(|| HealthError::GenericError("missing NVOS IP address".to_string()))?
+            .parse::<IpAddr>()
+            .map_err(|error| HealthError::GenericError(error.to_string()))?;
+        let mac = nvos_info
+            .mac
+            .as_ref()
+            .ok_or_else(|| HealthError::GenericError("missing NVOS MAC address".to_string()))
+            .and_then(|mac| {
+                MacAddress::from_str(mac)
+                    .map_err(|error| HealthError::GenericError(error.to_string()))
+            })?;
+        let port = nvos_info.port.map(|port| port.try_into().unwrap_or(443));
+
+        Ok(Self { ip, port, mac })
+    }
+}
+
 impl From<rpc::forge::UsernamePassword> for BmcCredentials {
     fn from(value: rpc::forge::UsernamePassword) -> Self {
         Self::UsernamePassword {

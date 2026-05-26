@@ -85,12 +85,6 @@ pub mod convenience_converters {
     include!(concat!(env!("OUT_DIR"), "/convenience_converters.rs"));
 }
 
-#[allow(non_snake_case, unknown_lints, clippy::all)]
-#[rustfmt::skip]
-pub mod dpa_rpc {
-    include!(concat!(env!("OUT_DIR"), "/dpa_rpc.rs"));
-}
-
 #[allow(clippy::all)]
 #[rustfmt::skip]
 pub mod nmx_c {

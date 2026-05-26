@@ -23,7 +23,10 @@ use rpc::forge::{
 use sqlx::PgPool;
 use tonic::Request;
 
-use crate::tests::common::api_fixtures::{create_test_env, get_vpc_fixture_id};
+use crate::tests::common::api_fixtures::{
+    self, TEST_SITE_PREFIXES, TestEnvOverrides, create_test_env, create_test_env_with_overrides,
+    get_vpc_fixture_id,
+};
 
 #[crate::sqlx_test]
 async fn test_create_and_delete_vpc_prefix_deprecated_fields(
@@ -366,6 +369,82 @@ async fn test_vpc_prefix_search(pool: PgPool) -> Result<(), Box<dyn std::error::
             "We expected to find the VPC prefix id {expected_id} for prefix {expected_prefix} in the search results ({returned_vpc_prefix_ids:?}), but it was absent"
         );
     }
+
+    Ok(())
+}
+
+#[crate::sqlx_test]
+async fn flat_vpc_accepts_ipv4_prefix(pool: PgPool) -> Result<(), Box<dyn std::error::Error>> {
+    // Flat VPCs should accept IPv4 prefixes just like every other VPC type.
+    let env = create_test_env(pool).await;
+    let (_, vpc) = api_fixtures::vpc::create_flat_vpc(
+        &env,
+        "flat".to_string(),
+        Some("2829bbe3-c169-4cd9-8b2a-19a8b1618a93".to_string()),
+    )
+    .await;
+
+    let request = Request::new(VpcPrefixCreationRequest {
+        id: None,
+        prefix: String::new(),
+        vpc_id: vpc.id,
+        config: Some(rpc::forge::VpcPrefixConfig {
+            prefix: "192.0.2.0/25".to_string(),
+        }),
+        metadata: Some(Metadata {
+            name: "flat-v4".to_string(),
+            ..Default::default()
+        }),
+    });
+
+    env.api
+        .create_vpc_prefix(request)
+        .await
+        .expect("Flat VPC should accept IPv4 prefix");
+
+    Ok(())
+}
+
+#[crate::sqlx_test]
+async fn flat_vpc_accepts_ipv6_prefix(pool: PgPool) -> Result<(), Box<dyn std::error::Error>> {
+    // Flat VPCs are allowed IPv6 prefixes alongside FNN -- ETV is the only
+    // type that rejects IPv6 prefixes. Extend the site fabric prefixes with an
+    // IPv6 range since the default test fabric is IPv4-only.
+    let mut site_prefixes = TEST_SITE_PREFIXES.clone();
+    site_prefixes.push("2001:db8::/32".parse().unwrap());
+    let env = create_test_env_with_overrides(
+        pool,
+        TestEnvOverrides {
+            site_prefixes: Some(site_prefixes),
+            create_network_segments: Some(false),
+            ..Default::default()
+        },
+    )
+    .await;
+    let (_, vpc) = api_fixtures::vpc::create_flat_vpc(
+        &env,
+        "flat".to_string(),
+        Some("2829bbe3-c169-4cd9-8b2a-19a8b1618a93".to_string()),
+    )
+    .await;
+
+    let request = Request::new(VpcPrefixCreationRequest {
+        id: None,
+        prefix: String::new(),
+        vpc_id: vpc.id,
+        config: Some(rpc::forge::VpcPrefixConfig {
+            prefix: "2001:db8::/64".to_string(),
+        }),
+        metadata: Some(Metadata {
+            name: "flat-v6".to_string(),
+            ..Default::default()
+        }),
+    });
+
+    env.api
+        .create_vpc_prefix(request)
+        .await
+        .expect("Flat VPC should accept IPv6 prefix");
 
     Ok(())
 }

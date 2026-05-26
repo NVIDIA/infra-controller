@@ -439,24 +439,24 @@ impl PowerShelfManager for RmsBackend {
     }
 }
 
-/// Query all rack firmware IDs from the database.
-async fn list_rack_firmware_ids(db: &PgPool) -> Result<Vec<String>, ComponentManagerError> {
-    let mut conn = db.acquire().await.map_err(|e| {
-        ComponentManagerError::Internal(format!("failed to acquire DB connection: {e}"))
-    })?;
-
-    let filter = model::rack_firmware::RackFirmwareSearchFilter {
-        only_available: false,
-        rack_hardware_type: None,
-    };
-
-    let firmwares = db::rack_firmware::list_all(&mut conn, filter)
+/// Query all firmware object IDs from RMS.
+async fn list_firmware_object_ids(
+    client: &dyn RmsApi,
+) -> Result<Vec<String>, ComponentManagerError> {
+    let response = client
+        .list_firmware_objects(rms::ListFirmwareObjectsRequest {
+            metadata: None,
+            only_available: false,
+            hardware_type: String::new(),
+        })
         .await
         .map_err(|e| {
-            ComponentManagerError::Internal(format!("failed to list rack firmware: {e}"))
+            ComponentManagerError::Internal(format!(
+                "failed to list firmware objects from RMS: {e}"
+            ))
         })?;
 
-    Ok(firmwares.into_iter().map(|fw| fw.id).collect())
+    Ok(response.objects.into_iter().map(|fw| fw.id).collect())
 }
 
 /// Map NvSwitchComponent to a firmware target name used by RMS.
@@ -684,7 +684,7 @@ impl NvSwitchManager for RmsBackend {
 
     #[instrument(skip(self), fields(backend = "rms"))]
     async fn list_firmware_bundles(&self) -> Result<Vec<String>, ComponentManagerError> {
-        list_rack_firmware_ids(&self.db).await
+        list_firmware_object_ids(self.client.as_ref()).await
     }
 }
 
@@ -1290,9 +1290,15 @@ mod tests {
     }
 
     #[carbide_macros::sqlx_test]
-    async fn list_firmware_bundles_empty_db(pool: sqlx::PgPool) {
-        let (_mock, backend, _, _, _, _, _) = make_backend(&pool).await;
+    async fn list_firmware_bundles_empty_rms(pool: sqlx::PgPool) {
+        let (mock, backend, _, _, _, _, _) = make_backend(&pool).await;
+        mock.enqueue_list_firmware_objects(Ok(rms::ListFirmwareObjectsResponse {
+            objects: Vec::new(),
+        }))
+        .await;
+
         let bundles = backend.list_firmware_bundles().await.unwrap();
+
         assert!(bundles.is_empty());
     }
 }

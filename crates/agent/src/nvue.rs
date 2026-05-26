@@ -41,6 +41,18 @@ pub fn template_for(vtype: VpcVirtualizationType) -> eyre::Result<&'static str> 
         VpcVirtualizationType::EthernetVirtualizer
         | VpcVirtualizationType::EthernetVirtualizerWithNvue => Ok(TMPL_ETV_WITH_NVUE),
         VpcVirtualizationType::Fnn => Ok(TMPL_FNN),
+        // Flat VPCs attach instances via a plain NIC (the host's
+        // primary fabric interface is not a DPU), so there's no NVUE
+        // template to render for them -- this function is the DPU
+        // agent's template selector, and Flat instances don't run
+        // through a DPU agent at all.
+        //
+        // (NICo today doesn't model mixed-mode hosts that have a NIC
+        // primary plus secondary DPUs used for VFs; if that ever
+        // becomes a target, the dispatch here would need rethinking.)
+        VpcVirtualizationType::Flat => {
+            Err(eyre::eyre!("Flat VPC virtualization type not supported",))
+        }
     }
 }
 
