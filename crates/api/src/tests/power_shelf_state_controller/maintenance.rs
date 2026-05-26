@@ -48,9 +48,10 @@ use model::metadata::Metadata;
 use model::power_shelf::{PowerShelf, PowerShelfControllerState, PowerShelfMaintenanceOperation};
 use sqlx::PgConnection;
 
-use crate::state_controller::common_services::CommonStateHandlerServices;
 use crate::state_controller::db_write_batch::DbWriteBatch;
-use crate::state_controller::power_shelf::context::PowerShelfStateHandlerContextObjects;
+use crate::state_controller::power_shelf::context::{
+    PowerShelfStateHandlerContextObjects, PowerShelfStateHandlerServices,
+};
 use crate::state_controller::power_shelf::handler::PowerShelfStateHandler;
 use crate::state_controller::power_shelf::metrics::PowerShelfMetrics;
 use crate::state_controller::state_handler::{
@@ -69,18 +70,18 @@ const TEST_BMC_PASSWORD: &str = "password";
 fn services_with_rms_client(
     env: &TestEnv,
     rms_client: Option<Arc<dyn librms::RmsApi>>,
-) -> CommonStateHandlerServices {
-    let mut services = env.state_handler_services();
-    services.rms_client = rms_client;
-    // Force a credential manager that always resolves BMC creds via the
-    // site-wide fallback. This avoids relying on whatever the test-env
-    // happens to be seeded with for BMC creds.
-    services.credential_manager =
-        Arc::new(TestCredentialManager::new(Credentials::UsernamePassword {
+) -> PowerShelfStateHandlerServices {
+    PowerShelfStateHandlerServices {
+        db_pool: env.state_handler_services().db_pool,
+        rms_client,
+        // Force a credential manager that always resolves BMC creds via the
+        // site-wide fallback. This avoids relying on whatever the test-env
+        // happens to be seeded with for BMC creds.
+        credential_manager: Arc::new(TestCredentialManager::new(Credentials::UsernamePassword {
             username: TEST_BMC_USER.into(),
             password: TEST_BMC_PASSWORD.into(),
-        }));
-    services
+        })),
+    }
 }
 
 /// Drive a power shelf into `Maintenance { operation }` with a maintenance
@@ -158,7 +159,7 @@ async fn load_power_shelf(pool: &sqlx::PgPool, id: &PowerShelfId) -> PowerShelf 
 
 /// Run one iteration of the state handler against the supplied power shelf.
 async fn run_handler(
-    services: &mut CommonStateHandlerServices,
+    services: &mut PowerShelfStateHandlerServices,
     state: &mut PowerShelf,
 ) -> StateHandlerOutcome<PowerShelfControllerState> {
     let handler = PowerShelfStateHandler::default();

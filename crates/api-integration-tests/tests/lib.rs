@@ -111,7 +111,11 @@ async fn test_integration() -> eyre::Result<()> {
     let domain_id = domain::create(carbide_api_addrs, "tenant-1.local").await?;
     let managed_segment_id =
         subnet::create(carbide_api_addrs, &tenant1_vpc, &domain_id, 10, false).await?;
-    subnet::create(carbide_api_addrs, &tenant1_vpc, &domain_id, 11, true).await?;
+
+    // HostInband segments must live in a Flat VPC -- those VPC types are
+    // mutually bound. Create one for the HostInband fixture.
+    let flat_vpc = vpc::create_flat(carbide_api_addrs, tenant_org_id).await?;
+    subnet::create(carbide_api_addrs, &flat_vpc, &domain_id, 11, true).await?;
 
     // Create FNN VPC + VPC prefixes (IPv4 + IPv6) for dual-stack L3 linknet testing.
     let fnn_vpc = vpc::create_fnn(carbide_api_addrs, tenant_org_id).await?;

@@ -146,17 +146,20 @@ pub async fn handle_nvlink_info_populate(
         })?;
 
     let domain_uuid = list_json
-        .get("DomainUUID")
+        .get("server_header")
+        .and_then(|h| h.get("domain_uuid"))
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .ok_or_else(|| {
-            CarbideCliError::GenericError(
-                "No non-empty DomainUUID in NMX-C GPU list response".to_string(),
-            )
+            CarbideCliError::GenericError("No domain_uuid in NMX-C server_header".to_string())
+        })?
+        .parse::<uuid::Uuid>()
+        .map_err(|e| {
+            CarbideCliError::GenericError(format!("Failed to parse domain_uuid: {}", e))
         })?;
 
     let gpus_json = list_json
-        .get("Gpus")
+        .get("gpu_info_list")
         .and_then(|v| v.as_array())
         .ok_or_else(|| {
             CarbideCliError::GenericError("No Gpus array in NMX-C GPU list response".to_string())
@@ -165,27 +168,46 @@ pub async fn handle_nvlink_info_populate(
     let mut gpus: Vec<forgerpc::NvLinkGpu> = Vec::new();
     for gpu_json in gpus_json {
         let gpu_tray_index = gpu_json
-            .get("LocationInfo")
-            .and_then(|loc| loc.get("TrayIndex"))
+            .get("loc")
+            .and_then(|loc| loc.get("tray_index"))
             .and_then(|v| v.as_i64())
-            .unwrap_or(0) as i32;
+            .map(|v| v as i32)
+            .ok_or_else(|| {
+                CarbideCliError::GenericError(
+                    "GPU entry missing loc.tray_index in NMX-C GPU list response".to_string(),
+                )
+            })?;
         if gpu_tray_index != tray_index {
             continue;
         }
 
         let gpu_device_id = gpu_json
-            .get("DeviceID")
+            .get("gpu_id")
             .and_then(|v| v.as_i64())
-            .unwrap_or(0) as i32;
+            .map(|v| v as i32)
+            .ok_or_else(|| {
+                CarbideCliError::GenericError(
+                    "GPU entry missing gpu_id in NMX-C GPU list response".to_string(),
+                )
+            })?;
         let gpu_device_uid = gpu_json
-            .get("DeviceUID")
+            .get("gpu_uid")
             .and_then(|v| v.as_u64())
-            .unwrap_or(0);
+            .ok_or_else(|| {
+                CarbideCliError::GenericError(
+                    "GPU entry missing gpu_uid in NMX-C GPU list response".to_string(),
+                )
+            })?;
         let gpu_slot_id = gpu_json
-            .get("LocationInfo")
-            .and_then(|loc| loc.get("SlotID"))
+            .get("loc")
+            .and_then(|loc| loc.get("slot_id"))
             .and_then(|v| v.as_i64())
-            .unwrap_or(0) as i32;
+            .map(|v| v as i32)
+            .ok_or_else(|| {
+                CarbideCliError::GenericError(
+                    "GPU entry missing loc.slot_id in NMX-C GPU list response".to_string(),
+                )
+            })?;
 
         gpus.push(forgerpc::NvLinkGpu {
             device_id: gpu_device_id,
@@ -202,16 +224,9 @@ pub async fn handle_nvlink_info_populate(
         )));
     }
 
-    // Parse domain_uuid as UUID
-    let domain_uuid_parsed = uuid::Uuid::parse_str(domain_uuid).map_err(|e| {
-        CarbideCliError::GenericError(format!("Failed to parse domain_uuid: {}", e))
-    })?;
-
     // Build the nvlink_info structure for RPC
     let nvlink_info_rpc = forgerpc::MachineNvLinkInfo {
-        domain_uuid: Some(carbide_uuid::nvlink::NvLinkDomainId::from(
-            domain_uuid_parsed,
-        )),
+        domain_uuid: Some(carbide_uuid::nvlink::NvLinkDomainId::from(domain_uuid)),
         gpus: gpus.clone(),
         chassis_serial: serial_number.clone(),
     };

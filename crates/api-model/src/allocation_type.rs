@@ -17,6 +17,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::address_selection_strategy::AddressSelectionStrategy;
+
 /// Distinguishes how an IP address was allocated to a machine interface,
 /// and are generally derived from the AddressSelectionStrategy used.
 ///
@@ -30,6 +32,17 @@ use serde::{Deserialize, Serialize};
 pub enum AllocationType {
     Dhcp,
     Static,
+}
+
+impl From<AddressSelectionStrategy> for AllocationType {
+    fn from(strategy: AddressSelectionStrategy) -> Self {
+        match strategy {
+            AddressSelectionStrategy::NextAvailableIp => AllocationType::Dhcp,
+            AddressSelectionStrategy::Automatic => AllocationType::Dhcp,
+            AddressSelectionStrategy::NextAvailablePrefix(_) => AllocationType::Dhcp,
+            AddressSelectionStrategy::StaticAddress(_) => AllocationType::Static,
+        }
+    }
 }
 
 /// The result of assigning a static address, indicating what

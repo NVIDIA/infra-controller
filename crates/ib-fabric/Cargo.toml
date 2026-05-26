@@ -17,8 +17,8 @@ test-support = []
 carbide-api-db = { path = "../api-db" }
 carbide-api-model = { path = "../api-model" }
 carbide-health-report = { path = "../health-report" }
-carbide-rpc = { path = "../rpc" }
 carbide-secrets = { path = "../secrets" }
+carbide-tls = { path = "../tls" }
 carbide-utils = { path = "../utils" }
 carbide-uuid = { path = "../uuid" }
 

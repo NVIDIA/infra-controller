@@ -555,8 +555,8 @@ dependencies = ["mkdir-static"]
 category = "Ephemeral Image"
 command = "cp"
 args = [
-  "${MKOSI_BUILD_TMP}/scout.cpio.zst",
-  "static/blobs/internal/x86_64/scout.cpio.zst",
+  "${MKOSI_BUILD_TMP}/scout.squashfs",
+  "static/blobs/internal/x86_64/scout.squashfs",
 ]
 dependencies = ["mkdir-static"]
 
@@ -573,8 +573,8 @@ dependencies = ["mkdir-static"]
 category = "Ephemeral Image"
 command = "cp"
 args = [
-  "${MKOSI_BUILD_TMP}/scout.cpio.zst",
-  "static/blobs/internal/aarch64/scout.cpio.zst",
+  "${MKOSI_BUILD_TMP}/scout.squashfs",
+  "static/blobs/internal/aarch64/scout.squashfs",
 ]
 dependencies = ["mkdir-static"]
 

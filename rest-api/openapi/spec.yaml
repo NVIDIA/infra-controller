@@ -12466,6 +12466,7 @@ components:
             pending: 2
             provisioning: 1
             ready: 8
+            repairing: 1
             terminating: 2
             error: 1
           vpc:
@@ -12498,6 +12499,7 @@ components:
           pending: 2
           provisioning: 1
           ready: 8
+          repairing: 1
           terminating: 2
           error: 1
       properties:
@@ -12508,6 +12510,8 @@ components:
         provisioning:
           type: integer
         ready:
+          type: integer
+        repairing:
           type: integer
         terminating:
           type: integer
@@ -15605,6 +15609,7 @@ components:
         - Configuring
         - Ready
         - Updating
+        - Repairing
         - Rebooting
         - Terminating
         - Error

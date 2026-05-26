@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
+use ::rpc::measured_boot::FromGrpc;
 use base64::prelude::*;
 use carbide_uuid::machine::MachineId;
 use carbide_uuid::machine_validation::MachineValidationId;
@@ -59,6 +60,7 @@ use rpc::{DiscoveryData, DiscoveryInfo};
 use tonic::{Code, Request};
 
 use crate::handlers::measured_boot::rpc_forge::MachineDiscoveryInfo;
+use crate::measured_boot::convert_vec;
 use crate::state_controller::db_write_batch::DbWriteBatch;
 use crate::state_controller::machine::context::MachineStateHandlerContextObjects;
 use crate::state_controller::machine::handler::{
@@ -1398,7 +1400,7 @@ async fn test_measurement_failed_state_transition(pool: sqlx::PgPool) {
         .unwrap()
         .into_inner();
     assert_eq!(1, bundles_response.bundles.len());
-    let bundle = MeasurementBundle::from_grpc(Some(&bundles_response.bundles[0])).unwrap();
+    let bundle = MeasurementBundle::from_grpc(bundles_response.bundles[0].clone()).unwrap();
     assert_eq!(bundle.state, MeasurementBundleState::Active);
     let mut txn = env.db_txn().await;
     let retired_bundle = db::measured_boot::bundle::set_state_for_id(
@@ -1500,7 +1502,7 @@ async fn test_measurement_ready_to_retired_to_ca_fail_to_revoked_to_ready(pool: 
         .unwrap()
         .into_inner();
     assert_eq!(1, bundles_response.bundles.len());
-    let bundle = MeasurementBundle::from_grpc(Some(&bundles_response.bundles[0])).unwrap();
+    let bundle = MeasurementBundle::from_grpc(bundles_response.bundles[0].clone()).unwrap();
     assert_eq!(bundle.state, MeasurementBundleState::Active);
     let mut txn = env.db_txn().await;
     let retired_bundle = db::measured_boot::bundle::set_state_for_id(
@@ -1739,7 +1741,7 @@ async fn test_measurement_host_init_failed_to_waiting_for_measurements_to_pendin
         .attest_candidate_machine(Request::new(
             rpc::protos::measured_boot::AttestCandidateMachineRequest {
                 machine_id: host_machine_id.to_string(),
-                pcr_values: PcrRegisterValue::to_pb_vec(&pcr_values),
+                pcr_values: convert_vec(pcr_values),
             },
         ))
         .await
@@ -1771,7 +1773,7 @@ async fn test_measurement_host_init_failed_to_waiting_for_measurements_to_pendin
         .unwrap()
         .into_inner();
     assert_eq!(1, reports_response.reports.len());
-    let report = MeasurementReport::from_grpc(Some(&reports_response.reports[0])).unwrap();
+    let report = MeasurementReport::from_grpc(reports_response.reports[0].clone()).unwrap();
 
     let _promotion_response = env
         .api

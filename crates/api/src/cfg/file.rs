@@ -19,8 +19,6 @@ use std::collections::HashMap;
 use std::fmt;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 
 use bmc_vendor::BMCVendor;
 use carbide_authn::config::{AllowedCertCriteria, TrustConfig};
@@ -29,9 +27,7 @@ use carbide_ib_fabric::config::{IBFabricConfig, IbFabricDefinition};
 use carbide_nvlink_manager::config::NvLinkConfig;
 use carbide_preingestion_manager::PreingestionManagerConfig;
 use carbide_site_explorer::config::SiteExplorerConfig;
-use carbide_utils::config::{
-    as_duration, as_std_duration, deserialize_arc_atomic_bool, serialize_arc_atomic_bool,
-};
+use carbide_utils::config::{as_duration, as_std_duration};
 use chrono::Duration;
 use duration_str::{deserialize_duration, deserialize_duration_chrono};
 use figment::Figment;
@@ -54,6 +50,7 @@ use regex::Regex;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::state_controller::config::IterationConfig;
+use crate::state_controller::rack::config::{RackValidationConfig, RmsConfig};
 
 static BF2_NIC: &str = "24.47.2682";
 static BF2_BMC: &str = "BF-25.10-20";
@@ -475,7 +472,7 @@ pub struct CarbideConfig {
     /// (disconnected / air-gapped) infrastructure manager for racks of GB200/GB300/VR144.
     /// Only set this if using NICo site controller with Rack Manager to manage GB200/300/VR144.
     /// It will change site controller behavior significantly in the following ways, etc.:
-    /// 1. skip dpu management and use dpus in nic mode (optional, can set force_dpu_nic_mode=false)
+    /// 1. skip dpu management and use dpus in nic mode (set the site-wide `[site_explorer] dpu_mode = "nic_mode"`, or per-host `ExpectedMachine.dpu_mode`)
     ///    a. no dpu bfb upgrade and host power cycle
     ///    b. no firmware upgrade and host power cycle
     ///    c. no hbn deployment (no ecmp, etc)
@@ -518,16 +515,6 @@ pub struct CarbideConfig {
     #[serde(default)]
     pub rack_profiles: model::rack_type::RackProfileConfig,
 
-    /// Treat any dpu found as a regular NIC and skip configuring it as a managed dpu.
-    /// This is specifically for dev labs to allow using GB200/300 and VR compute
-    /// trays with bluefield dpus as NICs.
-    #[serde(
-        default = "SiteExplorerConfig::default_force_dpu_nic_mode",
-        deserialize_with = "deserialize_arc_atomic_bool",
-        serialize_with = "serialize_arc_atomic_bool"
-    )]
-    pub force_dpu_nic_mode: Arc<AtomicBool>,
-
     /// SPDM (Security Protocol and Data Model) configuration for hardware attestation.
     #[serde(default)]
     pub spdm: SpdmConfig,
@@ -552,6 +539,20 @@ pub struct CarbideConfig {
     /// The URL to use for overriding the PXE boot url on ARM machines.
     #[serde(default)]
     pub arm_pxe_boot_url_override: Option<String>,
+
+    /// Vendors for which the state controller should pin the UEFI HTTP boot
+    /// URL on the BMC (via Redfish `HttpBootUri`) in addition to the existing
+    /// DHCP option 67 path. Machines whose BMC vendor is NOT in this list
+    /// continue to rely on carbide-dhcp's option 67 for the URL.
+    ///
+    /// Empty by default — no machines get the BMC-pinned URL until vendors
+    /// are explicitly added here (typically after per-vendor verification on
+    /// real hardware). Adding a vendor that libredfish doesn't yet implement
+    /// (e.g., `Dell` / `Lenovo` until their libredfish impls land) will
+    /// surface a runtime `NotSupported` error; carbide-dhcp option 67 is the
+    /// fallback URL source.
+    #[serde(default)]
+    pub set_http_boot_uri_for_vendors: Vec<BMCVendor>,
 
     /// Alternate API URL for external hosts that cannot resolve
     /// https://carbide-pxe.forge. This be an IP (e.g., "https://10.0.0.1:1079"),
@@ -714,7 +715,7 @@ impl Default for DpfConfig {
 }
 
 fn default_dpf_bfb_url() -> String {
-    "https://content.mellanox.com/BlueField/BFBs/Ubuntu24.04/bf-bundle-3.2.1-34_25.11_ubuntu-24.04_64k_prod.bfb".to_string()
+    "https://content.mellanox.com/BlueField/BFBs/Ubuntu24.04/bf-bundle-3.2.2-125_26.02_ubuntu-24.04_64k_prod.bfb".to_string()
 }
 
 fn default_dpf_deployment_name() -> String {
@@ -1035,6 +1036,46 @@ pub struct FnnRoutingProfileConfig {
     pub access_tier: u32,
 }
 
+impl From<&FnnRoutingProfileConfig> for rpc::forge::RoutingProfile {
+    fn from(profile: &FnnRoutingProfileConfig) -> Self {
+        Self {
+            tenant_leak_communities_accepted: profile.tenant_leak_communities_accepted,
+            leak_default_route_from_underlay: profile.leak_default_route_from_underlay,
+            leak_tenant_host_routes_to_underlay: profile.leak_tenant_host_routes_to_underlay,
+            accepted_leaks_from_underlay: profile
+                .accepted_leaks_from_underlay
+                .iter()
+                .map(|entry| rpc::forge::PrefixFilterPolicyEntry {
+                    prefix: entry.prefix.to_string(),
+                })
+                .collect(),
+            allowed_anycast_prefixes: profile
+                .allowed_anycast_prefixes
+                .iter()
+                .map(|entry| rpc::forge::PrefixFilterPolicyEntry {
+                    prefix: entry.prefix.to_string(),
+                })
+                .collect(),
+            route_target_imports: profile
+                .route_target_imports
+                .iter()
+                .map(|route_target| rpc::common::RouteTarget {
+                    asn: route_target.asn,
+                    vni: route_target.vni,
+                })
+                .collect(),
+            route_targets_on_exports: profile
+                .route_targets_on_exports
+                .iter()
+                .map(|route_target| rpc::common::RouteTarget {
+                    asn: route_target.asn,
+                    vni: route_target.vni,
+                })
+                .collect(),
+        }
+    }
+}
+
 /// Entries used for prefix-list policies on the DPUS.
 /// Default behavior is max-len lte 32
 /// We can change that with additional fields on this struct
@@ -1341,7 +1382,7 @@ impl MachineStateControllerConfig {
     }
 
     pub fn failure_retry_time_default() -> Duration {
-        Duration::minutes(30)
+        Duration::minutes(90)
     }
 
     pub fn dpu_up_threshold_default() -> Duration {
@@ -1684,30 +1725,6 @@ fn default_listen() -> SocketAddr {
 
 fn default_max_database_connections() -> u32 {
     1000
-}
-
-fn default_rms_enforce_tls() -> bool {
-    true
-}
-
-/// Rack Manager Service (RMS) configuration for API connectivity and mTLS.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-pub struct RmsConfig {
-    /// URL of the RMS API for rack-level firmware upgrades and power sequencing.
-    pub api_url: Option<String>,
-
-    /// Path to the root CA certificate for TLS verification when connecting to RMS.
-    pub root_ca_path: Option<String>,
-
-    /// Path to the client certificate PEM for mTLS with RMS.
-    pub client_cert: Option<String>,
-
-    /// Path to the client private key PEM for mTLS with RMS.
-    pub client_key: Option<String>,
-
-    /// Enforce TLS when connecting to RMS. Defaults to true.
-    #[serde(default = "default_rms_enforce_tls")]
-    pub enforce_tls: bool,
 }
 
 /// DpuConfig related internal configuration
@@ -2285,35 +2302,6 @@ impl MachineValidationConfig {
     }
 }
 
-/// Configuration for rack-level validation (partition-based
-/// multi-node tests run after firmware upgrade / maintenance).
-///
-/// Example:
-/// ```toml
-/// [rack_validation_config]
-/// enabled = true
-/// run_interval = "60s"
-/// ```
-#[derive(Default, Clone, Debug, Deserialize, Serialize)]
-pub struct RackValidationConfig {
-    /// Enables rack validation testing.
-    #[serde(default)]
-    pub enabled: bool,
-
-    #[serde(
-        default = "RackValidationConfig::default_run_interval",
-        deserialize_with = "deserialize_duration",
-        serialize_with = "as_std_duration"
-    )]
-    pub run_interval: std::time::Duration,
-}
-
-impl RackValidationConfig {
-    const fn default_run_interval() -> std::time::Duration {
-        std::time::Duration::from_secs(60)
-    }
-}
-
 /// The VPC isolation behavior enforced within a site.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -2783,6 +2771,7 @@ pub fn default_host_intercept_bridge_port() -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use std::sync::atomic::Ordering as AtomicOrdering;
 
     use carbide_authn::config::CertComponent;
@@ -2792,6 +2781,7 @@ mod tests {
     use figment::providers::{Env, Format, Toml};
     use libmlx::variables::value::MlxValueType;
     use libredfish::model::service_root::RedfishVendor;
+    use model::expected_machine::DpuMode;
     use model::network_segment::NetworkDefinitionSegmentType;
     use model::resource_pool;
 
@@ -3150,7 +3140,7 @@ mod tests {
                 create_switches: Arc::new(true.into()),
                 switches_created_per_run: 9,
                 rotate_switch_nvos_credentials: Arc::new(false.into()),
-                force_dpu_nic_mode: Arc::new(false.into()),
+                dpu_mode: None,
                 explore_mode: SiteExplorerExploreMode::LibRedfish,
             }
         );
@@ -3324,7 +3314,7 @@ mod tests {
                 create_switches: Arc::new(true.into()),
                 switches_created_per_run: 9,
                 rotate_switch_nvos_credentials: Arc::new(false.into()),
-                force_dpu_nic_mode: Arc::new(false.into()),
+                dpu_mode: None,
                 explore_mode: SiteExplorerExploreMode::LibRedfish,
             }
         );
@@ -3633,7 +3623,7 @@ mod tests {
                 create_switches: Arc::new(true.into()),
                 switches_created_per_run: 9,
                 rotate_switch_nvos_credentials: Arc::new(false.into()),
-                force_dpu_nic_mode: Arc::new(false.into()),
+                dpu_mode: None,
                 explore_mode: SiteExplorerExploreMode::LibRedfish,
             }
         );
@@ -3781,6 +3771,56 @@ mod tests {
         let deserialized = serde_json::from_str::<SiteExplorerConfig>("{}")?;
         assert_eq!(deserialized, SiteExplorerConfig::default());
         Ok(())
+    }
+
+    /// Verifies the `[site_explorer] dpu_mode = ...` setting parses
+    /// correctly for every named variant. When unset (the default),
+    /// `site_explorer.dpu_mode` is `None` and hosts resolve to
+    /// `DpuMode::DpuMode`.
+    #[test]
+    fn site_explorer_dpu_mode_parses_and_defaults_to_none() {
+        let config: CarbideConfig = Figment::new()
+            .merge(Toml::file(format!("{TEST_DATA_DIR}/min_config.toml")))
+            .extract()
+            .unwrap();
+        assert_eq!(config.site_explorer.dpu_mode, None);
+
+        for (toml_value, expected) in [
+            ("dpu_mode", DpuMode::DpuMode),
+            ("nic_mode", DpuMode::NicMode),
+            ("no_dpu", DpuMode::NoDpu),
+        ] {
+            let config: CarbideConfig = Figment::new()
+                .merge(Toml::file(format!("{TEST_DATA_DIR}/min_config.toml")))
+                .merge(Toml::string(&format!(
+                    "[site_explorer]\ndpu_mode = \"{toml_value}\"\n"
+                )))
+                .extract()
+                .unwrap();
+            assert_eq!(
+                config.site_explorer.dpu_mode,
+                Some(expected),
+                "[site_explorer] dpu_mode = {toml_value:?} should parse to {expected:?}",
+            );
+        }
+    }
+
+    /// Real-world site TOMLs may still carry the now-removed
+    /// `force_dpu_nic_mode` setting (top-level and/or under
+    /// `[site_explorer]`). serde silently ignores unknown keys, so
+    /// those files should keep parsing cleanly after the rip-out --
+    /// this is the regression guard for that.
+    #[test]
+    fn legacy_force_dpu_nic_mode_in_toml_still_parses() {
+        let _config: CarbideConfig = Figment::new()
+            .merge(Toml::file(format!("{TEST_DATA_DIR}/min_config.toml")))
+            .merge(Toml::string(
+                "force_dpu_nic_mode = false\n\
+                 [site_explorer]\n\
+                 force_dpu_nic_mode = true\n",
+            ))
+            .extract()
+            .expect("legacy force_dpu_nic_mode in TOML must still parse");
     }
 
     #[test]

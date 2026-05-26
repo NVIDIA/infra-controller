@@ -81,7 +81,6 @@ applicable.
 | `vmaas_config` | `Option<VmaasConfig>` | — | VMaaS configuration for VM system integration (see [VmaasConfig](#vmaasconfig)). |
 | `mlxconfig_profiles` | `Option<HashMap<String, MlxConfigProfile>>` | — | Named Mellanox NIC register configuration profiles for superNIC firmware flashing. TOML key: `mlx-config-profiles`. |
 | `rack_management_enabled` | `bool` | `false` | Standalone infrastructure manager mode for GB200/GB300/VR144. See doc comment for full behavioral changes. |
-| `force_dpu_nic_mode` | `bool` | `false` | Treat DPUs as regular NICs (skip managed DPU config). For dev labs with BF DPUs. |
 | `rms` | `RmsConfig` | *(see below)* | Rack Manager Service configuration for API connectivity and mTLS (see [RmsConfig](#rmsconfig)). |
 | `rack_profiles` | `RackProfileConfig` | *(default)* | Rack profile definitions referenced by expected racks. |
 | `spdm` | `SpdmConfig` | *(see below)* | SPDM hardware attestation (see [SpdmConfig](#spdmconfig)). |
@@ -90,6 +89,7 @@ applicable.
 | `dpf` | `DpfConfig` | *(see below)* | DPF (DPU Platform Framework) Kubernetes deployment (see [DpfConfig](#dpfconfig)). |
 | `x86_pxe_boot_url_override` | `Option<String>` | — | Override PXE boot URL for x86 machines. |
 | `arm_pxe_boot_url_override` | `Option<String>` | — | Override PXE boot URL for ARM machines. |
+| `set_http_boot_uri_for_vendors` | `Vec<BMCVendor>` | `[]` | Vendors for which the state controller pins the UEFI HTTP boot URL on the BMC via Redfish `HttpBootUri`. Empty = all machines rely on carbide-dhcp option 67 for the URL. |
 | `compute_allocation_enforcement` | `ComputeAllocationEnforcement` | `WarnOnly` | Controls enforcement of compute allocations on new instance requests. |
 | `supernic_firmware_profiles` | nested `HashMap` | `{}` | SuperNIC firmware profiles keyed by `part_number` then `PSID`. |
 | `component_manager` | `Option<ComponentManagerConfig>` | — | Component manager for NvLink switches and power shelves. |
@@ -186,12 +186,12 @@ Extends `StateControllerConfig` with:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `dpu_wait_time` | `Duration` | `5m` | Time before a DPU is considered definitively down. |
-| `power_down_wait` | `Duration` | `2m` | Wait after power-down before powering on. |
-| `failure_retry_time` | `Duration` | `30m` | Time before re-triggering reboot if machine hasn't called back. |
-| `dpu_up_threshold` | `Duration` | `5m` | Max time without DPU health report before assuming it's down. |
-| `scout_reporting_timeout` | `Duration` | `5m` | Duration without scout report before host is unhealthy. |
-| `uefi_boot_wait` | `Duration` | `5m` | Wait time for UEFI boot completion after host reboot. |
+| `dpu_wait_time` | `Duration` | `5m`    | Time before a DPU is considered definitively down. |
+| `power_down_wait` | `Duration` | `2m`    | Wait after power-down before powering on. |
+| `failure_retry_time` | `Duration` | `90m`   | Time before re-triggering reboot if machine hasn't called back. |
+| `dpu_up_threshold` | `Duration` | `5m`    | Max time without DPU health report before assuming it's down. |
+| `scout_reporting_timeout` | `Duration` | `5m`    | Duration without scout report before host is unhealthy. |
+| `uefi_boot_wait` | `Duration` | `5m`    | Wait time for UEFI boot completion after host reboot. |
 
 ### `NetworkSegmentStateControllerConfig`
 

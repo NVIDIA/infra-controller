@@ -42,7 +42,6 @@ use p256::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
 use rand::rngs::SysRng;
 use rand_core::TryRng;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 /// Scheme version 1: AES-256-GCM, 32-byte key from base64-decoded encryption secret, envelope below.
 pub const SCHEME_VERSION_V1: u8 = 1;
@@ -161,16 +160,6 @@ pub fn decrypt(
         .map_err(|e| KeyEncryptionError::Decrypt(e.to_string()))
 }
 
-/// Computes key_id as hex(sha256(public_key)).
-/// Works with any public key representation (PEM, DER, etc.).
-///
-/// API domain code should prefer `KeyId::from_public_key_material` in `carbide-api-model`, which
-/// delegates to this function (one implementation).
-pub fn key_id_from_public_key(public_key: &str) -> String {
-    let hash = Sha256::digest(public_key.as_bytes());
-    hex::encode(hash)
-}
-
 /// Generates an ES256 (ECDSA P-256) signing key pair (PKCS#8 private + SPKI public PEM via `p256`).
 ///
 /// The public PEM matches `p256::PublicKey::from_public_key_pem` (same as carbide-api JWKS).
@@ -192,8 +181,6 @@ pub fn generate_es256_key_pair() -> Result<(Vec<u8>, String), KeyEncryptionError
 
 #[cfg(test)]
 mod tests {
-    use p256::pkcs8::{DecodePrivateKey, DecodePublicKey};
-
     use super::*;
 
     fn test_aes256_key() -> Aes256Key {
@@ -209,26 +196,6 @@ mod tests {
         assert_eq!(decrypted, plaintext);
         let raw = BASE64.decode(encrypted).unwrap();
         assert_eq!(raw.first(), Some(&b'{'));
-    }
-
-    #[test]
-    fn key_id_from_public_key_is_deterministic() {
-        let pub_key = "-----BEGIN PUBLIC KEY-----\nMFkw...\n-----END PUBLIC KEY-----";
-        let id1 = key_id_from_public_key(pub_key);
-        let id2 = key_id_from_public_key(pub_key);
-        assert_eq!(id1, id2);
-        assert_eq!(id1.len(), 64);
-    }
-
-    #[test]
-    fn generate_es256_key_pair_produces_valid_outputs() {
-        let (private_pem, public_pem) = generate_es256_key_pair().unwrap();
-        assert!(private_pem.starts_with(b"-----BEGIN"));
-        assert!(public_pem.contains("PUBLIC KEY"));
-        let key_id = key_id_from_public_key(&public_pem);
-        assert_eq!(key_id.len(), 64);
-        p256::PublicKey::from_public_key_pem(public_pem.trim()).unwrap();
-        p256::SecretKey::from_pkcs8_pem(std::str::from_utf8(&private_pem).unwrap()).unwrap();
     }
 
     #[test]

@@ -16,16 +16,10 @@
  */
 
 pub mod common_services;
-pub mod dpa_interface;
 pub(crate) mod external_service_error;
-pub mod health_metrics;
-pub mod ib_partition;
 pub mod machine;
-pub mod network_segment;
 pub mod power_shelf;
 pub mod rack;
-pub mod spdm;
-pub mod switch;
 
 pub use ::state_controller::{
     config, controller, db_write_batch, io, metrics, state_change_emitter, state_handler,

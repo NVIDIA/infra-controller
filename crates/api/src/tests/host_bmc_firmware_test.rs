@@ -34,7 +34,6 @@ use model::firmware::{Firmware, FirmwareComponent, FirmwareComponentType, Firmwa
 use model::instance::status::tenant::TenantState;
 use model::machine::{HostReprovisionState, InstanceState, ManagedHostState};
 use model::machine_update_module::HOST_FW_UPDATE_HEALTH_REPORT_SOURCE;
-use model::rpc_conv::instance::snapshot::instance_snapshot_derive_status;
 use model::site_explorer::{
     Chassis, ComputerSystem, ComputerSystemAttributes, EndpointExplorationReport, EndpointType,
     InitialResetPhase, Inventory, PowerDrainState, PowerState, PreingestionState, Service,
@@ -43,6 +42,7 @@ use model::site_explorer::{
 use regex::Regex;
 use rpc::forge::forge_server::Forge;
 use rpc::forge_agent_control_response::{Action, LegacyAction};
+use rpc::model::instance::snapshot::instance_snapshot_derive_status;
 use sqlx::PgConnection;
 use temp_dir::TempDir;
 use tokio::time::sleep;
@@ -1253,7 +1253,8 @@ async fn test_instance_upgrading_actual_part_2(
             host.state.clone().value,
             None,
             None,
-            None
+            None,
+            &host.health_reports,
         )
         .unwrap()
         .tenant
@@ -1292,7 +1293,8 @@ async fn test_instance_upgrading_actual_part_2(
             host.state.clone().value,
             None,
             None,
-            None
+            None,
+            &host.health_reports,
         )
         .unwrap()
         .tenant
@@ -1341,7 +1343,8 @@ async fn test_instance_upgrading_actual_part_2(
             host.state.clone().value,
             None,
             None,
-            None
+            None,
+            &host.health_reports,
         )
         .unwrap()
         .tenant
@@ -1387,7 +1390,8 @@ async fn test_instance_upgrading_actual_part_2(
             host.state.clone().value,
             None,
             None,
-            None
+            None,
+            &host.health_reports,
         )
         .unwrap()
         .tenant
@@ -1423,7 +1427,8 @@ async fn test_instance_upgrading_actual_part_2(
             host.state.clone().value,
             None,
             None,
-            None
+            None,
+            &host.health_reports,
         )
         .unwrap()
         .tenant
@@ -1481,7 +1486,8 @@ async fn test_instance_upgrading_actual_part_2(
             host.state.clone().value,
             None,
             None,
-            None
+            None,
+            &host.health_reports,
         )
         .unwrap()
         .tenant
@@ -1517,7 +1523,8 @@ async fn test_instance_upgrading_actual_part_2(
             host.state.clone().value,
             None,
             None,
-            None
+            None,
+            &host.health_reports,
         )
         .unwrap()
         .tenant
@@ -1565,7 +1572,8 @@ async fn test_instance_upgrading_actual_part_2(
             host.state.clone().value,
             None,
             None,
-            None
+            None,
+            &host.health_reports,
         )
         .unwrap()
         .tenant
@@ -1633,7 +1641,8 @@ async fn test_instance_upgrading_actual_part_2(
             host.state.clone().value,
             None,
             None,
-            None
+            None,
+            &host.health_reports,
         )
         .unwrap()
         .tenant
@@ -1697,7 +1706,8 @@ async fn test_instance_upgrading_actual_part_2(
             host.state.clone().value,
             None,
             None,
-            None
+            None,
+            &host.health_reports,
         )
         .unwrap()
         .tenant
@@ -1733,7 +1743,8 @@ async fn test_instance_upgrading_actual_part_2(
             host.state.clone().value,
             None,
             None,
-            None
+            None,
+            &host.health_reports,
         )
         .unwrap()
         .tenant
@@ -1767,7 +1778,8 @@ async fn test_instance_upgrading_actual_part_2(
             host.state.clone().value,
             None,
             None,
-            None
+            None,
+            &host.health_reports,
         )
         .unwrap()
         .tenant
@@ -1796,7 +1808,8 @@ async fn test_instance_upgrading_actual_part_2(
             host.state.clone().value,
             None,
             None,
-            None
+            None,
+            &host.health_reports,
         )
         .unwrap()
         .tenant
