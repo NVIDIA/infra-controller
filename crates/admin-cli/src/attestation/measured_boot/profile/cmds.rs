@@ -20,7 +20,7 @@
 
 use std::str::FromStr;
 
-use ::rpc::admin_cli::{CarbideCliError, CarbideCliResult, ToTable, cli_output};
+use ::rpc::measured_boot::FromGrpcOpt;
 use ::rpc::protos::measured_boot::{
     DeleteMeasurementSystemProfileRequest, ListMeasurementSystemProfileBundlesRequest,
     ListMeasurementSystemProfileMachinesRequest, RenameMeasurementSystemProfileRequest,
@@ -28,6 +28,7 @@ use ::rpc::protos::measured_boot::{
 };
 use carbide_uuid::machine::MachineId;
 use carbide_uuid::measured_boot::MeasurementBundleId;
+use measured_boot::ToTable;
 use measured_boot::profile::MeasurementSystemProfile;
 use measured_boot::records::MeasurementSystemProfileRecord;
 use serde::Serialize;
@@ -36,6 +37,8 @@ use crate::attestation::measured_boot::profile::args::{
     CmdProfile, Create, Delete, List, ListBundles, ListMachines, Rename, Show,
 };
 use crate::attestation::measured_boot::{MachineIdList, global};
+use crate::cli_output;
+use crate::errors::{CarbideCliError, CarbideCliResult};
 use crate::rpc::ApiClient;
 
 /// dispatch matches + dispatches the correct command for
@@ -49,21 +52,21 @@ pub async fn dispatch(
             cli_output(
                 create(cli.grpc_conn, local_args).await?,
                 &cli.args.format,
-                ::rpc::admin_cli::Destination::Stdout(),
+                crate::Destination::Stdout(),
             )?;
         }
         CmdProfile::Delete(local_args) => {
             cli_output(
                 delete(cli.grpc_conn, local_args).await?,
                 &cli.args.format,
-                ::rpc::admin_cli::Destination::Stdout(),
+                crate::Destination::Stdout(),
             )?;
         }
         CmdProfile::Rename(local_args) => {
             cli_output(
                 rename(cli.grpc_conn, local_args).await?,
                 &cli.args.format,
-                ::rpc::admin_cli::Destination::Stdout(),
+                crate::Destination::Stdout(),
             )?;
         }
         CmdProfile::Show(local_args) => {
@@ -71,13 +74,13 @@ pub async fn dispatch(
                 cli_output(
                     show_by_id_or_name(cli.grpc_conn, local_args).await?,
                     &cli.args.format,
-                    ::rpc::admin_cli::Destination::Stdout(),
+                    crate::Destination::Stdout(),
                 )?;
             } else {
                 cli_output(
                     show_all(cli.grpc_conn).await?,
                     &cli.args.format,
-                    ::rpc::admin_cli::Destination::Stdout(),
+                    crate::Destination::Stdout(),
                 )?;
             }
         }
@@ -86,21 +89,21 @@ pub async fn dispatch(
                 cli_output(
                     list_bundles_for_id_or_name(cli.grpc_conn, local_args).await?,
                     &cli.args.format,
-                    ::rpc::admin_cli::Destination::Stdout(),
+                    crate::Destination::Stdout(),
                 )?;
             }
             List::Machines(local_args) => {
                 cli_output(
                     list_machines_for_id_or_name(cli.grpc_conn, local_args).await?,
                     &cli.args.format,
-                    ::rpc::admin_cli::Destination::Stdout(),
+                    crate::Destination::Stdout(),
                 )?;
             }
             List::All(_) => {
                 cli_output(
                     list_all(cli.grpc_conn).await?,
                     &cli.args.format,
-                    ::rpc::admin_cli::Destination::Stdout(),
+                    crate::Destination::Stdout(),
                 )?;
             }
         },
@@ -119,7 +122,7 @@ pub async fn create(
         .create_measurement_system_profile(create)
         .await?;
 
-    MeasurementSystemProfile::from_grpc(response.system_profile.as_ref())
+    MeasurementSystemProfile::from_grpc_opt(response.system_profile)
         .map_err(|e| CarbideCliError::GenericError(e.to_string()))
 }
 
@@ -134,7 +137,7 @@ pub async fn delete(
         .delete_measurement_system_profile(DeleteMeasurementSystemProfileRequest::try_from(delete)?)
         .await?;
 
-    MeasurementSystemProfile::from_grpc(response.system_profile.as_ref())
+    MeasurementSystemProfile::from_grpc_opt(response.system_profile)
         .map_err(|e| CarbideCliError::GenericError(e.to_string()))
 }
 
@@ -148,7 +151,7 @@ pub async fn rename(
         .rename_measurement_system_profile(RenameMeasurementSystemProfileRequest::try_from(rename)?)
         .await?;
 
-    MeasurementSystemProfile::from_grpc(response.profile.as_ref())
+    MeasurementSystemProfile::from_grpc_opt(response.profile)
         .map_err(|e| CarbideCliError::GenericError(e.to_string()))
 }
 
@@ -182,7 +185,7 @@ pub async fn show_by_id_or_name(
         .show_measurement_system_profile(ShowMeasurementSystemProfileRequest::try_from(show)?)
         .await?;
 
-    MeasurementSystemProfile::from_grpc(response.system_profile.as_ref())
+    MeasurementSystemProfile::from_grpc_opt(response.system_profile)
         .map_err(|e| CarbideCliError::GenericError(e.to_string()))
 }
 

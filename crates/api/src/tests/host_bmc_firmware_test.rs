@@ -42,6 +42,7 @@ use model::site_explorer::{
 use regex::Regex;
 use rpc::forge::forge_server::Forge;
 use rpc::forge_agent_control_response::{Action, LegacyAction};
+use rpc::model::instance::snapshot::instance_snapshot_derive_status;
 use sqlx::PgConnection;
 use temp_dir::TempDir;
 use tokio::time::sleep;
@@ -1246,12 +1247,19 @@ async fn test_instance_upgrading_actual_part_2(
 
     let device_id_maps = host.get_dpu_device_and_id_mappings().unwrap();
     assert_eq!(
-        instance
-            .derive_status(device_id_maps.1, host.state.clone().value, None, None, None)
-            .unwrap()
-            .tenant
-            .unwrap()
-            .state,
+        instance_snapshot_derive_status(
+            &instance,
+            device_id_maps.1,
+            host.state.clone().value,
+            None,
+            None,
+            None,
+            &host.health_reports,
+        )
+        .unwrap()
+        .tenant
+        .unwrap()
+        .state,
         TenantState::Configuring
     );
 
@@ -1279,12 +1287,19 @@ async fn test_instance_upgrading_actual_part_2(
     let instance = tinstance.db_instance(&mut txn).await;
     let device_id_maps = host.get_dpu_device_and_id_mappings().unwrap();
     assert_eq!(
-        instance
-            .derive_status(device_id_maps.1, host.state.clone().value, None, None, None)
-            .unwrap()
-            .tenant
-            .unwrap()
-            .state,
+        instance_snapshot_derive_status(
+            &instance,
+            device_id_maps.1,
+            host.state.clone().value,
+            None,
+            None,
+            None,
+            &host.health_reports,
+        )
+        .unwrap()
+        .tenant
+        .unwrap()
+        .state,
         TenantState::Updating
     );
 
@@ -1322,12 +1337,19 @@ async fn test_instance_upgrading_actual_part_2(
     let instance = tinstance.db_instance(&mut txn).await;
     let device_id_maps = host.get_dpu_device_and_id_mappings().unwrap();
     assert_eq!(
-        instance
-            .derive_status(device_id_maps.1, host.state.clone().value, None, None, None)
-            .unwrap()
-            .tenant
-            .unwrap()
-            .state,
+        instance_snapshot_derive_status(
+            &instance,
+            device_id_maps.1,
+            host.state.clone().value,
+            None,
+            None,
+            None,
+            &host.health_reports,
+        )
+        .unwrap()
+        .tenant
+        .unwrap()
+        .state,
         TenantState::Updating
     );
     txn.commit().await.unwrap();
@@ -1362,12 +1384,19 @@ async fn test_instance_upgrading_actual_part_2(
     let instance = tinstance.db_instance(&mut txn).await;
     let device_id_maps = host.get_dpu_device_and_id_mappings().unwrap();
     assert_eq!(
-        instance
-            .derive_status(device_id_maps.1, host.state.clone().value, None, None, None)
-            .unwrap()
-            .tenant
-            .unwrap()
-            .state,
+        instance_snapshot_derive_status(
+            &instance,
+            device_id_maps.1,
+            host.state.clone().value,
+            None,
+            None,
+            None,
+            &host.health_reports,
+        )
+        .unwrap()
+        .tenant
+        .unwrap()
+        .state,
         TenantState::Updating
     );
 
@@ -1392,12 +1421,19 @@ async fn test_instance_upgrading_actual_part_2(
     let instance = tinstance.db_instance(&mut txn).await;
     let device_id_maps = host.get_dpu_device_and_id_mappings().unwrap();
     assert_eq!(
-        instance
-            .derive_status(device_id_maps.1, host.state.clone().value, None, None, None)
-            .unwrap()
-            .tenant
-            .unwrap()
-            .state,
+        instance_snapshot_derive_status(
+            &instance,
+            device_id_maps.1,
+            host.state.clone().value,
+            None,
+            None,
+            None,
+            &host.health_reports,
+        )
+        .unwrap()
+        .tenant
+        .unwrap()
+        .state,
         TenantState::Updating
     );
 
@@ -1444,12 +1480,19 @@ async fn test_instance_upgrading_actual_part_2(
 
     let device_id_maps = host.get_dpu_device_and_id_mappings().unwrap();
     assert_eq!(
-        instance
-            .derive_status(device_id_maps.1, host.state.clone().value, None, None, None)
-            .unwrap()
-            .tenant
-            .unwrap()
-            .state,
+        instance_snapshot_derive_status(
+            &instance,
+            device_id_maps.1,
+            host.state.clone().value,
+            None,
+            None,
+            None,
+            &host.health_reports,
+        )
+        .unwrap()
+        .tenant
+        .unwrap()
+        .state,
         TenantState::Updating
     );
 
@@ -1474,12 +1517,19 @@ async fn test_instance_upgrading_actual_part_2(
     let instance = tinstance.db_instance(&mut txn).await;
     let device_id_maps = host.get_dpu_device_and_id_mappings().unwrap();
     assert_eq!(
-        instance
-            .derive_status(device_id_maps.1, host.state.clone().value, None, None, None)
-            .unwrap()
-            .tenant
-            .unwrap()
-            .state,
+        instance_snapshot_derive_status(
+            &instance,
+            device_id_maps.1,
+            host.state.clone().value,
+            None,
+            None,
+            None,
+            &host.health_reports,
+        )
+        .unwrap()
+        .tenant
+        .unwrap()
+        .state,
         TenantState::Updating
     );
     txn.commit().await.unwrap();
@@ -1516,12 +1566,19 @@ async fn test_instance_upgrading_actual_part_2(
 
     let device_id_maps = host.get_dpu_device_and_id_mappings().unwrap();
     assert_eq!(
-        instance
-            .derive_status(device_id_maps.1, host.state.clone().value, None, None, None)
-            .unwrap()
-            .tenant
-            .unwrap()
-            .state,
+        instance_snapshot_derive_status(
+            &instance,
+            device_id_maps.1,
+            host.state.clone().value,
+            None,
+            None,
+            None,
+            &host.health_reports,
+        )
+        .unwrap()
+        .tenant
+        .unwrap()
+        .state,
         TenantState::Updating
     );
 
@@ -1578,12 +1635,19 @@ async fn test_instance_upgrading_actual_part_2(
 
     let device_id_maps = host.get_dpu_device_and_id_mappings().unwrap();
     assert_eq!(
-        instance
-            .derive_status(device_id_maps.1, host.state.clone().value, None, None, None)
-            .unwrap()
-            .tenant
-            .unwrap()
-            .state,
+        instance_snapshot_derive_status(
+            &instance,
+            device_id_maps.1,
+            host.state.clone().value,
+            None,
+            None,
+            None,
+            &host.health_reports,
+        )
+        .unwrap()
+        .tenant
+        .unwrap()
+        .state,
         TenantState::Updating
     );
 
@@ -1636,12 +1700,19 @@ async fn test_instance_upgrading_actual_part_2(
 
     let device_id_maps = host.get_dpu_device_and_id_mappings().unwrap();
     assert_eq!(
-        instance
-            .derive_status(device_id_maps.1, host.state.clone().value, None, None, None)
-            .unwrap()
-            .tenant
-            .unwrap()
-            .state,
+        instance_snapshot_derive_status(
+            &instance,
+            device_id_maps.1,
+            host.state.clone().value,
+            None,
+            None,
+            None,
+            &host.health_reports,
+        )
+        .unwrap()
+        .tenant
+        .unwrap()
+        .state,
         TenantState::Updating
     );
 
@@ -1666,12 +1737,19 @@ async fn test_instance_upgrading_actual_part_2(
 
     let device_id_maps = host.get_dpu_device_and_id_mappings().unwrap();
     assert_eq!(
-        instance
-            .derive_status(device_id_maps.1, host.state.clone().value, None, None, None)
-            .unwrap()
-            .tenant
-            .unwrap()
-            .state,
+        instance_snapshot_derive_status(
+            &instance,
+            device_id_maps.1,
+            host.state.clone().value,
+            None,
+            None,
+            None,
+            &host.health_reports,
+        )
+        .unwrap()
+        .tenant
+        .unwrap()
+        .state,
         TenantState::Updating
     );
 
@@ -1694,12 +1772,19 @@ async fn test_instance_upgrading_actual_part_2(
 
     let device_id_maps = host.get_dpu_device_and_id_mappings().unwrap();
     assert_eq!(
-        instance
-            .derive_status(device_id_maps.1, host.state.clone().value, None, None, None)
-            .unwrap()
-            .tenant
-            .unwrap()
-            .state,
+        instance_snapshot_derive_status(
+            &instance,
+            device_id_maps.1,
+            host.state.clone().value,
+            None,
+            None,
+            None,
+            &host.health_reports,
+        )
+        .unwrap()
+        .tenant
+        .unwrap()
+        .state,
         TenantState::Configuring
     );
 
@@ -1717,12 +1802,19 @@ async fn test_instance_upgrading_actual_part_2(
 
     let device_id_maps = host.get_dpu_device_and_id_mappings().unwrap();
     assert_eq!(
-        instance
-            .derive_status(device_id_maps.1, host.state.clone().value, None, None, None)
-            .unwrap()
-            .tenant
-            .unwrap()
-            .state,
+        instance_snapshot_derive_status(
+            &instance,
+            device_id_maps.1,
+            host.state.clone().value,
+            None,
+            None,
+            None,
+            &host.health_reports,
+        )
+        .unwrap()
+        .tenant
+        .unwrap()
+        .state,
         TenantState::Configuring
     );
 
@@ -2638,7 +2730,7 @@ async fn test_manual_firmware_upgrade_workflow(pool: sqlx::PgPool) -> CarbideRes
 }
 
 #[crate::sqlx_test]
-async fn test_forge_agent_control_waiting_for_scout_upgrade_returns_typed_and_legacy_task(
+async fn test_forge_agent_control_waiting_for_scout_upgrade_returns_task_without_cleanup_timestamp(
     pool: sqlx::PgPool,
 ) -> CarbideResult<()> {
     let env = create_test_env(pool).await;
@@ -2677,6 +2769,14 @@ async fn test_forge_agent_control_waiting_for_scout_upgrade_returns_typed_and_le
         retry_count: 0,
     };
     db::machine::advance(&host, &mut txn, &waiting_state, None).await?;
+    db::machine::clear_cleanup_time(&mh.host().id, &mut txn)
+        .await
+        .unwrap();
+    txn.commit().await.unwrap();
+
+    let mut txn = env.pool.begin().await.unwrap();
+    let host = mh.host().db_machine(&mut txn).await;
+    assert!(host.last_cleanup_time.is_none());
     txn.commit().await.unwrap();
 
     let response = env

@@ -229,6 +229,14 @@ pub async fn find_ids(
         qb.push(" = ANY(es_nvos.nvos_mac_addresses)");
     }
 
+    if let Some(ovrrd_str) = &filter.only_with_health_alert {
+        qb.push(" AND health_reports->'merges' ? ");
+        qb.push_bind(ovrrd_str.clone());
+        qb.push(" AND jsonb_array_length(health_reports->'merges'->");
+        qb.push_bind(ovrrd_str);
+        qb.push("->'alerts') > 0");
+    }
+
     qb.build_query_as()
         .fetch_all(txn)
         .await

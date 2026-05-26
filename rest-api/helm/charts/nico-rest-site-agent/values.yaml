@@ -1,0 +1,104 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+global:
+  image:
+    repository: ""
+    tag: ""
+    pullPolicy: IfNotPresent
+  imagePullSecrets:
+    - name: image-pull-secret
+  certificate:
+    issuerRef:
+      kind: ClusterIssuer
+      name: nico-rest-ca-issuer
+      group: cert-manager.io
+
+replicaCount: 1
+
+nameOverride: ""
+namespaceOverride: ""
+
+image:
+  name: nico-rest-site-agent
+
+service:
+  type: ClusterIP
+  port: 8080
+  metricsPort: 2112
+
+resources:
+  requests:
+    memory: "128Mi"
+    cpu: "100m"
+  limits:
+    memory: "512Mi"
+    cpu: "500m"
+
+secrets:
+  dbCreds: db-creds
+  siteRegistration: site-registration
+  nicoTlsCerts: core-grpc-client-site-agent-certs
+  temporalClientCerts: temporal-client-site-agent-certs
+
+certificate:
+  enabled: true
+  name: core-grpc-client-site-agent-certs
+  secretName: core-grpc-client-site-agent-certs
+  duration: 720h
+  renewBefore: 360h
+  subject:
+    # -- List of organizations for the certificate subject
+    organizations: []
+  privateKey:
+    algorithm: ECDSA
+    size: 384
+  # -- Override SPIFFE URIs for the certificate. Must match the service identifier
+  # expected by nico-api's InternalRBACRules (SiteAgent = "elektra-site-agent").
+  # For nico deployments set to: ["spiffe://nico.local/nico-system/sa/elektra-site-agent"]
+  uris: []
+
+rbac:
+  create: true
+
+bootstrap:
+  # Set to true to enable the pre-install/pre-upgrade Helm hook that registers
+  # this site with nico-rest-site-manager and creates the site-registration secret.
+  # Requires envConfig.CLUSTER_ID to be set.
+  enabled: false
+  image: alpine/k8s:1.29.4
+  siteManager:
+    address: nico-rest-site-manager.nico-rest
+    tlsSecret: site-manager-tls
+
+envConfig:
+  ESA_PORT: "8080"
+  METRICS_PORT: "2112"
+  DEV_MODE: "true"
+  ENABLE_DEBUG: "true"
+  ENABLE_TLS: "true"
+  NICO_ADDRESS: ""
+  NICO_SEC_OPT: "0"
+  CLUSTER_ID: ""
+  TEMPORAL_HOST: "temporal-frontend.temporal"
+  TEMPORAL_PORT: "7233"
+  TEMPORAL_SERVER: "interservice.server.temporal.local"
+  TEMPORAL_PUBLISH_NAMESPACE: "site"
+  TEMPORAL_PUBLISH_QUEUE: "site"
+  TEMPORAL_SUBSCRIBE_NAMESPACE: ""
+  TEMPORAL_SUBSCRIBE_QUEUE: ""
+  TEMPORAL_INVENTORY_SCHEDULE: "@every 3m"
+  TEMPORAL_CERT_PATH: "/etc/temporal-certs"
+  TEMPORAL_CERT: "temporal-client-site-agent-certs"

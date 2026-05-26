@@ -22,6 +22,7 @@ use carbide_redfish::libredfish::RedfishClientCreationError;
 use carbide_uuid::machine::MachineId;
 use config_version::ConfigVersionParseError;
 use db::ip_allocator::DhcpError;
+use db::machine_interface_address::AddressAlreadyInUseError;
 use db::resource_pool::ResourcePoolDatabaseError;
 use db::{AnnotatedSqlxError, DatabaseError};
 use librms::RackManagerError;
@@ -30,6 +31,7 @@ use model::errors::ModelError;
 use model::hardware_info::HardwareInfoError;
 use model::network_devices::LldpError;
 use model::tenant::TenantError;
+use model::vpc::VpcCapabilityError;
 use model::{ConfigValidationError, resource_pool};
 use tonic::Status;
 
@@ -80,6 +82,12 @@ pub enum CarbideError {
 
     #[error("Argument is invalid: {0}")]
     InvalidArgument(String),
+
+    #[error("Argument is invalid: {0}")]
+    VpcCapability(#[from] VpcCapabilityError),
+
+    #[error(transparent)]
+    AddressAlreadyInUse(#[from] AddressAlreadyInUseError),
 
     #[error("{0}")]
     DBError(#[from] AnnotatedSqlxError),
@@ -234,8 +242,20 @@ pub enum CarbideError {
     #[error("Permission denied: {0}")]
     PermissionDeniedError(String),
 
+    #[error("{0}")]
+    AlreadyInProgress(String),
+
     #[error("Attestation Error: {0}")]
     AttestationError(String),
+}
+
+impl From<libnmxc::NmxcError> for CarbideError {
+    fn from(e: libnmxc::NmxcError) -> Self {
+        match e {
+            libnmxc::NmxcError::Status(s) => CarbideError::internal(s.to_string()),
+            other => CarbideError::internal(other.to_string()),
+        }
+    }
 }
 
 impl From<ModelError> for CarbideError {
@@ -255,6 +275,7 @@ impl From<DatabaseError> for CarbideError {
     fn from(e: DatabaseError) -> Self {
         use CarbideError::*;
         match e {
+            DatabaseError::AddressAlreadyInUse(e) => AddressAlreadyInUse(e),
             DatabaseError::AddressParseError(e) => AddressParseError(e),
             DatabaseError::AdminNetworkNotConfigured => AdminNetworkNotConfigured,
             DatabaseError::AlreadyFoundError { kind, id } => AlreadyFoundError { kind, id },
@@ -364,6 +385,7 @@ impl From<CarbideError> for tonic::Status {
         match &from {
             e @ CarbideError::Internal { .. } => Status::internal(e.to_string()),
             CarbideError::InvalidArgument(msg) => Status::invalid_argument(msg),
+            error @ CarbideError::VpcCapability(_) => Status::invalid_argument(error.to_string()),
             CarbideError::InvalidConfiguration(e) => Status::invalid_argument(e.to_string()),
             CarbideError::RpcDataConversionError(e) => Status::invalid_argument(e.to_string()),
             e @ CarbideError::DhcpError(_) => Status::resource_exhausted(e.to_string()),
@@ -387,11 +409,15 @@ impl From<CarbideError> for tonic::Status {
             error @ CarbideError::FailedPrecondition(_) => {
                 Status::failed_precondition(error.to_string())
             }
+            error @ CarbideError::AddressAlreadyInUse(_) => {
+                Status::failed_precondition(error.to_string())
+            }
             error @ CarbideError::ClientCertificateMissingInformation(_) => {
                 Status::unauthenticated(error.to_string())
             }
             CarbideError::UnavailableError(msg) => Status::unavailable(msg),
             CarbideError::PermissionDeniedError(msg) => Status::permission_denied(msg),
+            CarbideError::AlreadyInProgress(msg) => Status::already_exists(msg),
             other => Status::internal(other.to_string()),
         }
     }
@@ -433,4 +459,17 @@ fn test_permission_denied_error_maps_to_permission_denied_status() {
     let err = CarbideError::PermissionDeniedError("not allowed".into());
     let status: tonic::Status = err.into();
     assert_eq!(status.code(), tonic::Code::PermissionDenied);
+}
+
+#[test]
+fn test_address_already_in_use_maps_to_failed_precondition_status() {
+    use std::str::FromStr;
+    let err = CarbideError::AddressAlreadyInUse(AddressAlreadyInUseError(
+        "10.0.0.1".parse().unwrap(),
+        MacAddress::from_str("aa:bb:cc:dd:ee:ff").unwrap(),
+        uuid::Uuid::new_v4().into(),
+        uuid::Uuid::new_v4().into(),
+    ));
+    let status: tonic::Status = err.into();
+    assert_eq!(status.code(), tonic::Code::FailedPrecondition);
 }

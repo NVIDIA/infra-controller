@@ -21,17 +21,15 @@ use carbide_redfish::libredfish::RedfishClientPool;
 use carbide_uuid::machine::MachineId;
 use chrono::Utc;
 use model::attestation::spdm::{
-    SpdmAttestationState, SpdmDeviceAttestationDetails, SpdmHandlerError,
+    SpdmAttestationState, SpdmAttestationStatus, SpdmDeviceAttestationDetails, SpdmHandlerError,
 };
 use model::machine::{
     AttestationMode, FailureCause, FailureDetails, FailureSource, MachineState, ManagedHostState,
     ManagedHostStateSnapshot, SpdmMeasuringState, StateMachineArea,
 };
-use rpc::forge::SpdmAttestationStatus;
 use sqlx::PgPool;
 
 use crate::handlers::attestation as attestation_handlers;
-use crate::state_controller::external_service_error::redfish_client_creation_error;
 use crate::state_controller::machine::context::MachineStateHandlerContextObjects;
 use crate::state_controller::state_handler::{
     StateHandlerContext, StateHandlerError, StateHandlerOutcome,
@@ -52,9 +50,9 @@ pub(crate) async fn handle_spdm_attestation_failed_recovery(
         let attestation_status =
             db::attestation::spdm::get_attestation_status_for_machine_id(&mut txn, host_machine_id)
                 .await?;
-        attestation_status == SpdmAttestationStatus::SpdmAttInProgress
-            || attestation_status == SpdmAttestationStatus::SpdmAttCancelled
-            || attestation_status == SpdmAttestationStatus::SpdmAttPassed
+        attestation_status == SpdmAttestationStatus::InProgress
+            || attestation_status == SpdmAttestationStatus::Cancelled
+            || attestation_status == SpdmAttestationStatus::Passed
     };
     if should_resume_attestation {
         match &details.source {
@@ -99,7 +97,7 @@ pub(crate) async fn handle_spdm_trigger_state(
     let redfish_client = redfish_client_pool
         .create_client_from_machine(&mh_snapshot.host_snapshot, db_pool)
         .await
-        .map_err(redfish_client_creation_error)?;
+        .map_err(StateHandlerError::from)?;
 
     let devices_scheduled = attestation_handlers::trigger_attestation(
         db_pool,
@@ -140,10 +138,10 @@ pub(crate) async fn handle_spdm_poll_state(
     // passed or cancelled -> just move to the next state
     // failed -> get states for all devices and log to the Failed state logging them there
     match attestation_status {
-        SpdmAttestationStatus::SpdmAttPassed | SpdmAttestationStatus::SpdmAttCancelled => {
+        SpdmAttestationStatus::Passed | SpdmAttestationStatus::Cancelled => {
             Ok(StateHandlerOutcome::transition(next_skip_state).with_txn(txn))
         }
-        SpdmAttestationStatus::SpdmAttFailed => {
+        SpdmAttestationStatus::Failed => {
             let attestation_states =
                 db::attestation::spdm::get_attestations_for_machine_id(&mut txn, host_machine_id)
                     .await?;
@@ -171,6 +169,6 @@ pub(crate) async fn handle_spdm_poll_state(
             })
             .with_txn(txn))
         }
-        SpdmAttestationStatus::SpdmAttInProgress => Ok(StateHandlerOutcome::do_nothing()),
+        SpdmAttestationStatus::InProgress => Ok(StateHandlerOutcome::do_nothing()),
     }
 }

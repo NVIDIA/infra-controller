@@ -17,14 +17,16 @@
 
 //! Handler for RackState::Error.
 
+use carbide_rack_controller::context::RackStateHandlerContextObjects;
+use carbide_rack_controller::maintenance::first_maintenance_state;
+use carbide_rack_controller::ready::all_components_ready;
 use carbide_uuid::rack::RackId;
 use model::rack::{Rack, RackConfig, RackState};
-
-use crate::state_controller::rack::context::RackStateHandlerContextObjects;
-use crate::state_controller::rack::maintenance::first_maintenance_state;
-use crate::state_controller::state_handler::{
+use state_controller::state_handler::{
     StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
+
+use crate::state_controller::rack as carbide_rack_controller;
 
 pub async fn handle_error(
     id: &RackId,
@@ -65,6 +67,15 @@ pub async fn handle_error(
             maintenance_state: first_maintenance_state(scope),
         })
         .with_txn(txn));
+    }
+
+    if all_components_ready(id, ctx).await? {
+        tracing::info!(
+            "Rack {} components all Ready, transitioning from Error back to Ready",
+            id
+        );
+        let txn = ctx.services.db_pool.begin().await?;
+        return Ok(StateHandlerOutcome::transition(RackState::Ready).with_txn(txn));
     }
 
     tracing::error!("Rack {} is in error state: {}", id, cause);

@@ -78,7 +78,7 @@ handler in `cmd.rs`.
 pub mod args;
 pub mod cmd;
 
-use ::rpc::admin_cli::CarbideCliResult;
+use crate::errors::CarbideCliResult;
 pub use args::Args;
 
 use crate::cfg::run::Run;
@@ -289,7 +289,7 @@ Create `src/my_command/show/cmd.rs`:
  * ..etc etc.
  */
 
-use ::rpc::admin_cli::CarbideCliResult;
+use crate::errors::CarbideCliResult;
 
 use super::args::Args;
 use crate::rpc::ApiClient;
@@ -312,7 +312,7 @@ Create `src/my_command/show/mod.rs`:
 pub mod args;
 pub mod cmd;
 
-use ::rpc::admin_cli::CarbideCliResult;
+use crate::errors::CarbideCliResult;
 pub use args::Args;
 
 use crate::cfg::run::Run;

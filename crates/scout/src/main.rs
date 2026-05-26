@@ -318,7 +318,8 @@ async fn handle_action(
 ) -> Result<(), CarbideClientError> {
     match action {
         fac::Action::Discovery(_) => {
-            // This is temporary. All cleanup must be done when API call Reset.
+            // Discovery prep must not scrub storage. NVMe/HDD cleanup is owned by RESET so
+            // cleanup status is reported to the API and retried through the cleanup state.
             deprovision::run_no_api(&config.tpm_path).await?;
             let retry = registration::DiscoveryRetry {
                 secs: config.discovery_retry_secs,

@@ -19,10 +19,10 @@ pub mod args;
 pub mod cmd;
 
 use args::Args;
-use rpc::admin_cli::CarbideCliResult;
 
 use crate::cfg::run::Run;
 use crate::cfg::runtime::RuntimeContext;
+use crate::errors::CarbideCliResult;
 
 impl Run for args::Args {
     async fn run(self, ctx: &mut RuntimeContext) -> CarbideCliResult<()> {

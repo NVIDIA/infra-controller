@@ -147,13 +147,38 @@
                 action: deny
                 match:
                   any: {}
-          DPU_FROM_INSTANCE_PREFIX_LIST:
+          DPU_FROM_INSTANCE_PREFIX_LIST_vpc_1025186:
             rule:
-              '1000':
+              '1':
                 action: permit
                 match:
-                  5.255.255.0/24:
-                    min-prefix-len: 32
+                  5.255.254.0/24:
+                    max-prefix-len: 32
+              '65535':
+                action: deny
+                match:
+                  any: {}
+          DPU_FROM_INSTANCE_PREFIX_LIST_IPV6_vpc_1025186:
+            type: ipv6
+            rule:
+              '65535':
+                action: deny
+                match:
+                  any: {}
+          DPU_FROM_INSTANCE_PREFIX_LIST_vpc_1025197:
+            rule:
+              '1':
+                action: permit
+                match:
+                  5.255.254.0/24:
+                    max-prefix-len: 32
+              '65535':
+                action: deny
+                match:
+                  any: {}
+          DPU_FROM_INSTANCE_PREFIX_LIST_IPV6_vpc_1025197:
+            type: ipv6
+            rule:
               '65535':
                 action: deny
                 match:
@@ -164,13 +189,6 @@
                 action: permit
                 match:
                   7.6.5.0/24: {}
-              '65535':
-                action: deny
-                match:
-                  any: {}
-          DPU_FROM_INSTANCE_PREFIX_LIST_IPV6:
-            type: ipv6
-            rule:
               '65535':
                 action: deny
                 match:
@@ -320,7 +338,7 @@
                   permit: {}
                 match:
                   type: ipv4
-                  ip-prefix-list: DPU_FROM_INSTANCE_PREFIX_LIST
+                  ip-prefix-list: DPU_FROM_INSTANCE_PREFIX_LIST_vpc_1025186
                 set:
                   tag: 65101
                   community:
@@ -337,7 +355,7 @@
                   permit: {}
                 match:
                   type: ipv6
-                  ip-prefix-list: DPU_FROM_INSTANCE_PREFIX_LIST_IPV6
+                  ip-prefix-list: DPU_FROM_INSTANCE_PREFIX_LIST_IPV6_vpc_1025186
                 set:
                   tag: 65101
                   community:
@@ -354,7 +372,7 @@
                   permit: {}
                 match:
                   type: ipv4
-                  ip-prefix-list: DPU_FROM_INSTANCE_PREFIX_LIST
+                  ip-prefix-list: DPU_FROM_INSTANCE_PREFIX_LIST_vpc_1025197
                 set:
                   tag: 65101
                   community:
@@ -371,7 +389,7 @@
                   permit: {}
                 match:
                   type: ipv6
-                  ip-prefix-list: DPU_FROM_INSTANCE_PREFIX_LIST_IPV6
+                  ip-prefix-list: DPU_FROM_INSTANCE_PREFIX_LIST_IPV6_vpc_1025197
                 set:
                   tag: 65101
                   community:

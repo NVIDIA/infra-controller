@@ -32,7 +32,7 @@ use rpc::forge::{
 };
 use rpc::machine_discovery::MemoryDevice;
 use rpc::site_explorer::{EndpointExplorationReport, ExploredEndpoint};
-use rpc::{DmiData, DynForge, Machine, Timestamp};
+use rpc::{DiscoveryInfo, DmiData, DynForge, Machine, Timestamp};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
@@ -113,6 +113,8 @@ impl ManagedHostMetadata {
 
 #[derive(Default, Serialize, Deserialize, PartialEq)]
 pub struct ManagedHostOutput {
+    // discovery_info is expected to be part of managed-host.json, but is otherwise unused
+    pub discovery_info: DiscoveryInfo,
     pub hostname: Option<String>,
     pub machine_id: Option<String>,
     pub state: String,
@@ -145,6 +147,7 @@ pub struct ManagedHostOutput {
     pub instance_type_id: Option<String>,
     pub slot_number: Option<i32>,
     pub tray_index: Option<i32>,
+    pub rack_id: Option<String>,
 }
 
 impl From<Machine> for ManagedHostOutput {
@@ -178,7 +181,10 @@ impl From<Machine> for ManagedHostOutput {
             product_serial: _,
             chassis_serial: host_serial_number,
             bios_version: host_bios_version,
-        } = discovery_info.and_then(|di| di.dmi_data).into();
+        } = discovery_info
+            .as_ref()
+            .and_then(|di| di.dmi_data.as_ref())
+            .into();
 
         let health = machine
             .health
@@ -193,7 +199,20 @@ impl From<Machine> for ManagedHostOutput {
             .map(|o| o.source)
             .collect();
 
+        // If the rack ID is empty or "Unknown", set it to "N/A"
+        let rack_id = match machine.rack_id.as_ref() {
+            Some(id) => {
+                if id.as_str().is_empty() || id.as_str() == "Unknown" {
+                    Some("N/A".to_string())
+                } else {
+                    Some(id.to_string())
+                }
+            }
+            None => Some("N/A".to_string()),
+        };
+
         ManagedHostOutput {
+            discovery_info: discovery_info.unwrap_or_default(),
             hostname: primary_interface
                 .as_ref()
                 .map(|i| i.hostname.clone())
@@ -215,6 +234,7 @@ impl From<Machine> for ManagedHostOutput {
                         chrono::TimeDelta::try_from(sla).unwrap_or(chrono::TimeDelta::MAX),
                     )
                 }),
+            state_version: machine.state_version,
             state_reason: machine
                 .state_reason
                 .as_ref()
@@ -250,15 +270,19 @@ impl From<Machine> for ManagedHostOutput {
             instance_type_id: machine.instance_type_id.clone(),
             slot_number: machine.placement_in_rack.and_then(|p| p.slot_number),
             tray_index: machine.placement_in_rack.and_then(|p| p.tray_index),
+            rack_id,
             health,
             health_sources,
-            ..Default::default()
+            // dpus and exploration_report are filled in later
+            dpus: Default::default(),
+            exploration_report: Default::default(),
         }
     }
 }
 
 #[derive(Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct ManagedHostAttachedDpu {
+    pub discovery_info: DiscoveryInfo,
     pub machine_id: Option<String>,
     pub state: Option<String>,
     pub serial_number: Option<String>,
@@ -337,9 +361,14 @@ impl ManagedHostAttachedDpu {
             product_serial: serial_number,
             chassis_serial: _,
             bios_version,
-        } = dpu_machine.discovery_info.and_then(|d| d.dmi_data).into();
+        } = dpu_machine
+            .discovery_info
+            .as_ref()
+            .and_then(|d| d.dmi_data.as_ref())
+            .into();
 
         ManagedHostAttachedDpu {
+            discovery_info: dpu_machine.discovery_info.unwrap_or_default(),
             machine_id: dpu_machine.id.map(|i| i.to_string()),
             state: Some(dpu_machine.state),
             serial_number,
@@ -587,13 +616,13 @@ struct DmiDataDisplay {
     bios_version: Option<String>,
 }
 
-impl From<Option<DmiData>> for DmiDataDisplay {
-    fn from(value: Option<DmiData>) -> Self {
+impl From<Option<&DmiData>> for DmiDataDisplay {
+    fn from(value: Option<&DmiData>) -> Self {
         if let Some(dmi_data) = value {
             Self {
-                product_serial: dmi_data.product_serial.if_non_empty(),
-                chassis_serial: dmi_data.chassis_serial.if_non_empty(),
-                bios_version: dmi_data.bios_version.if_non_empty(),
+                product_serial: dmi_data.product_serial.clone().if_non_empty(),
+                chassis_serial: dmi_data.chassis_serial.clone().if_non_empty(),
+                bios_version: dmi_data.bios_version.clone().if_non_empty(),
             }
         } else {
             Self {

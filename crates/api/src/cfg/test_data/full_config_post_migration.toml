@@ -32,20 +32,6 @@ required_equals = { "IssuerO" = "NVIDIA Corporation", "IssuerCN" = "NVIDIA Forge
 group_from = "SubjectOU"
 username_from = "SubjectCN"
 
-[networks.admin]
-type = "admin"
-prefix = "172.20.0.0/24"
-gateway = "172.20.0.1"
-mtu = 9000
-reserve_first = 5
-
-[networks.DEV1-C09-IPMI-01]
-type = "underlay"
-prefix = "172.99.0.0/26"
-gateway = "172.99.0.1"
-mtu = 1500
-reserve_first = 5
-
 [ib_fabrics.default]
 endpoints = ["https://1.2.3.4"]
 pkeys = [{ start = "1", end = "10" }]
@@ -62,7 +48,6 @@ machines_created_per_run = 2
 override_target_ip = "1.2.3.4"
 override_target_port = 10443
 reset_rate_limit = "2h"
-force_dpu_nic_mode = false
 
 # Unit is mandatory
 [machine_state_controller]
