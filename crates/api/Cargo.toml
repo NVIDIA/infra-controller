@@ -36,24 +36,31 @@ bmc-vendor = { path = "../bmc-vendor" }
 bmc-explorer = { path = "../bmc-explorer" }
 bms-dsx-exchange = { path = "../bms-dsx-exchange" }
 config-version = { path = "../config-version", features = ["sqlx"] }
+carbide-dpa-interface-controller = { path = "../dpa-interface-controller" }
 carbide-host-support = { path = "../host-support", default-features = false }
 carbide-network = { path = "../network", features = ["sqlx"] }
 carbide-secrets = { path = "../secrets" }
 carbide-version = { path = "../version" }
 carbide-firmware = { path = "../firmware" }
 carbide-health-report = { path = "../health-report" }
+carbide-health-metrics = { path = "../health-metrics" }
 carbide-ib-fabric = { path = "../ib-fabric" }
+carbide-ib-partition-controller = { path = "../ib-partition-controller" }
 carbide-ipxe-renderer = { path = "../ipxe-renderer" }
 carbide-ipmi = { path = "../ipmi" }
 carbide-redfish = { path = "../redfish" }
+carbide-network-segment-controller = { path = "../network-segment-controller" }
 carbide-site-explorer = { path = "../site-explorer" }
+carbide-spdm-controller = { path = "../spdm-controller" }
+carbide-switch-controller = { path = "../switch-controller" }
 carbide-preingestion-manager = { path = "../preingestion-manager" }
 carbide-nvlink-manager = { path = "../nvlink-manager" }
 dns-record = { path = "../dns-record" }
 libnmxm = { path = "../libnmxm" }
+libnmxc = { path = "../libnmxc" }
 logfmt = { path = "../logfmt" }
 mqttea = { path = "../mqttea" }
-carbide-rpc = { path = "../rpc", features = ["sqlx"] }
+carbide-rpc = { path = "../rpc", features = ["sqlx", "model"] }
 carbide-rpc-utils = { path = "../rpc-utils" }
 carbide-utils = { path = "../utils", features = ["sqlx"] }
 carbide-ssh = { path = "../ssh" }

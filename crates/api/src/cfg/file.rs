@@ -54,6 +54,7 @@ use regex::Regex;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::state_controller::config::IterationConfig;
+use crate::state_controller::rack::config::{RackValidationConfig, RmsConfig};
 
 static BF2_NIC: &str = "24.47.2682";
 static BF2_BMC: &str = "BF-25.10-20";
@@ -63,6 +64,8 @@ static BF3_NIC: &str = "32.47.2682";
 static BF3_BMC: &str = "BF-25.10-20";
 static BF3_CEC: &str = "00.02.0195.0000_n02";
 static BF3_UEFI: &str = "4.13.2-12-g943a91640d";
+pub(crate) const DEFAULT_DPU_NUM_OF_VFS: u32 = 16;
+pub(crate) const MAX_DPU_NUM_OF_VFS: u32 = 126;
 
 /// nico-api configuration file content
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -433,7 +436,7 @@ pub struct CarbideConfig {
 
     /// NvLink partitioning configuration, used by the
     /// NvLink monitor to manage GPU mesh partitions
-    /// via NMX-M.
+    /// via NMX-C.
     #[serde(default)]
     pub nvlink_config: Option<NvLinkConfig>,
 
@@ -550,6 +553,20 @@ pub struct CarbideConfig {
     /// The URL to use for overriding the PXE boot url on ARM machines.
     #[serde(default)]
     pub arm_pxe_boot_url_override: Option<String>,
+
+    /// Vendors for which the state controller should pin the UEFI HTTP boot
+    /// URL on the BMC (via Redfish `HttpBootUri`) in addition to the existing
+    /// DHCP option 67 path. Machines whose BMC vendor is NOT in this list
+    /// continue to rely on carbide-dhcp's option 67 for the URL.
+    ///
+    /// Empty by default — no machines get the BMC-pinned URL until vendors
+    /// are explicitly added here (typically after per-vendor verification on
+    /// real hardware). Adding a vendor that libredfish doesn't yet implement
+    /// (e.g., `Dell` / `Lenovo` until their libredfish impls land) will
+    /// surface a runtime `NotSupported` error; carbide-dhcp option 67 is the
+    /// fallback URL source.
+    #[serde(default)]
+    pub set_http_boot_uri_for_vendors: Vec<BMCVendor>,
 
     /// Alternate API URL for external hosts that cannot resolve
     /// https://carbide-pxe.forge. This be an IP (e.g., "https://10.0.0.1:1079"),
@@ -712,7 +729,7 @@ impl Default for DpfConfig {
 }
 
 fn default_dpf_bfb_url() -> String {
-    "https://content.mellanox.com/BlueField/BFBs/Ubuntu24.04/bf-bundle-3.2.1-34_25.11_ubuntu-24.04_64k_prod.bfb".to_string()
+    "https://content.mellanox.com/BlueField/BFBs/Ubuntu24.04/bf-bundle-3.2.2-125_26.02_ubuntu-24.04_64k_prod.bfb".to_string()
 }
 
 fn default_dpf_deployment_name() -> String {
@@ -818,6 +835,9 @@ pub struct MachineIdentityConfig {
     /// Same pattern syntax as [`Self::trust_domain_allowlist`].
     #[serde(default)]
     pub token_endpoint_domain_allowlist: Vec<String>,
+    /// Upper bound for `signing_key_overlap_sec` on `SetTenantIdentityConfiguration` when `rotate_key` is true (seconds).
+    #[serde(default = "machine_identity_default_signing_key_overlap_max_sec")]
+    pub signing_key_overlap_max_sec: u32,
 }
 
 fn machine_identity_default_enabled() -> bool {
@@ -832,6 +852,9 @@ fn machine_identity_default_token_ttl_min_sec() -> u32 {
 fn machine_identity_default_token_ttl_max_sec() -> u32 {
     86400
 }
+fn machine_identity_default_signing_key_overlap_max_sec() -> u32 {
+    604800
+}
 
 impl Default for MachineIdentityConfig {
     fn default() -> Self {
@@ -844,6 +867,7 @@ impl Default for MachineIdentityConfig {
             current_encryption_key_id: None,
             trust_domain_allowlist: Vec::new(),
             token_endpoint_domain_allowlist: Vec::new(),
+            signing_key_overlap_max_sec: machine_identity_default_signing_key_overlap_max_sec(),
         }
     }
 }
@@ -865,6 +889,7 @@ impl From<MachineIdentityConfig> for model::tenant::IdentityConfigValidationBoun
                     "current_encryption_key_id must be non-empty when machine identity is enabled",
                 ),
             trust_domain_allowlist: mi.trust_domain_allowlist,
+            signing_key_overlap_max_sec: mi.signing_key_overlap_max_sec,
         }
     }
 }
@@ -1007,6 +1032,11 @@ pub struct FnnRoutingProfileConfig {
     #[serde(default)]
     pub accepted_leaks_from_underlay: Vec<PrefixFilterPolicyEntry>,
 
+    /// Prefixes that tenant hosts are allowed to announce
+    /// to the DPU as anycast routes.
+    #[serde(default)]
+    pub allowed_anycast_prefixes: Vec<PrefixFilterPolicyEntry>,
+
     /// Currently controls which profiles a tenant can use
     /// when creating VPCs.  Lower value means broader access.
     /// A tenant can create a VPC with a routing profile of the same or broader access.
@@ -1018,6 +1048,46 @@ pub struct FnnRoutingProfileConfig {
     /// - A tenant with INTERNAL could only create INTERNAL VPCs.
     #[serde(default)]
     pub access_tier: u32,
+}
+
+impl From<&FnnRoutingProfileConfig> for rpc::forge::RoutingProfile {
+    fn from(profile: &FnnRoutingProfileConfig) -> Self {
+        Self {
+            tenant_leak_communities_accepted: profile.tenant_leak_communities_accepted,
+            leak_default_route_from_underlay: profile.leak_default_route_from_underlay,
+            leak_tenant_host_routes_to_underlay: profile.leak_tenant_host_routes_to_underlay,
+            accepted_leaks_from_underlay: profile
+                .accepted_leaks_from_underlay
+                .iter()
+                .map(|entry| rpc::forge::PrefixFilterPolicyEntry {
+                    prefix: entry.prefix.to_string(),
+                })
+                .collect(),
+            allowed_anycast_prefixes: profile
+                .allowed_anycast_prefixes
+                .iter()
+                .map(|entry| rpc::forge::PrefixFilterPolicyEntry {
+                    prefix: entry.prefix.to_string(),
+                })
+                .collect(),
+            route_target_imports: profile
+                .route_target_imports
+                .iter()
+                .map(|route_target| rpc::common::RouteTarget {
+                    asn: route_target.asn,
+                    vni: route_target.vni,
+                })
+                .collect(),
+            route_targets_on_exports: profile
+                .route_targets_on_exports
+                .iter()
+                .map(|route_target| rpc::common::RouteTarget {
+                    asn: route_target.asn,
+                    vni: route_target.vni,
+                })
+                .collect(),
+        }
+    }
 }
 
 /// Entries used for prefix-list policies on the DPUS.
@@ -1326,7 +1396,7 @@ impl MachineStateControllerConfig {
     }
 
     pub fn failure_retry_time_default() -> Duration {
-        Duration::minutes(30)
+        Duration::minutes(90)
     }
 
     pub fn dpu_up_threshold_default() -> Duration {
@@ -1671,30 +1741,6 @@ fn default_max_database_connections() -> u32 {
     1000
 }
 
-fn default_rms_enforce_tls() -> bool {
-    true
-}
-
-/// Rack Manager Service (RMS) configuration for API connectivity and mTLS.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-pub struct RmsConfig {
-    /// URL of the RMS API for rack-level firmware upgrades and power sequencing.
-    pub api_url: Option<String>,
-
-    /// Path to the root CA certificate for TLS verification when connecting to RMS.
-    pub root_ca_path: Option<String>,
-
-    /// Path to the client certificate PEM for mTLS with RMS.
-    pub client_cert: Option<String>,
-
-    /// Path to the client private key PEM for mTLS with RMS.
-    pub client_key: Option<String>,
-
-    /// Enforce TLS when connecting to RMS. Defaults to true.
-    #[serde(default = "default_rms_enforce_tls")]
-    pub enforce_tls: bool,
-}
-
 /// DpuConfig related internal configuration
 #[derive(Clone, Debug, Serialize)]
 pub struct DpuConfig {
@@ -1717,6 +1763,11 @@ pub struct DpuConfig {
     /// Default is false.
     #[serde(default)]
     pub dpu_enable_secure_boot: bool,
+
+    /// Number of virtual functions configured per DPU PF during BlueField provisioning.
+    /// Defaults to 16 and must not exceed 126.
+    #[serde(default)]
+    pub num_of_vfs: u32,
 }
 
 impl DpuConfig {
@@ -1754,10 +1805,18 @@ impl<'de> Deserialize<'de> for DpuConfig {
             dpu_nic_firmware_update_versions: Option<Vec<String>>,
             #[serde(default)]
             dpu_enable_secure_boot: Option<bool>,
+            #[serde(default)]
+            num_of_vfs: Option<u32>,
         }
 
         let partial = PartialDpuConfig::deserialize(deserializer)?;
         let default = DpuConfig::default();
+        let num_of_vfs = partial.num_of_vfs.unwrap_or(default.num_of_vfs);
+        if num_of_vfs > MAX_DPU_NUM_OF_VFS {
+            return Err(serde::de::Error::custom(format!(
+                "dpu_config.num_of_vfs must be <= {MAX_DPU_NUM_OF_VFS}"
+            )));
+        }
 
         Ok(DpuConfig {
             dpu_nic_firmware_initial_update_enabled: partial
@@ -1773,6 +1832,7 @@ impl<'de> Deserialize<'de> for DpuConfig {
             dpu_enable_secure_boot: partial
                 .dpu_enable_secure_boot
                 .unwrap_or(default.dpu_enable_secure_boot),
+            num_of_vfs,
         })
     }
 }
@@ -1895,6 +1955,7 @@ impl Default for DpuConfig {
             ]),
             dpu_nic_firmware_update_versions: vec![BF2_NIC.to_string(), BF3_NIC.to_string()],
             dpu_enable_secure_boot: false,
+            num_of_vfs: DEFAULT_DPU_NUM_OF_VFS,
         }
     }
 }
@@ -2250,35 +2311,6 @@ pub struct MachineValidationTestConfig {
 }
 
 impl MachineValidationConfig {
-    const fn default_run_interval() -> std::time::Duration {
-        std::time::Duration::from_secs(60)
-    }
-}
-
-/// Configuration for rack-level validation (partition-based
-/// multi-node tests run after firmware upgrade / maintenance).
-///
-/// Example:
-/// ```toml
-/// [rack_validation_config]
-/// enabled = true
-/// run_interval = "60s"
-/// ```
-#[derive(Default, Clone, Debug, Deserialize, Serialize)]
-pub struct RackValidationConfig {
-    /// Enables rack validation testing.
-    #[serde(default)]
-    pub enabled: bool,
-
-    #[serde(
-        default = "RackValidationConfig::default_run_interval",
-        deserialize_with = "deserialize_duration",
-        serialize_with = "as_std_duration"
-    )]
-    pub run_interval: std::time::Duration,
-}
-
-impl RackValidationConfig {
     const fn default_run_interval() -> std::time::Duration {
         std::time::Duration::from_secs(60)
     }
@@ -2689,6 +2721,12 @@ pub struct VmaasConfig {
     /// by traffic-intercept users.
     pub public_prefixes: Vec<Ipv4Network>,
 
+    /// Aggregate prefixes associated with secondary VTEPs. These are used only
+    /// for routing and filtering; IP allocation is provided by the secondary
+    /// VTEP resource pool.
+    #[serde(default)]
+    pub secondary_vtep_aggregate_prefixes: Vec<IpNetwork>,
+
     /// Whether a secondary overlay is expected,
     /// which will require secondary VTEP IPs to be allocated
     /// to DPUs
@@ -2756,6 +2794,7 @@ mod tests {
     use figment::providers::{Env, Format, Toml};
     use libmlx::variables::value::MlxValueType;
     use libredfish::model::service_root::RedfishVendor;
+    use model::expected_machine::DpuMode;
     use model::network_segment::NetworkDefinitionSegmentType;
     use model::resource_pool;
 
@@ -3115,6 +3154,7 @@ mod tests {
                 switches_created_per_run: 9,
                 rotate_switch_nvos_credentials: Arc::new(false.into()),
                 force_dpu_nic_mode: Arc::new(false.into()),
+                dpu_mode: None,
                 explore_mode: SiteExplorerExploreMode::LibRedfish,
             }
         );
@@ -3205,6 +3245,7 @@ mod tests {
         );
         assert_eq!(config.tls.as_ref().unwrap().root_cafile_path, "/path/to/ca");
         assert!(!config.auth.as_ref().unwrap().permissive_mode);
+        assert_eq!(config.dpu_config.num_of_vfs, DEFAULT_DPU_NUM_OF_VFS);
         assert_eq!(
             config
                 .auth
@@ -3288,6 +3329,7 @@ mod tests {
                 switches_created_per_run: 9,
                 rotate_switch_nvos_credentials: Arc::new(false.into()),
                 force_dpu_nic_mode: Arc::new(false.into()),
+                dpu_mode: None,
                 explore_mode: SiteExplorerExploreMode::LibRedfish,
             }
         );
@@ -3597,6 +3639,7 @@ mod tests {
                 switches_created_per_run: 9,
                 rotate_switch_nvos_credentials: Arc::new(false.into()),
                 force_dpu_nic_mode: Arc::new(false.into()),
+                dpu_mode: None,
                 explore_mode: SiteExplorerExploreMode::LibRedfish,
             }
         );
@@ -3746,6 +3789,38 @@ mod tests {
         Ok(())
     }
 
+    /// Verifies the new `[site_explorer] dpu_mode = ...` setting
+    /// parses correctly for every named variant. When unset (the
+    /// default), `site_explorer.dpu_mode` is `None` and resolution
+    /// falls back to the legacy `force_dpu_nic_mode` flag.
+    #[test]
+    fn site_explorer_dpu_mode_parses_and_defaults_to_none() {
+        let config: CarbideConfig = Figment::new()
+            .merge(Toml::file(format!("{TEST_DATA_DIR}/min_config.toml")))
+            .extract()
+            .unwrap();
+        assert_eq!(config.site_explorer.dpu_mode, None);
+
+        for (toml_value, expected) in [
+            ("dpu_mode", DpuMode::DpuMode),
+            ("nic_mode", DpuMode::NicMode),
+            ("no_dpu", DpuMode::NoDpu),
+        ] {
+            let config: CarbideConfig = Figment::new()
+                .merge(Toml::file(format!("{TEST_DATA_DIR}/min_config.toml")))
+                .merge(Toml::string(&format!(
+                    "[site_explorer]\ndpu_mode = \"{toml_value}\"\n"
+                )))
+                .extract()
+                .unwrap();
+            assert_eq!(
+                config.site_explorer.dpu_mode,
+                Some(expected),
+                "[site_explorer] dpu_mode = {toml_value:?} should parse to {expected:?}",
+            );
+        }
+    }
+
     #[test]
     fn test_max_concurrent_updates() -> eyre::Result<()> {
         let test = MaxConcurrentUpdates {
@@ -3793,6 +3868,7 @@ mqtt_endpoint = "mqtt.forge"
         let toml = r#"
 [dpu_config]
 dpu_enable_secure_boot = true
+num_of_vfs = 64
 "#;
 
         let config: CarbideConfig = Figment::new()
@@ -3802,7 +3878,32 @@ dpu_enable_secure_boot = true
             .unwrap();
 
         assert!(config.dpu_config.dpu_enable_secure_boot);
+        assert_eq!(config.dpu_config.num_of_vfs, 64);
         assert!(!config.dpu_config.dpu_models.is_empty());
+    }
+
+    /// Validates the hard limit on generated BlueField virtual functions.
+    #[test]
+    fn deserialize_dpu_config_rejects_too_many_vfs() {
+        let toml = r#"
+[dpu_config]
+num_of_vfs = 127
+"#;
+
+        // Extracting the config should fail before runtime provisioning.
+        let error = Figment::new()
+            .merge(Toml::file(format!("{TEST_DATA_DIR}/full_config.toml")))
+            .merge(Toml::string(toml))
+            .extract::<CarbideConfig>()
+            .unwrap_err();
+
+        // Surface a clear operator-facing message for the invalid value.
+        assert!(
+            error
+                .to_string()
+                .contains("dpu_config.num_of_vfs must be <= 126"),
+            "{error}"
+        );
     }
 
     #[test]

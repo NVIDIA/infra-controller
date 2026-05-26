@@ -397,6 +397,13 @@ impl Redfish for RedfishSimClient {
         Box::pin(async move { todo!() })
     }
 
+    fn set_boot_override<'a>(
+        &'a self,
+        _settings: libredfish::BootOverride,
+    ) -> libredfish::RedfishFuture<'a, Result<Option<String>, RedfishError>> {
+        Box::pin(async move { Ok(None) })
+    }
+
     fn clear_tpm<'a>(&'a self) -> libredfish::RedfishFuture<'a, Result<(), RedfishError>> {
         Box::pin(async move { todo!() })
     }
@@ -1397,16 +1404,13 @@ impl Redfish for RedfishSimClient {
                     target_component_uri: Some("/redfish/v1/Chassis/ERoT_BMC_0".to_string()),
                     spdm: Some(libredfish::model::component_integrity::SPDMData {
                         identity_authentication:
-                            libredfish::model::component_integrity::IdentityAuthentication {
-                                responder_authentication:
-                                    libredfish::model::component_integrity::ResponderAuthentication {
-                                        component_certificate: ODataId {
-                                            odata_id:
-                                                "/redfish/v1/Chassis/ERoT_BMC_0/Certificates/CertChain"
-                                                    .to_string(),
-                                        },
-                                    },
+                            libredfish::model::component_integrity::IdentityAuthentication { responder_authentication: libredfish::model::component_integrity::ResponderAuthentication {
+                                component_certificate: ODataId {
+                                    odata_id:
+                                        "/redfish/v1/Chassis/ERoT_BMC_0/Certificates/CertChain"
+                                            .to_string(),
                                 },
+                            } },
                         requester: ODataId {
                             odata_id: "/redfish/v1/Managers/BMC_0".to_string(),
                         },
@@ -1434,16 +1438,13 @@ impl Redfish for RedfishSimClient {
                     target_component_uri: Some("/redfish/v1/Chassis/HGX_IRoT_GPU_0".to_string()),
                     spdm: Some(libredfish::model::component_integrity::SPDMData {
                         identity_authentication:
-                            libredfish::model::component_integrity::IdentityAuthentication {
-                                responder_authentication:
-                                    libredfish::model::component_integrity::ResponderAuthentication {
-                                        component_certificate: ODataId {
-                                            odata_id:
-                                                "/redfish/v1/Chassis/HGX_IRoT_GPU_0/Certificates/CertChain"
-                                                    .to_string(),
-                                        },
-                                    },
+                            libredfish::model::component_integrity::IdentityAuthentication { responder_authentication: libredfish::model::component_integrity::ResponderAuthentication {
+                                component_certificate: ODataId {
+                                    odata_id:
+                                        "/redfish/v1/Chassis/HGX_IRoT_GPU_0/Certificates/CertChain"
+                                            .to_string(),
                                 },
+                            } },
                         requester: ODataId {
                             odata_id: "/redfish/v1/Managers/BMC_0".to_string(),
                         },
@@ -1471,16 +1472,13 @@ impl Redfish for RedfishSimClient {
                     target_component_uri: Some("/redfish/v1/Chassis/HGX_IRoT_GPU_1".to_string()),
                     spdm: Some(libredfish::model::component_integrity::SPDMData {
                         identity_authentication:
-                            libredfish::model::component_integrity::IdentityAuthentication {
-                                responder_authentication:
-                                    libredfish::model::component_integrity::ResponderAuthentication {
-                                        component_certificate: ODataId {
-                                            odata_id:
-                                                "/redfish/v1/Chassis/HGX_IRoT_GPU_1/Certificates/CertChain"
-                                                    .to_string(),
-                                        },
-                                    },
+                            libredfish::model::component_integrity::IdentityAuthentication { responder_authentication: libredfish::model::component_integrity::ResponderAuthentication {
+                                component_certificate: ODataId {
+                                    odata_id:
+                                        "/redfish/v1/Chassis/HGX_IRoT_GPU_1/Certificates/CertChain"
+                                            .to_string(),
                                 },
+                            } },
                         requester: ODataId {
                             odata_id: "/redfish/v1/Managers/BMC_0".to_string(),
                         },
@@ -1508,16 +1506,13 @@ impl Redfish for RedfishSimClient {
                     target_component_uri: Some("/redfish/v1/Chassis/HGX_IRoT_GPU_1".to_string()),
                     spdm: Some(libredfish::model::component_integrity::SPDMData {
                         identity_authentication:
-                            libredfish::model::component_integrity::IdentityAuthentication {
-                                responder_authentication:
-                                    libredfish::model::component_integrity::ResponderAuthentication {
-                                        component_certificate: ODataId {
-                                            odata_id:
-                                                "/redfish/v1/Chassis/HGX_IRoT_GPU_1/Certificates/CertChain"
-                                                    .to_string(),
-                                        },
-                                    },
+                            libredfish::model::component_integrity::IdentityAuthentication { responder_authentication: libredfish::model::component_integrity::ResponderAuthentication {
+                                component_certificate: ODataId {
+                                    odata_id:
+                                        "/redfish/v1/Chassis/HGX_IRoT_GPU_1/Certificates/CertChain"
+                                            .to_string(),
                                 },
+                            } },
                         requester: ODataId {
                             odata_id: "/redfish/v1/Managers/BMC_0".to_string(),
                         },
@@ -1545,16 +1540,13 @@ impl Redfish for RedfishSimClient {
                     target_component_uri: Some("/redfish/v1/Chassis/HGX_IRoT_GPU_1".to_string()),
                     spdm: Some(libredfish::model::component_integrity::SPDMData {
                         identity_authentication:
-                            libredfish::model::component_integrity::IdentityAuthentication {
-                                responder_authentication:
-                                    libredfish::model::component_integrity::ResponderAuthentication {
-                                        component_certificate: ODataId {
-                                            odata_id:
-                                                "/redfish/v1/Chassis/HGX_IRoT_GPU_1/Certificates/CertChain"
-                                                    .to_string(),
-                                        },
-                                    },
+                            libredfish::model::component_integrity::IdentityAuthentication { responder_authentication: libredfish::model::component_integrity::ResponderAuthentication {
+                                component_certificate: ODataId {
+                                    odata_id:
+                                        "/redfish/v1/Chassis/HGX_IRoT_GPU_1/Certificates/CertChain"
+                                            .to_string(),
                                 },
+                            } },
                         requester: ODataId {
                             odata_id: "/redfish/v1/Managers/BMC_0".to_string(),
                         },
@@ -1582,16 +1574,13 @@ impl Redfish for RedfishSimClient {
                     target_component_uri: Some("/redfish/v1/Chassis/HGX_IRoT_GPU_1".to_string()),
                     spdm: Some(libredfish::model::component_integrity::SPDMData {
                         identity_authentication:
-                            libredfish::model::component_integrity::IdentityAuthentication {
-                                responder_authentication:
-                                    libredfish::model::component_integrity::ResponderAuthentication {
-                                        component_certificate: ODataId {
-                                            odata_id:
-                                                "/redfish/v1/Chassis/HGX_IRoT_GPU_1/Certificates/CertChain"
-                                                    .to_string(),
-                                        },
-                                    },
+                            libredfish::model::component_integrity::IdentityAuthentication { responder_authentication: libredfish::model::component_integrity::ResponderAuthentication {
+                                component_certificate: ODataId {
+                                    odata_id:
+                                        "/redfish/v1/Chassis/HGX_IRoT_GPU_1/Certificates/CertChain"
+                                            .to_string(),
                                 },
+                            } },
                         requester: ODataId {
                             odata_id: "/redfish/v1/Managers/BMC_0".to_string(),
                         },

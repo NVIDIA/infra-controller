@@ -20,11 +20,11 @@ pub mod cmd;
 
 use std::path::Path;
 
-use ::rpc::admin_cli::CarbideCliResult;
 pub use args::Args;
 
 use crate::cfg::run::Run;
 use crate::cfg::runtime::RuntimeContext;
+use crate::errors::CarbideCliResult;
 use crate::expected_machines::common::ExpectedMachineJson;
 
 /// `expected-machine update <file>`: deserializes `ExpectedMachineJson` and calls

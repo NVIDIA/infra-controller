@@ -15,7 +15,6 @@
  * limitations under the License.
  */
 
-use ::rpc::admin_cli::CarbideCliError;
 use carbide_utils::has_duplicates;
 use carbide_uuid::rack::RackId;
 use clap::{ArgGroup, Parser};
@@ -23,6 +22,8 @@ use mac_address::MacAddress;
 use rpc::forge::DpuMode;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+use crate::errors::CarbideCliError;
 
 /// Patch expected machine (partial update, preserves unprovided fields).
 ///

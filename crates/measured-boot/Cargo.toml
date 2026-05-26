@@ -26,12 +26,11 @@ name = "measured_boot"
 
 [features]
 sqlx = ["dep:sqlx", "carbide-uuid/sqlx"]
-cli = ["dep:prettytable-rs", "dep:eyre", "dep:clap", "carbide-rpc/cli"]
+cli = ["dep:prettytable-rs", "dep:eyre", "dep:clap"]
 
 [dependencies]
 # workspace dependencies
 carbide-uuid = { path = "../uuid" }
-carbide-rpc = { path = "../rpc" }
 
 thiserror = { workspace = true }
 sqlx = { workspace = true, optional = true }
@@ -40,7 +39,6 @@ clap = { workspace = true, optional = true }
 eyre = { optional = true, workspace = true }
 serde = { workspace = true }
 chrono = { workspace = true }
-tonic = { workspace = true }
 
 [lints]
 workspace = true

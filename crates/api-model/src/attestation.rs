@@ -124,7 +124,15 @@ pub mod spdm {
         }
     }
 
-    #[derive(Clone, Debug, thiserror::Error, PartialEq, Eq, Serialize, Deserialize)]
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    pub enum SpdmAttestationStatus {
+        InProgress,
+        Cancelled,
+        Passed,
+        Failed,
+    }
+
+    #[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
     pub enum SpdmHandlerError {
         #[error("Unable to complete measurement trigger: {0}")]
         TriggerMeasurementFail(String),
@@ -146,7 +154,7 @@ pub mod spdm {
         VerificationFailed(String),
     }
 
-    #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+    #[derive(Clone, Debug, PartialEq, Eq)]
     pub enum AttestationStatus {
         Success,
         NotSupported,

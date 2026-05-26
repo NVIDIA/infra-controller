@@ -23,3 +23,13 @@ pub mod rpc;
 
 #[cfg(test)]
 pub mod tests;
+
+// So far this helper is only used by measured boot functions. Similar
+// function exist in model: try_convert_vec. Maybe at some point of
+// time we need to unify all these conversions in helpers library.
+pub fn convert_vec<T, R>(source: Vec<T>) -> Vec<R>
+where
+    R: From<T>,
+{
+    source.into_iter().map(R::from).collect()
+}

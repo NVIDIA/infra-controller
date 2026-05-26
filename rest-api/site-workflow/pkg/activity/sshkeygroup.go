@@ -1,0 +1,231 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package activity
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	swe "github.com/NVIDIA/infra-controller-rest/site-workflow/pkg/error"
+	"github.com/NVIDIA/infra-controller-rest/site-workflow/pkg/grpc/client"
+	cClient "github.com/NVIDIA/infra-controller-rest/site-workflow/pkg/grpc/client"
+	cwssaws "github.com/NVIDIA/infra-controller-rest/workflow-schema/schema/site-agent/workflows/v1"
+	"github.com/rs/zerolog/log"
+	"go.temporal.io/sdk/temporal"
+	"google.golang.org/protobuf/types/known/timestamppb"
+)
+
+// ManageSSHKeyGroupInventory is an activity wrapper for SSHKeyGroup inventory collection and publishing
+type ManageSSHKeyGroupInventory struct {
+	config ManageInventoryConfig
+}
+
+// DiscoverSSHKeyGroupInventory is an activity to collect SSHKeyGroup inventory and publish to Temporal queue
+func (mmi *ManageSSHKeyGroupInventory) DiscoverSSHKeyGroupInventory(ctx context.Context) error {
+	logger := log.With().Str("Activity", "DiscoverSSHKeyGroupInventory").Logger()
+	logger.Info().Msg("Starting activity")
+	inventoryImpl := manageInventoryImpl[*cwssaws.TenantKeysetIdentifier, *cwssaws.TenantKeyset, *cwssaws.SSHKeyGroupInventory]{
+		itemType:               "SSHKeyGroup",
+		config:                 mmi.config,
+		internalFindIDs:        sshKeyGroupFindIDs,
+		internalFindByIDs:      sshKeyGroupFindByIDs,
+		internalPagedInventory: sshKeyGroupPagedInventory,
+	}
+	return inventoryImpl.CollectAndPublishInventory(ctx, &logger)
+}
+
+// NewManageSSHKeyGroupInventory returns a ManageInventory implementation for SSHKeyGroup activity
+func NewManageSSHKeyGroupInventory(config ManageInventoryConfig) ManageSSHKeyGroupInventory {
+	return ManageSSHKeyGroupInventory{
+		config: config,
+	}
+}
+
+func sshKeyGroupFindIDs(ctx context.Context, nicoClient *cClient.NICoCoreClient) ([]*cwssaws.TenantKeysetIdentifier, error) {
+	idList, err := nicoClient.NICo().FindTenantKeysetIds(ctx, &cwssaws.TenantKeysetSearchFilter{})
+	if err != nil {
+		return nil, err
+	}
+	return idList.GetKeysetIds(), nil
+}
+
+func sshKeyGroupFindByIDs(ctx context.Context, nicoClient *cClient.NICoCoreClient, ids []*cwssaws.TenantKeysetIdentifier) ([]*cwssaws.TenantKeyset, error) {
+	list, err := nicoClient.NICo().FindTenantKeysetsByIds(ctx, &cwssaws.TenantKeysetsByIdsRequest{
+		KeysetIds: ids,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return list.GetKeyset(), nil
+}
+
+func sshKeyGroupPagedInventory(allItemIDs []*cwssaws.TenantKeysetIdentifier, pagedItems []*cwssaws.TenantKeyset, input *pagedInventoryInput) *cwssaws.SSHKeyGroupInventory {
+	itemIDs := []string{}
+	for _, id := range allItemIDs {
+		itemIDs = append(itemIDs, id.GetKeysetId())
+	}
+
+	// Create an inventory page
+	inventory := &cwssaws.SSHKeyGroupInventory{
+		TenantKeysets: pagedItems,
+		Timestamp: &timestamppb.Timestamp{
+			Seconds: time.Now().Unix(),
+		},
+		InventoryStatus: input.status,
+		StatusMsg:       input.statusMessage,
+		InventoryPage:   input.buildPage(),
+	}
+	if inventory.InventoryPage != nil {
+		inventory.InventoryPage.ItemIds = itemIDs
+	}
+	return inventory
+}
+
+// ManageSSHKeyGroup is an activity wrapper for SSHKeyGroup management
+type ManageSSHKeyGroup struct {
+	NICoCoreAtomicClient *client.NICoCoreAtomicClient
+}
+
+// NewManageSSHKeyGroup returns a new ManageSSHKeyGroup client
+func NewManageSSHKeyGroup(nicoClient *client.NICoCoreAtomicClient) ManageSSHKeyGroup {
+	return ManageSSHKeyGroup{
+		NICoCoreAtomicClient: nicoClient,
+	}
+}
+
+// Function to create SSH Key Group with NICo
+func (mmi *ManageSSHKeyGroup) CreateSSHKeyGroupOnSite(ctx context.Context, request *cwssaws.CreateTenantKeysetRequest) error {
+	logger := log.With().Str("Activity", "CreateSSHKeyGroupOnSite").Logger()
+
+	logger.Info().Msg("Starting activity")
+
+	var err error
+
+	// Validate request
+	if request == nil {
+		err = errors.New("received empty create SSH Key Group request")
+	} else if request.KeysetIdentifier == nil || request.GetKeysetIdentifier().GetKeysetId() == "" {
+		err = errors.New("received create SSH Key Group request missing KeysetIdentifier")
+	} else if request.KeysetIdentifier.OrganizationId == "" {
+		err = errors.New("received create SSH Key Group request missing OrganizationId")
+	} else if request.Version == "" {
+		err = errors.New("received create SSH Key Group request missing Version")
+	}
+
+	if err != nil {
+		return temporal.NewNonRetryableApplicationError(err.Error(), swe.ErrTypeInvalidRequest, err)
+	}
+
+	// Call Site Controller gRPC endpoint
+	nicoClient := mmi.NICoCoreAtomicClient.GetClient()
+	if nicoClient == nil {
+		return client.ErrClientNotConnected
+	}
+	rpcClient := nicoClient.NICo()
+
+	_, err = rpcClient.CreateTenantKeyset(ctx, request)
+	if err != nil {
+		logger.Warn().Err(err).Msg("Failed to create SSH Key Group using Site Controller API")
+		return swe.WrapErr(err)
+	}
+
+	logger.Info().Msg("Completed activity")
+
+	return nil
+}
+
+// Function to Update SSH Key Group with NICo
+func (mmi *ManageSSHKeyGroup) UpdateSSHKeyGroupOnSite(ctx context.Context, request *cwssaws.UpdateTenantKeysetRequest) error {
+	logger := log.With().Str("Activity", "UpdateSSHKeyGroupOnSite").Logger()
+
+	logger.Info().Msg("Starting activity")
+
+	var err error
+
+	// Validate request
+	if request == nil {
+		err = errors.New("received empty update SSH Key Group request")
+	} else if request.KeysetIdentifier == nil || request.GetKeysetIdentifier().GetKeysetId() == "" {
+		err = errors.New("received update SSH Key Group request missing KeysetIdentifier")
+	} else if request.KeysetIdentifier.OrganizationId == "" {
+		err = errors.New("received update SSH Key Group request missing OrganizationId")
+	} else if request.Version == "" {
+		err = errors.New("received update SSH Key Group request missing Version")
+	}
+
+	if err != nil {
+		return temporal.NewNonRetryableApplicationError(err.Error(), swe.ErrTypeInvalidRequest, err)
+	}
+
+	// Call Site Controller gRPC endpoint
+	nicoClient := mmi.NICoCoreAtomicClient.GetClient()
+	if nicoClient == nil {
+		return client.ErrClientNotConnected
+	}
+	rpcClient := nicoClient.NICo()
+
+	_, err = rpcClient.UpdateTenantKeyset(ctx, request)
+	if err != nil {
+		logger.Warn().Err(err).Msg("Failed to update SSH Key Group using Site Controller API")
+		return swe.WrapErr(err)
+	}
+
+	logger.Info().Msg("Completed activity")
+
+	return nil
+}
+
+// Function to Delete SSH Key Group with NICo
+func (mmi *ManageSSHKeyGroup) DeleteSSHKeyGroupOnSite(ctx context.Context, request *cwssaws.DeleteTenantKeysetRequest) error {
+	logger := log.With().Str("Activity", "DeleteSSHKeyGroupOnSite").Logger()
+
+	logger.Info().Msg("Starting activity")
+
+	var err error
+
+	// Validate request
+	if request == nil {
+		err = errors.New("received empty delete SSH Key Group request")
+	} else if request.KeysetIdentifier == nil || request.GetKeysetIdentifier().GetKeysetId() == "" {
+		err = errors.New("received delete SSH Key Group request missing KeysetIdentifier")
+	} else if request.KeysetIdentifier.OrganizationId == "" {
+		err = errors.New("received delete SSH Key Group request missing OrganizationId")
+	}
+
+	if err != nil {
+		return temporal.NewNonRetryableApplicationError(err.Error(), swe.ErrTypeInvalidRequest, err)
+	}
+
+	// Call Site Controller gRPC endpoint
+	nicoClient := mmi.NICoCoreAtomicClient.GetClient()
+	if nicoClient == nil {
+		return client.ErrClientNotConnected
+	}
+	rpcClient := nicoClient.NICo()
+
+	_, err = rpcClient.DeleteTenantKeyset(ctx, request)
+	if err != nil {
+		logger.Warn().Err(err).Msg("Failed to delete SSH Key Group using Site Controller API")
+		return swe.WrapErr(err)
+	}
+
+	logger.Info().Msg("Completed activity")
+
+	return nil
+}

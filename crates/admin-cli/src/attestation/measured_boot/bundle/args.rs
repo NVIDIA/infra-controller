@@ -30,7 +30,6 @@
 
 use std::str::FromStr;
 
-use ::rpc::admin_cli::CarbideCliError;
 use ::rpc::protos::measured_boot::{
     CreateMeasurementBundleRequest, DeleteMeasurementBundleRequest, FindClosestBundleMatchRequest,
     ListMeasurementBundleMachinesRequest, MeasurementBundleStatePb, RenameMeasurementBundleRequest,
@@ -50,6 +49,7 @@ use crate::attestation::measured_boot::global::cmds::{
     IdNameIdentifier, IdentifierType, get_identifier,
 };
 use crate::cfg::measurement::parse_pcr_register_values;
+use crate::errors::CarbideCliError;
 
 /// CmdBundle provides a container for the `bundle` subcommand, which itself
 /// contains other subcommands for working with profiles.

@@ -17,7 +17,9 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 
+use ::rpc::errors::RpcDataConversionError;
 use ::rpc::forge::{self as rpc, AdminForceDeleteMachineResponse};
+use ::rpc::model::RpcTryFrom;
 use carbide_redfish::libredfish::RedfishAuth;
 use carbide_uuid::infiniband::IBPartitionId;
 use carbide_uuid::instance::InstanceId;
@@ -30,7 +32,6 @@ use health_report::{
 };
 use itertools::Itertools as _;
 use model::ConfigValidationError;
-use model::instance::DeleteInstance;
 use model::instance::config::InstanceConfig;
 use model::instance::config::extension_services::InstanceExtensionServicesConfig;
 use model::instance::config::infiniband::InstanceInfinibandConfig;
@@ -40,7 +41,8 @@ use model::instance::config::tenant_config::TenantConfig;
 use model::instance::snapshot::InstanceSnapshot;
 use model::machine::machine_search_config::MachineSearchConfig;
 use model::machine::{
-    InstanceState, LoadSnapshotOptions, ManagedHostState, ManagedHostStateSnapshot,
+    HostHealthConfig, InstanceState, LoadSnapshotOptions, ManagedHostState,
+    ManagedHostStateSnapshot,
 };
 use model::metadata::Metadata;
 use model::os::OperatingSystem;
@@ -54,6 +56,36 @@ use crate::instance::{
     validate_ib_partition_ownership, validate_os_definition_usable,
 };
 use crate::{CarbideError, CarbideResult};
+
+/// Refuses `ReleaseInstance` when aggregate host health includes [`HealthAlertClassification::prevent_instance_deletion`].
+/// Admin `force_delete_instance` is not subject to this check.
+async fn ensure_instance_release_not_blocked_by_prevent_instance_deletion(
+    txn: &mut db::Transaction<'_>,
+    machine_id: &MachineId,
+    host_health: HostHealthConfig,
+) -> Result<(), CarbideError> {
+    let Some(snapshot) = db::managed_host::load_snapshot(
+        txn,
+        machine_id,
+        LoadSnapshotOptions::default().with_host_health(host_health),
+    )
+    .await?
+    else {
+        return Err(CarbideError::NotFoundError {
+            kind: "machine",
+            id: machine_id.to_string(),
+        });
+    };
+
+    if snapshot
+        .aggregate_health
+        .has_classification(&HealthAlertClassification::prevent_instance_deletion())
+    {
+        return Err(ConfigValidationError::InstanceReleaseBlockedByPreventInstanceDeletion.into());
+    }
+
+    Ok(())
+}
 
 /// Represents the repair status label value set by RepairSystem
 ///
@@ -251,7 +283,7 @@ pub(crate) async fn find_by_machine_id(
     };
 
     let maybe_instance =
-        Option::<rpc::Instance>::try_from(mh_snapshot).map_err(CarbideError::from)?;
+        Option::<rpc::Instance>::rpc_try_from(mh_snapshot).map_err(CarbideError::from)?;
 
     let instances = if let Some(instance) = maybe_instance {
         vec![instance]
@@ -298,7 +330,7 @@ fn create_tenant_reported_issue_override(
 /// Creates a RequestRepair health override template
 fn create_request_repair_override(issue: &rpc::Issue) -> HealthReport {
     HealthReport {
-        source: "repair-request".to_string(),
+        source: health_report::REPAIR_REQUEST_MERGE_SOURCE.to_string(),
         observed_at: Some(chrono::Utc::now()),
         alerts: vec![HealthProbeAlert {
             id: HealthProbeId::from_str("RequestRepair")
@@ -411,7 +443,10 @@ async fn handle_instance_release_from_repair_tenant(
     machine: &model::machine::Machine,
     tenant_organization_id: &str,
 ) -> Result<(), CarbideError> {
-    let has_request_repair = machine.health_reports.merges.contains_key("repair-request");
+    let has_request_repair = machine
+        .health_reports
+        .merges
+        .contains_key(health_report::REPAIR_REQUEST_MERGE_SOURCE);
 
     if !has_request_repair {
         // No existing RequestRepair override
@@ -457,7 +492,7 @@ async fn handle_instance_release_from_repair_tenant(
         remove_health_override(
             txn,
             machine_id,
-            "repair-request",
+            health_report::REPAIR_REQUEST_MERGE_SOURCE,
             "RequestRepair removed - repair completed successfully",
         )
         .await?;
@@ -498,7 +533,7 @@ async fn handle_instance_release_from_repair_tenant(
         remove_health_override(
             txn,
             machine_id,
-            "repair-request",
+            health_report::REPAIR_REQUEST_MERGE_SOURCE,
             "RequestRepair removed for incomplete repair",
         )
         .await?;
@@ -605,7 +640,16 @@ async fn handle_instance_release_from_regular_tenant_and_report_issue(
 /// Handles instance release requests with support for the Forge-RepairSystem integration.
 ///
 /// This function processes instance deletion requests and applies appropriate health overrides
-/// based on the requesting tenant type and reported issues. It supports two main workflows:
+/// based on the requesting tenant type and reported issues. It supports two main workflows
+/// (repair tenant and regular tenant) described below.
+///
+/// **PreventInstanceDeletion:** If aggregate host health includes a [`HealthAlertClassification::prevent_instance_deletion`]
+/// alert, `ReleaseInstance` is rejected until the alert is cleared (only when the instance is not already
+/// marked deleted). Admin machine force-delete does not use this check.
+///
+/// **Already deleted:** If the instance row is already marked deleted, this handler still runs repair-tenant
+/// (and regular-tenant issue) health logic so the repair system can clear or update overrides, then returns
+/// success without calling `mark_as_deleted` again.
 ///
 /// ## Repair Tenant Workflow
 /// When `is_repair_tenant=true`, this indicates the RepairSystem is releasing an instance after
@@ -629,24 +673,38 @@ pub(crate) async fn release(
     request: Request<rpc::InstanceReleaseRequest>,
 ) -> Result<Response<rpc::InstanceReleaseResult>, Status> {
     log_request_data(&request);
-    let delete_instance = DeleteInstance::try_from(request.into_inner())?;
+    let delete_instance = request.into_inner();
+    let instance_id = delete_instance
+        .id
+        .ok_or(RpcDataConversionError::MissingArgument("id"))?;
 
     let mut txn = api.txn_begin().await?;
 
-    let instance = db::instance::find_by_id(&mut txn, delete_instance.instance_id)
+    let instance = db::instance::find_by_id(&mut txn, instance_id)
         .await?
         .ok_or_else(|| CarbideError::NotFoundError {
             kind: "instance",
-            id: delete_instance.instance_id.to_string(),
+            id: instance_id.to_string(),
         })?;
 
     log_machine_id(&instance.machine_id);
     log_tenant_organization_id(instance.config.tenant.tenant_organization_id.as_str());
 
+    // Only enforce PreventInstanceDeletion for a real release (instance not yet marked deleted). Repair-tenant
+    // follow-up calls after deletion may still need to adjust health overrides below.
+    if instance.deleted.is_none() {
+        ensure_instance_release_not_blocked_by_prevent_instance_deletion(
+            &mut txn,
+            &instance.machine_id,
+            api.runtime_config.host_health,
+        )
+        .await?;
+    }
+
     // Instance Release called from the Repair tenant.
     if delete_instance.is_repair_tenant == Some(true) {
         tracing::info!(
-            instance_id = %delete_instance.instance_id,
+            %instance_id,
             machine_id = %instance.machine_id,
             has_issues = delete_instance.issue.is_some(),
             "Instance release requested by repair tenant"
@@ -698,16 +756,17 @@ pub(crate) async fn release(
 
     if instance.deleted.is_some() {
         tracing::info!(
-            instance_id = %delete_instance.instance_id,
+            %instance_id,
             "Instance is already marked for deletion.",
         );
+        txn.commit().await?;
         return Ok(Response::new(rpc::InstanceReleaseResult {}));
     }
 
     // TODO: This is racy. If the instance just got deleted we still
     // see an error here that is not returned as `NotFound` error. Ideally
     // we convert this case of the DatabaseError into NotFound too.
-    db::instance::mark_as_deleted(delete_instance.instance_id, &mut txn).await?;
+    db::instance::mark_as_deleted(instance_id, &mut txn).await?;
 
     txn.commit().await?;
 
@@ -1214,7 +1273,7 @@ pub(crate) async fn update_instance_config(
             .unwrap_or(true),
         &instance,
         &mut config.network,
-        mh_snapshot.host_snapshot.current_state(),
+        &mh_snapshot,
         &mut txn,
     )
     .await?;
@@ -1270,11 +1329,55 @@ async fn update_instance_network_config(
     allow_instance_vf: bool,
     instance: &InstanceSnapshot,
     network: &mut InstanceNetworkConfig,
-    mh_state: &ManagedHostState,
+    mh_snapshot: &ManagedHostStateSnapshot,
     txn: &mut sqlx::Transaction<'_, sqlx::Postgres>,
 ) -> Result<(), CarbideError> {
     if instance.update_network_config_request.is_some() {
         return Err(ConfigValidationError::InstanceNetworkConfigUpdateAlreadyInProgress.into());
+    }
+
+    // Auto-ness can't change for an existing instance. If a tenant has created
+    // an instance with auto, it must remain auto until it is released. Maybe
+    // eventually this can change, but for now this is what we support.
+    if network.auto != instance.config.network.auto {
+        return Err(CarbideError::InvalidArgument(format!(
+            "cannot change `InstanceNetworkConfig.auto` on an existing instance (was {}, update requested {})",
+            instance.config.network.auto, network.auto,
+        )));
+    }
+
+    // For auto instances, simply re-resolve from the machine's current
+    // HostInband segments before any diff check. Same machine state == no-op
+    // via the diff check below. Operator-added or removed HostInband segments
+    // since allocation == reflected in the update.
+    if network.auto {
+        // Just to make sure, an auto instance should still be on a zero-DPU
+        // host. If this machine suddenly has DPUs, we should yell, at least
+        // for now. I guess there's a world where we might have a primary NIC
+        // that is a dumb NIC (or DPU in NIC mode), and also happens to have
+        // a secondary DPU into some other leg of the network, but we can
+        // think about that later; that would mean we'd support a mix of
+        // auto AND non-auto interfaces.
+        if !mh_snapshot.is_zero_dpu() {
+            return Err(CarbideError::InvalidArgument(format!(
+                "instance was allocated with `auto: true` but host {} is no longer zero-DPU; cannot update via the auto path",
+                instance.machine_id,
+            )));
+        }
+
+        let inband_segment_ids =
+            db::instance_network_config::batch_get_inband_segments_by_machine_ids(
+                txn.as_mut(),
+                &[instance.machine_id],
+            )
+            .await?
+            .get(&instance.machine_id)
+            .cloned()
+            .unwrap_or_default();
+        *network = db::instance_network_config::add_inband_interfaces_to_config(
+            network.clone(),
+            &inband_segment_ids,
+        )?;
     }
 
     if !instance
@@ -1286,7 +1389,7 @@ async fn update_instance_network_config(
     }
 
     if !matches!(
-        mh_state,
+        mh_snapshot.host_snapshot.current_state(),
         ManagedHostState::Assigned {
             instance_state: InstanceState::Ready,
         }
@@ -1307,17 +1410,6 @@ async fn update_instance_network_config(
     network
         .validate(allow_instance_vf)
         .map_err(CarbideError::from)?;
-
-    let mh_snapshot = db::managed_host::load_snapshot(
-        txn.as_mut(),
-        &instance.machine_id,
-        LoadSnapshotOptions::default(),
-    )
-    .await?
-    .ok_or(CarbideError::NotFoundError {
-        kind: "machine",
-        id: instance.machine_id.to_string(),
-    })?;
 
     // Allocate IPs and add them to the network config
     let updated_network_config = db::instance_network_config::with_allocated_ips(
@@ -1448,7 +1540,7 @@ fn snapshot_to_instance(
     mh_snapshot: ManagedHostStateSnapshot,
 ) -> Result<rpc::Instance, CarbideError> {
     let machine_id = mh_snapshot.host_snapshot.id;
-    Option::<rpc::Instance>::try_from(mh_snapshot)
+    Option::<rpc::Instance>::rpc_try_from(mh_snapshot)
         .map_err(CarbideError::from)?
         .ok_or_else(|| {
             CarbideError::internal(format!(

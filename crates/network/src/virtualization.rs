@@ -22,7 +22,7 @@ use std::str::FromStr;
 use ipnetwork::IpNetwork;
 
 /// DEFAULT_NETWORK_VIRTUALIZATION_TYPE is what to default to if the Cloud API
-/// doesn't send it to Carbide (which it never does), or if the Carbide API
+/// doesn't send it to NICo (which it never does), or if the NICo API
 /// doesn't send it to the DPU agent.
 pub const DEFAULT_NETWORK_VIRTUALIZATION_TYPE: VpcVirtualizationType =
     VpcVirtualizationType::EthernetVirtualizer;
@@ -41,9 +41,27 @@ pub const DEFAULT_NETWORK_VIRTUALIZATION_TYPE: VpcVirtualizationType =
 pub enum VpcVirtualizationType {
     #[default]
     EthernetVirtualizer,
+    /// Deprecated: equivalent to `EthernetVirtualizer` for all live behavior;
+    /// retained only so older database rows decode correctly. Treat the two
+    /// variants as the same thing in match arms.
     EthernetVirtualizerWithNvue,
     Fnn,
+    /// `Flat` is for VPCs whose tenant instances live directly on the
+    /// underlay (zero-DPU hosts, or hosts with their DPU in NIC mode) and
+    /// whose interfaces are bound to `HostInband` network segments rather
+    /// than a NICo-managed overlay. Flat VPCs are still real tenant
+    /// VPCs with a VNI and NSGs, but NICo doesn't drive their data
+    /// plane -- routing and ACL enforcement between Flat VPCs and other
+    /// VPCs is the network operator's responsibility.
+    Flat,
 }
+
+// Per-variant policy ("how does this type behave with respect to segments,
+// peering, routing profiles, IPv6, host fabric interfaces") is declared
+// as data in `carbide_api_model::vpc::capability` and consulted via the
+// `VpcVirtualizationTypeCapabilities` extension trait. There are no
+// inherent methods here; adding a new variant means filling in one
+// `VpcCapabilities` literal in that module, not editing handler logic.
 
 // Manual sqlx impls so that legacy DB value 'etv' decodes as EthernetVirtualizerWithNvue.
 #[cfg(feature = "sqlx")]
@@ -65,6 +83,7 @@ impl sqlx::Encode<'_, sqlx::Postgres> for VpcVirtualizationType {
         let s = match self {
             Self::EthernetVirtualizer | Self::EthernetVirtualizerWithNvue => "etv",
             Self::Fnn => "fnn",
+            Self::Flat => "flat",
         };
         <&str as sqlx::Encode<sqlx::Postgres>>::encode(s, buf)
     }
@@ -84,6 +103,7 @@ impl sqlx::Decode<'_, sqlx::Postgres> for VpcVirtualizationType {
         match s {
             "etv" | "etv_nvue" => Ok(Self::EthernetVirtualizer),
             "fnn" => Ok(Self::Fnn),
+            "flat" => Ok(Self::Flat),
             other => {
                 Err(format!("invalid value {:?} for enum VpcVirtualizationType", other).into())
             }
@@ -124,6 +144,11 @@ mod sqlx_tests {
     fn encode_fnn_writes_fnn() {
         assert_eq!(encode_to_string(VpcVirtualizationType::Fnn), "fnn");
     }
+
+    #[test]
+    fn encode_flat_writes_flat() {
+        assert_eq!(encode_to_string(VpcVirtualizationType::Flat), "flat");
+    }
 }
 
 impl fmt::Display for VpcVirtualizationType {
@@ -131,6 +156,7 @@ impl fmt::Display for VpcVirtualizationType {
         match self {
             Self::EthernetVirtualizer | Self::EthernetVirtualizerWithNvue => write!(f, "etv"),
             Self::Fnn => write!(f, "fnn"),
+            Self::Flat => write!(f, "flat"),
         }
     }
 }
@@ -150,6 +176,7 @@ impl FromStr for VpcVirtualizationType {
         match s {
             "etv" | "etv_nvue" => Ok(Self::EthernetVirtualizer),
             "fnn" => Ok(Self::Fnn),
+            "flat" => Ok(Self::Flat),
             x => Err(eyre::eyre!(format!("Unknown virt type {}", x))),
         }
     }
@@ -161,7 +188,7 @@ impl FromStr for VpcVirtualizationType {
 /// for the purpose of FNN /30 allocations (where the host IP
 /// ends up being the 4th IP -- aka the second IP of the second
 /// /31 allocation in the /30), and will probably change with
-/// a wider refactor + intro of Carbide IP Prefix Management.
+/// a wider refactor + intro of NICo IP Prefix Management.
 pub fn get_host_ip(network: &IpNetwork) -> eyre::Result<std::net::IpAddr> {
     match network.prefix() {
         // Single-host allocation: IPv4 /32 or IPv6 /128
@@ -237,6 +264,19 @@ mod tests {
             VpcVirtualizationType::EthernetVirtualizerWithNvue.to_string(),
             "etv"
         );
+    }
+
+    #[test]
+    fn from_str_flat_maps_to_flat() {
+        assert_eq!(
+            "flat".parse::<VpcVirtualizationType>().unwrap(),
+            VpcVirtualizationType::Flat
+        );
+    }
+
+    #[test]
+    fn display_flat_shows_flat() {
+        assert_eq!(VpcVirtualizationType::Flat.to_string(), "flat");
     }
 
     #[test]

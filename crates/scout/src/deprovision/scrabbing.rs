@@ -1047,26 +1047,10 @@ pub async fn run_no_api(tpm_path: &str) -> Result<(), CarbideClientError> {
         return Ok(());
     }
     tracing::info!("no_api deprovision starts.");
-    let stdin_link = match fs::read_link("/proc/self/fd/0") {
-        Ok(o) => o.to_string_lossy().to_string(),
-        Err(_) => "None".to_string(),
-    };
-    tracing::info!("stdin is {}", stdin_link);
 
     crate::tpm::clear_tpm(tpm_path)?;
 
-    if stdin_link == "/dev/null" {
-        match all_nvme_cleanup().await {
-            Ok(_) => tracing::debug!("nvme cleanup OK"),
-            Err(e) => tracing::error!("nvme cleanup error: {}", e),
-        }
-        match all_hdd_cleanup().await {
-            Ok(_) => tracing::debug!("hdd cleanup OK"),
-            Err(e) => tracing::error!("hdd cleanup error: {}", e),
-        }
-    } else {
-        tracing::info!("stdin == {}. Skip nvme and HDD cleanup.", stdin_link);
-    }
+    tracing::info!("Skipping NVMe and HDD/SAS cleanup in no-api path; RESET owns storage cleanup.");
 
     // P1 errors are propagated (fail startup), P2 errors are handled internally in reset_ib_devices()
     reset_ib_devices().await?;

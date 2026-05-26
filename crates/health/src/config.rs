@@ -111,6 +111,9 @@ pub struct StaticBmcEndpoint {
 pub struct StaticMachineEndpoint {
     pub id: String,
     pub serial: Option<String>,
+    pub slot_number: Option<i32>,
+    pub tray_index: Option<i32>,
+    pub nvlink_domain_uuid: Option<String>,
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
@@ -125,6 +128,8 @@ pub struct StaticPowerShelfEndpoint {
 pub struct StaticSwitchEndpoint {
     pub id: Option<String>,
     pub serial: Option<String>,
+    pub slot_number: Option<i32>,
+    pub tray_index: Option<i32>,
 }
 
 impl Debug for StaticBmcEndpoint {
@@ -308,6 +313,9 @@ pub struct HealthReportSinkConfig {
 
     /// Number of concurrent workers submitting reports to Carbide API.
     pub workers: usize,
+
+    /// Drop reports that contain no successes and no alerts before submitting them.
+    pub skip_empty_reports: bool,
 }
 
 impl Default for HealthReportSinkConfig {
@@ -315,6 +323,7 @@ impl Default for HealthReportSinkConfig {
         Self {
             connection: CarbideApiConnectionConfig::default(),
             workers: 4,
+            skip_empty_reports: true,
         }
     }
 }
@@ -327,6 +336,9 @@ pub struct RackHealthReportSinkConfig {
 
     /// Number of concurrent workers submitting rack-level reports to Carbide API.
     pub workers: usize,
+
+    /// Drop reports that contain no successes and no alerts before submitting them.
+    pub skip_empty_reports: bool,
 }
 
 impl Default for RackHealthReportSinkConfig {
@@ -334,6 +346,7 @@ impl Default for RackHealthReportSinkConfig {
         Self {
             connection: CarbideApiConnectionConfig::default(),
             workers: 2,
+            skip_empty_reports: true,
         }
     }
 }
@@ -346,6 +359,9 @@ pub struct SwitchHealthReportSinkConfig {
 
     /// Number of concurrent workers submitting switch-level reports to Carbide API.
     pub workers: usize,
+
+    /// Drop reports that contain no successes and no alerts before submitting them.
+    pub skip_empty_reports: bool,
 }
 
 impl Default for SwitchHealthReportSinkConfig {
@@ -353,6 +369,7 @@ impl Default for SwitchHealthReportSinkConfig {
         Self {
             connection: CarbideApiConnectionConfig::default(),
             workers: 2,
+            skip_empty_reports: true,
         }
     }
 }
@@ -365,6 +382,9 @@ pub struct PowerShelfHealthReportSinkConfig {
 
     /// Number of concurrent workers submitting power-shelf-level reports to Carbide API.
     pub workers: usize,
+
+    /// Drop reports that contain no successes and no alerts before submitting them.
+    pub skip_empty_reports: bool,
 }
 
 impl Default for PowerShelfHealthReportSinkConfig {
@@ -372,6 +392,7 @@ impl Default for PowerShelfHealthReportSinkConfig {
         Self {
             connection: CarbideApiConnectionConfig::default(),
             workers: 2,
+            skip_empty_reports: true,
         }
     }
 }
@@ -506,7 +527,7 @@ impl Default for SensorCollectorConfig {
             rediscover_interval: Duration::from_secs(300),
             state_refresh_interval: Duration::from_secs(9000),
             sensor_fetch_interval: Duration::from_secs(60),
-            sensor_fetch_concurrency: 10,
+            sensor_fetch_concurrency: 4,
             include_sensor_thresholds: true,
         }
     }
@@ -917,6 +938,7 @@ mod tests {
                 "/var/run/secrets/spiffe.io/ca.crt"
             );
             assert_eq!(health_report.workers, 8);
+            assert!(health_report.skip_empty_reports);
         } else {
             panic!("health report sink is disabled")
         }
@@ -1145,6 +1167,31 @@ cache_size = 50
         assert!(config.processors.leak_detection.is_enabled());
         assert!(config.collectors.leak_detector.is_enabled());
         assert!(!config.collectors.nvue.is_enabled());
+        if let Configurable::Enabled(ref health_report) = config.sinks.health_report {
+            assert!(health_report.skip_empty_reports);
+        } else {
+            panic!("health report sink should be enabled by default");
+        }
+    }
+
+    #[test]
+    fn test_health_report_sink_can_send_empty_reports_when_configured() {
+        let toml_content = r#"
+[sinks.health_report]
+skip_empty_reports = false
+"#;
+
+        let config: Config = Figment::new()
+            .merge(Serialized::defaults(Config::default()))
+            .merge(Toml::string(toml_content))
+            .extract()
+            .expect("could not parse config toml file");
+
+        if let Configurable::Enabled(ref health_report) = config.sinks.health_report {
+            assert!(!health_report.skip_empty_reports);
+        } else {
+            panic!("health report sink is disabled")
+        }
     }
 
     #[test]
@@ -1316,7 +1363,7 @@ ip = "10.0.1.1"
 mac = "11:22:33:44:55:66"
 username = "cumulus"
 password = "pass"
-switch = { id = "fsw100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0", serial = "SN-SW-001" }
+switch = { id = "fsw100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0", serial = "SN-SW-001", slot_number = 7, tray_index = 3 }
 
 [[endpoint_sources.static_bmc_endpoints]]
 ip = "10.0.2.1"
@@ -1373,6 +1420,20 @@ power_shelf = { id = "fps100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1
             Some("SN-SW-001")
         );
         assert_eq!(
+            config.endpoint_sources.static_bmc_endpoints[2]
+                .switch
+                .as_ref()
+                .and_then(|switch| switch.slot_number),
+            Some(7)
+        );
+        assert_eq!(
+            config.endpoint_sources.static_bmc_endpoints[2]
+                .switch
+                .as_ref()
+                .and_then(|switch| switch.tray_index),
+            Some(3)
+        );
+        assert_eq!(
             config.endpoint_sources.static_bmc_endpoints[3]
                 .power_shelf
                 .as_ref()
@@ -1385,6 +1446,39 @@ power_shelf = { id = "fps100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1
                 .as_ref()
                 .and_then(|power_shelf| power_shelf.serial.as_deref()),
             Some("SN-PS-001")
+        );
+    }
+
+    #[test]
+    fn test_static_machine_endpoint_accepts_placement_and_nvlink_metadata() {
+        let toml_content = r#"
+[endpoint_sources.carbide_api]
+enabled = false
+
+[[endpoint_sources.static_bmc_endpoints]]
+ip = "10.0.1.2"
+mac = "11:22:33:44:55:11"
+username = "admin"
+password = "pass"
+machine = { id = "fm100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0", serial = "MN-001", slot_number = 15, tray_index = 5, nvlink_domain_uuid = "00000000-0000-0000-0000-000000000000" }
+"#;
+
+        let config: Config = Figment::new()
+            .merge(Serialized::defaults(Config::default()))
+            .merge(Toml::string(toml_content))
+            .extract()
+            .expect("failed to parse static machine endpoint config");
+
+        let machine = config.endpoint_sources.static_bmc_endpoints[0]
+            .machine
+            .as_ref()
+            .expect("machine metadata");
+
+        assert_eq!(machine.slot_number, Some(15));
+        assert_eq!(machine.tray_index, Some(5));
+        assert_eq!(
+            machine.nvlink_domain_uuid.as_deref(),
+            Some("00000000-0000-0000-0000-000000000000")
         );
     }
 
@@ -1428,6 +1522,17 @@ switch = { serial = "SN-SW-001" }
             config.endpoint_sources.static_bmc_endpoints[0]
                 .switch
                 .is_none()
+        );
+        let machine = config.endpoint_sources.static_bmc_endpoints[0]
+            .machine
+            .as_ref()
+            .expect("machine metadata");
+        assert_eq!(machine.serial.as_deref(), Some("MN-001"));
+        assert_eq!(machine.slot_number, Some(15));
+        assert_eq!(machine.tray_index, Some(5));
+        assert_eq!(
+            machine.nvlink_domain_uuid.as_deref(),
+            Some("00000000-0000-0000-0000-000000000000")
         );
         assert_eq!(
             config.endpoint_sources.static_bmc_endpoints[1]

@@ -128,7 +128,7 @@ pub struct ServiceDefinition {
     pub interfaces: Vec<ServiceInterface>,
     /// Optional service configuration (helm values for DPUServiceConfiguration).
     pub config_values: Option<serde_json::Value>,
-    /// Config ports for DPUServiceConfiguration (e.g. DTS httpserverport 9100).
+    /// Config ports for DPUServiceConfiguration (e.g. DTS httpserverport 9189).
     pub config_ports: Option<Vec<ServiceConfigPort>>,
     /// Service type for config_ports (e.g. None for DTS).
     pub config_ports_service_type: Option<ConfigPortsServiceType>,
@@ -305,6 +305,10 @@ impl From<DpuStatusPhase> for DpuPhase {
             DpuStatusPhase::InitializeInterface => Self::Provisioning("InitializeInterface".into()),
             DpuStatusPhase::CheckingHostRebootRequired => Self::Rebooting,
             DpuStatusPhase::NodeEffectRemoval => Self::NodeEffect,
+            DpuStatusPhase::DpuConfig => Self::Provisioning("DpuConfig".into()),
+            DpuStatusPhase::PerformArmForceRestart => {
+                Self::Provisioning("PerformArmForceRestart".into())
+            }
         }
     }
 }

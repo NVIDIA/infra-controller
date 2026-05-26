@@ -31,6 +31,7 @@ use model::errors::ModelError;
 use model::hardware_info::HardwareInfoError;
 use model::network_devices::LldpError;
 use model::tenant::TenantError;
+use model::vpc::VpcCapabilityError;
 use model::{ConfigValidationError, resource_pool};
 use tonic::Status;
 
@@ -81,6 +82,9 @@ pub enum CarbideError {
 
     #[error("Argument is invalid: {0}")]
     InvalidArgument(String),
+
+    #[error("Argument is invalid: {0}")]
+    VpcCapability(#[from] VpcCapabilityError),
 
     #[error(transparent)]
     AddressAlreadyInUse(#[from] AddressAlreadyInUseError),
@@ -238,8 +242,20 @@ pub enum CarbideError {
     #[error("Permission denied: {0}")]
     PermissionDeniedError(String),
 
+    #[error("{0}")]
+    AlreadyInProgress(String),
+
     #[error("Attestation Error: {0}")]
     AttestationError(String),
+}
+
+impl From<libnmxc::NmxcError> for CarbideError {
+    fn from(e: libnmxc::NmxcError) -> Self {
+        match e {
+            libnmxc::NmxcError::Status(s) => CarbideError::internal(s.to_string()),
+            other => CarbideError::internal(other.to_string()),
+        }
+    }
 }
 
 impl From<ModelError> for CarbideError {
@@ -369,6 +385,7 @@ impl From<CarbideError> for tonic::Status {
         match &from {
             e @ CarbideError::Internal { .. } => Status::internal(e.to_string()),
             CarbideError::InvalidArgument(msg) => Status::invalid_argument(msg),
+            error @ CarbideError::VpcCapability(_) => Status::invalid_argument(error.to_string()),
             CarbideError::InvalidConfiguration(e) => Status::invalid_argument(e.to_string()),
             CarbideError::RpcDataConversionError(e) => Status::invalid_argument(e.to_string()),
             e @ CarbideError::DhcpError(_) => Status::resource_exhausted(e.to_string()),
@@ -400,6 +417,7 @@ impl From<CarbideError> for tonic::Status {
             }
             CarbideError::UnavailableError(msg) => Status::unavailable(msg),
             CarbideError::PermissionDeniedError(msg) => Status::permission_denied(msg),
+            CarbideError::AlreadyInProgress(msg) => Status::already_exists(msg),
             other => Status::internal(other.to_string()),
         }
     }

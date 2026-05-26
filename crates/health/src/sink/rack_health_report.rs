@@ -35,6 +35,7 @@ struct RackHealthReportKey {
 
 pub struct RackHealthReportSink {
     queue: Arc<DedupQueue<RackHealthReportKey, Arc<HealthReport>>>,
+    skip_empty_reports: bool,
 }
 
 impl RackHealthReportSink {
@@ -89,7 +90,10 @@ impl RackHealthReportSink {
             });
         }
 
-        Ok(Self { queue })
+        Ok(Self {
+            queue,
+            skip_empty_reports: config.skip_empty_reports,
+        })
     }
 }
 
@@ -104,6 +108,14 @@ impl DataSink for RackHealthReportSink {
         };
 
         if report.target != Some(HealthReportTarget::Rack) {
+            return;
+        }
+
+        if self.skip_empty_reports && report.is_empty() {
+            tracing::debug!(
+                source = ?report.source,
+                "Skipping empty rack health report"
+            );
             return;
         }
 

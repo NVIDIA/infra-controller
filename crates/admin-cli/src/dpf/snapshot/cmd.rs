@@ -15,10 +15,10 @@
  * limitations under the License.
  */
 
-use ::rpc::admin_cli::{CarbideCliError, CarbideCliResult};
 use carbide_uuid::machine::MachineType;
 
 use crate::dpf::snapshot::args::SnapshotQuery;
+use crate::errors::{CarbideCliError, CarbideCliResult};
 use crate::rpc::ApiClient;
 
 pub async fn snapshot(query: &SnapshotQuery, api_client: &ApiClient) -> CarbideCliResult<()> {

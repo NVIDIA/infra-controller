@@ -120,6 +120,27 @@ cargo make format-nightly      # Also sort imports
 > `carbide-lints`. The stable toolchain pinned in `rust-toolchain.toml` is used
 > for everything else.
 
+### Top-level Makefile (rest-api entrypoint)
+
+A top-level [`Makefile`](Makefile) at the repo root provides a thin
+discoverable entrypoint for the `rest-api/` Go services. It just
+delegates to `rest-api/Makefile`.
+
+```bash
+make help                # default goal: list rest-* targets
+make rest-build          # build rest-api Go binaries
+make rest-test           # run rest-api unit tests
+make rest-lint           # lint rest-api
+make rest-fmt            # go fmt check on rest-api
+make rest-helm-lint      # helm lint rest charts
+make rest-docker-build-local
+make rest-kind-reset     # spin up the local kind dev cluster (~10 min)
+make rest-api/<target>   # pass any target through to rest-api/Makefile
+```
+
+Core (Rust) tasks are not in this Makefile; use cargo and `cargo make`
+directly as documented above.
+
 ## Coding Conventions
 
 See [`STYLE_GUIDE.md`](STYLE_GUIDE.md) for detailed Rust coding conventions.

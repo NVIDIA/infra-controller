@@ -27,8 +27,8 @@ use model::expected_machine::ExpectedMachineData;
 use model::machine::ManagedHostState;
 use model::machine::machine_search_config::MachineSearchConfig;
 use model::rack::{
-    ConfigureNmxClusterState, FirmwareUpgradeState, NvosUpdateState, Rack, RackConfig,
-    RackMaintenanceState, RackState, RackValidationState,
+    ConfigureNmxClusterState, FirmwareUpgradeState, Rack, RackConfig, RackMaintenanceState,
+    RackState, RackValidationState,
 };
 use rpc::forge::StateHistoryRecord;
 use rpc::forge::forge_server::Forge;
@@ -96,10 +96,8 @@ impl StateHandler for TestRackStateHandler {
             },
             RackState::Maintenance { maintenance_state } => match maintenance_state {
                 RackMaintenanceState::FirmwareUpgrade { .. } => RackState::Maintenance {
-                    maintenance_state: RackMaintenanceState::NVOSUpdate {
-                        nvos_update: NvosUpdateState::Start {
-                            rack_firmware_id: None,
-                        },
+                    maintenance_state: RackMaintenanceState::ConfigureNmxCluster {
+                        configure_nmx_cluster: ConfigureNmxClusterState::Start,
                     },
                 },
                 RackMaintenanceState::NVOSUpdate { .. } => RackState::Maintenance {
@@ -219,7 +217,7 @@ async fn test_can_retrieve_rack_state_history_with_real_handler(
 
     // Run the real handler through the controller.
     let rack_handler = Arc::new(RackStateHandler::default());
-    let handler_services = Arc::new(env.state_handler_services());
+    let handler_services = Arc::new(env.rack_state_handler_services());
     let cancel_token = CancellationToken::new();
     let mut controller = StateController::<RackStateControllerIO>::builder()
         .iteration_config(IterationConfig {
@@ -271,10 +269,11 @@ async fn test_can_retrieve_rack_state_history_with_real_handler(
     // Iterations 3-6: FirmwareUpgrade -> Completed.
     //
     // The default maintenance sequence is:
-    // FirmwareUpgrade -> NVOSUpdate -> ConfigureNmxCluster -> PowerSequence -> Completed.
-    controller.run_single_iteration().await; // FirmwareUpgrade(Start) -> NVOSUpdate(Start)
-    controller.run_single_iteration().await; // NVOSUpdate(Start) -> ConfigureNmxCluster
-    controller.run_single_iteration().await; // ConfigureNmxCluster -> PowerSequence
+    // FirmwareUpgrade -> ConfigureNmxCluster(Start)
+    // -> ConfigureNmxCluster(DisableScaleUpFabricState) -> PowerSequence -> Completed.
+    controller.run_single_iteration().await; // FirmwareUpgrade(Start) -> ConfigureNmxCluster(Start)
+    controller.run_single_iteration().await; // ConfigureNmxCluster(Start) -> DisableScaleUpFabricState
+    controller.run_single_iteration().await; // DisableScaleUpFabricState -> PowerSequence
     controller.run_single_iteration().await; // PowerSequence -> Completed
 
     let rack = get_db_rack(env.db_reader().as_mut(), &rack_id).await;
@@ -420,8 +419,8 @@ async fn test_can_retrieve_rack_state_history_with_real_handler(
     let expected = vec![
         "{\"state\": \"discovering\"}",
         "{\"state\": \"maintenance\", \"maintenance_state\": {\"FirmwareUpgrade\": {\"rack_firmware_upgrade\": \"Start\"}}}",
-        "{\"state\": \"maintenance\", \"maintenance_state\": {\"NVOSUpdate\": {\"nvos_update\": {\"Start\": {\"rack_firmware_id\": null}}}}}",
         "{\"state\": \"maintenance\", \"maintenance_state\": {\"ConfigureNmxCluster\": {\"configure_nmx_cluster\": \"Start\"}}}",
+        "{\"state\": \"maintenance\", \"maintenance_state\": {\"ConfigureNmxCluster\": {\"configure_nmx_cluster\": \"DisableScaleUpFabricState\"}}}",
         "{\"state\": \"maintenance\", \"maintenance_state\": {\"PowerSequence\": {\"rack_power\": \"PoweringOn\"}}}",
         "{\"state\": \"maintenance\", \"maintenance_state\": \"Completed\"}",
         "{\"state\": \"validating\", \"validating_state\": \"Pending\"}",
@@ -462,7 +461,7 @@ async fn test_error_state_does_nothing_with_controller(
     .await?;
 
     let rack_handler = Arc::new(RackStateHandler::default());
-    let handler_services = Arc::new(env.state_handler_services());
+    let handler_services = Arc::new(env.rack_state_handler_services());
     let cancel_token = CancellationToken::new();
     let mut controller = StateController::<RackStateControllerIO>::builder()
         .iteration_config(IterationConfig {
@@ -506,7 +505,7 @@ async fn test_rack_deletion_with_state_controller(
     let rack_handler = Arc::new(TestRackStateHandler::default());
     const ITERATION_TIME: Duration = Duration::from_millis(50);
 
-    let handler_services = Arc::new(env.state_handler_services());
+    let handler_services = Arc::new(env.rack_state_handler_services());
 
     let cancel_token = CancellationToken::new();
     let mut controller = StateController::<RackStateControllerIO>::builder()

@@ -312,7 +312,7 @@ pub(crate) async fn get_machine_attestations_status(
 
     Ok(Response::new(rpc::SpdmMachineAttestationStatusResponse {
         machine_id: Some(*machine_id),
-        attestation_status: attestation_status.into(),
+        attestation_status: rpc::SpdmAttestationStatus::from(attestation_status).into(),
     }))
 }
 
@@ -391,15 +391,14 @@ pub(crate) async fn attest_quote(
     // In this case, we're not doing anything with
     // the resulting report (at least not yet), so just
     // throw it away.
-    let report =
-        db::measured_boot::report::new(&mut txn, machine_id, pcr_values.into_inner().as_slice())
-            .await
-            .map_err(|e| CarbideError::Internal {
-                message: format!(
-                    "Failed storing measurement report: (machine_id: {}, err: {})",
-                    &machine_id, e
-                ),
-            })?;
+    let report = db::measured_boot::report::new(&mut txn, machine_id, &pcr_values.0)
+        .await
+        .map_err(|e| CarbideError::Internal {
+            message: format!(
+                "Failed storing measurement report: (machine_id: {}, err: {})",
+                &machine_id, e
+            ),
+        })?;
 
     // if the attestation was successful and enabled, we can now vend the certs
     // - get attestation result

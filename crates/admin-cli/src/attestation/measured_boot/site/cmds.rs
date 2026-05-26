@@ -21,10 +21,11 @@
 use std::fs::File;
 use std::io::BufReader;
 
-use ::rpc::admin_cli::{CarbideCliResult, ToTable, cli_output, set_summary};
+use ::rpc::measured_boot::FromGrpcOpt;
 use ::rpc::protos::measured_boot::ImportSiteMeasurementsRequest;
 use measured_boot::records::{MeasurementApprovedMachineRecord, MeasurementApprovedProfileRecord};
 use measured_boot::site::{ImportResult, SiteModel};
+use measured_boot::{ToTable, set_summary};
 use serde::Serialize;
 
 use crate::attestation::measured_boot::global;
@@ -33,6 +34,8 @@ use crate::attestation::measured_boot::site::args::{
     RemoveMachineByApprovalId, RemoveMachineByMachineId, RemoveProfile, RemoveProfileByApprovalId,
     RemoveProfileByProfileId, TrustedMachine, TrustedProfile,
 };
+use crate::cli_output;
+use crate::errors::CarbideCliResult;
 use crate::rpc::ApiClient;
 
 /// dispatch matches + dispatches the correct command
@@ -46,13 +49,13 @@ pub async fn dispatch(
             cli_output(
                 import(cli.grpc_conn, local_args).await?,
                 &cli.args.format,
-                ::rpc::admin_cli::Destination::Stdout(),
+                crate::Destination::Stdout(),
             )?;
         }
         CmdSite::Export(local_args) => {
-            let dest: ::rpc::admin_cli::Destination = match &local_args.path {
-                Some(path) => ::rpc::admin_cli::Destination::Path(path.clone()),
-                None => ::rpc::admin_cli::Destination::Stdout(),
+            let dest: crate::Destination = match &local_args.path {
+                Some(path) => crate::Destination::Path(path.clone()),
+                None => crate::Destination::Stdout(),
             };
             cli_output(
                 export(cli.grpc_conn, local_args).await?,
@@ -65,7 +68,7 @@ pub async fn dispatch(
                 cli_output(
                     approve_machine(cli.grpc_conn, local_args).await?,
                     &cli.args.format,
-                    ::rpc::admin_cli::Destination::Stdout(),
+                    crate::Destination::Stdout(),
                 )?;
             }
             TrustedMachine::Remove(selector) => match selector {
@@ -73,14 +76,14 @@ pub async fn dispatch(
                     cli_output(
                         remove_machine_by_approval_id(cli.grpc_conn, local_args).await?,
                         &cli.args.format,
-                        ::rpc::admin_cli::Destination::Stdout(),
+                        crate::Destination::Stdout(),
                     )?;
                 }
                 RemoveMachine::ByMachineId(local_args) => {
                     cli_output(
                         remove_machine_by_machine_id(cli.grpc_conn, local_args).await?,
                         &cli.args.format,
-                        ::rpc::admin_cli::Destination::Stdout(),
+                        crate::Destination::Stdout(),
                     )?;
                 }
             },
@@ -88,7 +91,7 @@ pub async fn dispatch(
                 cli_output(
                     list_machines(cli.grpc_conn).await?,
                     &cli.args.format,
-                    ::rpc::admin_cli::Destination::Stdout(),
+                    crate::Destination::Stdout(),
                 )?;
             }
         },
@@ -97,7 +100,7 @@ pub async fn dispatch(
                 cli_output(
                     approve_profile(cli.grpc_conn, local_args).await?,
                     &cli.args.format,
-                    ::rpc::admin_cli::Destination::Stdout(),
+                    crate::Destination::Stdout(),
                 )?;
             }
             TrustedProfile::Remove(selector) => match selector {
@@ -105,14 +108,14 @@ pub async fn dispatch(
                     cli_output(
                         remove_profile_by_approval_id(cli.grpc_conn, local_args).await?,
                         &cli.args.format,
-                        ::rpc::admin_cli::Destination::Stdout(),
+                        crate::Destination::Stdout(),
                     )?;
                 }
                 RemoveProfile::ByProfileId(local_args) => {
                     cli_output(
                         remove_profile_by_profile_id(cli.grpc_conn, local_args).await?,
                         &cli.args.format,
-                        ::rpc::admin_cli::Destination::Stdout(),
+                        crate::Destination::Stdout(),
                     )?;
                 }
             },
@@ -120,7 +123,7 @@ pub async fn dispatch(
                 cli_output(
                     list_profiles(cli.grpc_conn).await?,
                     &cli.args.format,
-                    ::rpc::admin_cli::Destination::Stdout(),
+                    crate::Destination::Stdout(),
                 )?;
             }
         },
@@ -136,10 +139,7 @@ pub async fn import(grpc_conn: &ApiClient, import: Import) -> CarbideCliResult<I
 
     // Request.
     let request = ImportSiteMeasurementsRequest {
-        model: Some(
-            SiteModel::to_pb(&site_model)
-                .map_err(|e| crate::CarbideCliError::GenericError(e.to_string()))?,
-        ),
+        model: Some(site_model.into()),
     };
 
     // Response + process and return.
@@ -158,7 +158,7 @@ pub async fn export(grpc_conn: &ApiClient, _export: Export) -> CarbideCliResult<
 
     let response = grpc_conn.0.export_site_measurements().await?;
 
-    SiteModel::from_grpc(response.model.as_ref())
+    SiteModel::from_grpc_opt(response.model)
         .map_err(|e| crate::CarbideCliError::GenericError(e.to_string()))
 }
 
@@ -169,7 +169,7 @@ pub async fn approve_machine(
 ) -> CarbideCliResult<MeasurementApprovedMachineRecord> {
     let response = grpc_conn.0.add_measurement_trusted_machine(approve).await?;
 
-    MeasurementApprovedMachineRecord::from_grpc(response.approval_record.as_ref())
+    MeasurementApprovedMachineRecord::from_grpc_opt(response.approval_record)
         .map_err(|e| crate::CarbideCliError::GenericError(e.to_string()))
 }
 
@@ -184,7 +184,7 @@ pub async fn remove_machine_by_approval_id(
         .remove_measurement_trusted_machine(by_approval_id)
         .await?;
 
-    MeasurementApprovedMachineRecord::from_grpc(response.approval_record.as_ref())
+    MeasurementApprovedMachineRecord::from_grpc_opt(response.approval_record)
         .map_err(|e| crate::CarbideCliError::GenericError(e.to_string()))
 }
 
@@ -199,7 +199,7 @@ pub async fn remove_machine_by_machine_id(
         .remove_measurement_trusted_machine(by_machine_id)
         .await?;
 
-    MeasurementApprovedMachineRecord::from_grpc(response.approval_record.as_ref())
+    MeasurementApprovedMachineRecord::from_grpc_opt(response.approval_record)
         .map_err(|e| crate::CarbideCliError::GenericError(e.to_string()))
 }
 
@@ -229,7 +229,7 @@ pub async fn approve_profile(
 ) -> CarbideCliResult<MeasurementApprovedProfileRecord> {
     let response = grpc_conn.0.add_measurement_trusted_profile(approve).await?;
 
-    MeasurementApprovedProfileRecord::from_grpc(response.approval_record.as_ref())
+    MeasurementApprovedProfileRecord::from_grpc_opt(response.approval_record)
         .map_err(|e| crate::CarbideCliError::GenericError(e.to_string()))
 }
 
@@ -244,7 +244,7 @@ pub async fn remove_profile_by_approval_id(
         .remove_measurement_trusted_profile(by_approval_id)
         .await?;
 
-    MeasurementApprovedProfileRecord::from_grpc(response.approval_record.as_ref())
+    MeasurementApprovedProfileRecord::from_grpc_opt(response.approval_record)
         .map_err(|e| crate::CarbideCliError::GenericError(e.to_string()))
 }
 
@@ -259,7 +259,7 @@ pub async fn remove_profile_by_profile_id(
         .remove_measurement_trusted_profile(by_profile_id)
         .await?;
 
-    MeasurementApprovedProfileRecord::from_grpc(response.approval_record.as_ref())
+    MeasurementApprovedProfileRecord::from_grpc_opt(response.approval_record)
         .map_err(|e| crate::CarbideCliError::GenericError(e.to_string()))
 }
 

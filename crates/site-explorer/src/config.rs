@@ -26,6 +26,7 @@ use carbide_utils::config::{
 };
 use chrono::Duration;
 use duration_str::{deserialize_duration, deserialize_duration_chrono};
+use model::expected_machine::DpuMode;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// SiteExplorer related configuration for hardware discovery and ingestion.
@@ -50,10 +51,14 @@ pub struct SiteExplorerConfig {
     /// Default is 5.
     #[serde(default = "SiteExplorerConfig::default_concurrent_explorations")]
     pub concurrent_explorations: u64,
-    /// How many nodes should be explored in a single run.
-    /// Default is 10.
-    /// This number divided by `concurrent_explorations` will determine how many
-    /// exploration batches are needed inside a run.
+    /// How many routine (non-requested) endpoints should be explored in a single run.
+    /// Default is 90.
+    /// This bounds only the background refresh work: previously unseen endpoints
+    /// and stale endpoints whose reports we want to update. Endpoints with the
+    /// `exploration_requested` flag set are always attempted, regardless of this
+    /// value, because operators rely on that flag for guaranteed next-tick attempts.
+    /// Parallelism for both routine and requested explorations is still bounded by
+    /// `concurrent_explorations`.
     /// If the value is set too high the site exploration will take a lot of time
     /// and the exploration report will be updated less frequent. Therefore it
     /// is recommended to reduce `run_interval` instead of increasing
@@ -61,7 +66,7 @@ pub struct SiteExplorerConfig {
     #[serde(default = "SiteExplorerConfig::default_explorations_per_run")]
     pub explorations_per_run: u64,
 
-    /// Whether SiteExplorer should create Managed Host state machine
+    /// When false, SiteExplorer skips creating ManagedHost state machines; the DPU agent (scout) must self-register via DiscoverMachine gRPC endpoint with create_machine=true
     #[serde(
         default = "SiteExplorerConfig::default_create_machines",
         deserialize_with = "deserialize_arc_atomic_bool",
@@ -181,6 +186,18 @@ pub struct SiteExplorerConfig {
         serialize_with = "serialize_arc_atomic_bool"
     )]
     pub force_dpu_nic_mode: Arc<AtomicBool>,
+    /// Site-wide default DPU operating mode. When set, applies to every
+    /// host that doesn't declare a per-host `ExpectedMachine.dpu_mode`
+    /// override (or that declares the default `DpuMode` variant, which is
+    /// indistinguishable from "unset"). Per-host `NicMode` / `NoDpu`
+    /// always overrides this. `None` means "no site default declared" and
+    /// resolution falls back to the legacy `force_dpu_nic_mode` flag.
+    ///
+    /// This setting is mirrored from the top-level `CarbideConfig.dpu_mode`
+    /// during config parsing so operators can set it once at the site
+    /// level without nesting under `[site_explorer]`.
+    #[serde(default)]
+    pub dpu_mode: Option<DpuMode>,
     /// Controls which Redfish client implementation is used
     /// for hardware discovery (LibRedfish, NvRedfish, or
     /// CompareResult for side-by-side validation).
@@ -212,6 +229,7 @@ impl Default for SiteExplorerConfig {
             switches_created_per_run: Self::default_switches_created_per_run(),
             rotate_switch_nvos_credentials: Self::default_rotate_switch_nvos_credentials(),
             force_dpu_nic_mode: Arc::new(false.into()),
+            dpu_mode: None,
             explore_mode: Self::default_explore_mode(),
         }
     }

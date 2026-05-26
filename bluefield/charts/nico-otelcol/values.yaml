@@ -9,12 +9,17 @@ exposedPorts:
   labels: {}
   ports: {}
 
+### Cert directory + root CA filename overrides.
+certsDir: /opt/forge
+rootCaFile: forge_root.pem
+
 ### Service specific values ###
 # Prometheus receiver port; must match DPUServiceConfiguration configPorts (dpf_services).
 prometheusPort: 9999
-# Host:port for prometheus/fmds scrape targets (see otel_config.yaml). DPF sets these via nico-api.
+# Host:port for prometheus scrape targets (see otel_config.yaml). DPF sets these via nico-api.
 nico_dpu_agent: ""
 nico_fmds: ""
+nico_dts: ""
 image:
   repository: ""
   pullPolicy: IfNotPresent
