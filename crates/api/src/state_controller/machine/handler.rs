@@ -95,15 +95,14 @@ use tokio::sync::Semaphore;
 use tracing::instrument;
 use version_compare::Cmp;
 
-use crate::CarbideError;
 use crate::cfg::file::{MachineValidationConfig, TimePeriod};
 use crate::dpf::DpfOperations;
-use crate::redfish::{
-    self, host_power_control, host_power_control_with_location, set_host_uefi_password,
-};
 use crate::state_controller::machine::config::{FirmwareGlobal, MachineStateHandlerSiteConfig};
 use crate::state_controller::machine::context::{
     MachineStateHandlerContextObjects, MachineStateHandlerServices,
+};
+use crate::state_controller::machine::redfish::{
+    did_dpu_finish_booting, host_power_control, host_power_control_with_location,
 };
 use crate::state_controller::machine::{
     MeasuringOutcome, get_measuring_prerequisites, handle_measuring_state,
@@ -3828,7 +3827,7 @@ impl DpuMachineStateHandler {
             false
         } else {
             let (has_dpu_finished_booting, dpu_boot_progress) =
-                redfish::did_dpu_finish_booting(dpu_redfish_client)
+                did_dpu_finish_booting(dpu_redfish_client)
                     .await
                     .map_err(|e| redfish_error("did_dpu_finish_booting", e))?;
 
@@ -4615,11 +4614,11 @@ async fn handle_host_uefi_setup(
             ))
         }
         UefiSetupState::SetUefiPassword => {
-            match set_host_uefi_password(
-                redfish_client.as_ref(),
-                ctx.services.redfish_client_pool.clone(),
-            )
-            .await
+            match ctx
+                .services
+                .redfish_client_pool
+                .uefi_setup(redfish_client.as_ref(), false)
+                .await
             {
                 Ok(job_id) => Ok(StateHandlerOutcome::transition(
                     ManagedHostState::HostInit {
@@ -9741,7 +9740,7 @@ async fn handle_instance_host_platform_config(
                             },
                         ));
                     }
-                    Err(CarbideError::RedfishError(RedfishError::NotSupported(_))) => {
+                    Err(RedfishError::NotSupported(_)) => {
                         // if not supported, just power on
                         tracing::info!("AC Powercycle not supported, skipping to power on");
                     }

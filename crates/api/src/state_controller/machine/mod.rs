@@ -35,6 +35,7 @@ pub mod context;
 pub mod handler;
 pub mod io;
 pub mod metrics;
+pub mod redfish;
 pub mod write_ops;
 
 /// Fields of span that should be logged for each message.
