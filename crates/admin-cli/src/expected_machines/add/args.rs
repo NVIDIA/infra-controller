@@ -140,7 +140,7 @@ pub struct Args {
         long = "dpu-mode",
         value_name = "DPU_MODE",
         value_enum,
-        help = "Per-host DPU operating mode. `dpu-mode` (default): DPUs are managed by NICo; `nic-mode`: DPU hardware present but treated as a plain NIC; `no-dpu`: no DPU hardware at all. Unset keeps the site default (site-wide `force_dpu_nic_mode` flag still applies when no per-host value is set)."
+        help = "Per-host DPU operating mode. `dpu-mode` (default): DPUs are managed by NICo; `nic-mode`: DPU hardware present but treated as a plain NIC; `no-dpu`: no DPU hardware at all. Unset defers to the site-wide `[site_explorer] dpu_mode` setting (which itself falls back to `dpu-mode` when not set)."
     )]
     pub dpu_mode: Option<DpuMode>,
 

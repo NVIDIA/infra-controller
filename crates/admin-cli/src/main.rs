@@ -21,7 +21,7 @@
 use std::fs::File;
 use std::io::Write;
 
-use ::rpc::admin_cli::{Destination, OutputFormat, ToTable};
+use ::rpc::admin_cli::OutputFormat;
 use ::rpc::forge_api_client::ForgeApiClient;
 use ::rpc::forge_tls_client::{ApiConfig, ForgeClientConfig};
 use cfg::cli_options::{CliCommand, CliOptions};
@@ -32,6 +32,7 @@ use forge_tls::client_config::{
     get_carbide_api_url, get_client_cert_info, get_config_from_file, get_forge_root_ca_path,
     get_proxy_info,
 };
+use measured_boot::ToTable;
 use serde::Serialize;
 use tracing_subscriber::filter::{EnvFilter, LevelFilter};
 use tracing_subscriber::fmt;
@@ -92,7 +93,6 @@ mod os_image;
 mod ping;
 mod power_shelf;
 mod rack;
-mod rack_firmware;
 mod redfish;
 mod resource_pool;
 mod rms;
@@ -271,7 +271,6 @@ async fn main() -> color_eyre::Result<()> {
         CliCommand::Vpc(cmd) => cmd.dispatch(ctx).await?,
         CliCommand::VpcPeering(cmd) => cmd.dispatch(ctx).await?,
         CliCommand::VpcPrefix(cmd) => cmd.dispatch(ctx).await?,
-        CliCommand::RackFirmware(cmd) => cmd.dispatch(ctx).await?,
         CliCommand::Dpf(cmd) => cmd.dispatch(ctx).await?,
         CliCommand::Redfish(action) => {
             if let redfish::Cmd::Browse(redfish::UriInfo { uri }) = &action.command {
@@ -317,6 +316,13 @@ impl<T> IntoOnlyOne<T> for Vec<T> {
         };
         Ok(first)
     }
+}
+
+/// Destination is an enum used to determine whether CLI output is going
+/// to a file path or stdout.
+pub enum Destination {
+    Path(String),
+    Stdout(),
 }
 
 /// cli_output is the generic function implementation used by the OutputResult

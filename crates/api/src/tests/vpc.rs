@@ -56,8 +56,9 @@ async fn create_vpc_for_tenant_without_profile(
         .tenant
         .unwrap();
 
-    // Try to request a VPC without sending a valid tenant org.
-    // This should fail.
+    // Try to request a VPC without sending a valid tenant org. Routing-
+    // profile validation lives behind the FNN-only path, so the request
+    // has to be an FNN VPC to exercise the "no tenant" branch.
     assert!(
         env.api
             .create_vpc(
@@ -66,6 +67,7 @@ async fn create_vpc_for_tenant_without_profile(
                         name: "Forge".to_string(),
                         ..Default::default()
                     })
+                    .network_virtualization_type(rpc::forge::VpcVirtualizationType::Fnn as i32)
                     .routing_profile_type("PRIVILEGED_INTERNAL".to_string())
                     .tonic_request(),
             )
@@ -84,6 +86,7 @@ async fn create_vpc_for_tenant_without_profile(
                         name: "Forge".to_string(),
                         ..Default::default()
                     })
+                    .network_virtualization_type(rpc::forge::VpcVirtualizationType::Fnn as i32)
                     .routing_profile_type("PRIVILEGED_INTERNAL".to_string())
                     .tonic_request(),
             )
@@ -121,6 +124,7 @@ async fn create_vpc(pool: sqlx::PgPool) -> Result<(), Box<dyn std::error::Error>
                         tenant_leak_communities_accepted: false,
                         access_tier: 1,
                         accepted_leaks_from_underlay: vec![],
+                        allowed_anycast_prefixes: vec![],
                     },
                 ),
                 (
@@ -134,6 +138,7 @@ async fn create_vpc(pool: sqlx::PgPool) -> Result<(), Box<dyn std::error::Error>
                         tenant_leak_communities_accepted: false,
                         access_tier: 0,
                         accepted_leaks_from_underlay: vec![],
+                        allowed_anycast_prefixes: vec![],
                     },
                 ),
             ]),
@@ -216,8 +221,10 @@ async fn create_vpc(pool: sqlx::PgPool) -> Result<(), Box<dyn std::error::Error>
         .tenant
         .unwrap();
 
-    // Try to request a broader routing profile for the VPC.
-    // This should fail.
+    // Try to request a broader routing profile for the VPC. Access-tier
+    // broadening checks live behind the routing-profile path, which is
+    // FNN-only -- the request has to be an FNN VPC to even reach that
+    // validation. This should fail.
     assert!(
         env.api
             .create_vpc(
@@ -226,6 +233,7 @@ async fn create_vpc(pool: sqlx::PgPool) -> Result<(), Box<dyn std::error::Error>
                         name: "Forge".to_string(),
                         ..Default::default()
                     })
+                    .network_virtualization_type(rpc::forge::VpcVirtualizationType::Fnn as i32)
                     .routing_profile_type("PRIVILEGED_INTERNAL".to_string())
                     .tonic_request(),
             )
@@ -555,7 +563,10 @@ async fn create_vpc_without_fnn_rejects_explicit_routing_profile(
         txn.commit().await?;
     };
 
-    // Requesting a VPC routing profile without FNN should fail early.
+    // Requesting a VPC routing profile on a non-FNN VPC type (default
+    // is ETV) should fail early at the API gate. The REST API enforces
+    // this upstream; carbide-core enforces it as defense-in-depth via
+    // `ensure_supports_routing_profiles`.
     assert!(
         env.api
             .create_vpc(
@@ -570,7 +581,7 @@ async fn create_vpc_without_fnn_rejects_explicit_routing_profile(
             .await
             .unwrap_err()
             .message()
-            .contains("FNN configuration required to request routing-profile for VPCs")
+            .contains("do not support routing profiles")
     );
 
     Ok(())
@@ -864,6 +875,107 @@ async fn create_admin_vpc(pool: sqlx::PgPool) -> Result<(), eyre::Report> {
 }
 
 #[crate::sqlx_test]
+async fn create_admin_vpc_updates_existing_admin_vpc_vni(
+    pool: sqlx::PgPool,
+) -> Result<(), eyre::Report> {
+    let env = create_test_env(pool).await;
+    let initial_vni = 10000;
+    let updated_vni = 10001;
+
+    // Create the initial admin VPC and verify the admin segments attach to it.
+    db_init::create_admin_vpc(&env.pool, Some(initial_vni)).await?;
+    let mut txn = env.pool.begin().await?;
+    let mut initial_admin_vpcs = db::vpc::find_by_vni(&mut txn, initial_vni as i32).await?;
+    assert_eq!(initial_admin_vpcs.len(), 1);
+    let initial_admin_vpc = initial_admin_vpcs.remove(0);
+    for admin_segment in db::network_segment::admin(&mut txn).await? {
+        assert_eq!(Some(initial_admin_vpc.id), admin_segment.config.vpc_id);
+    }
+    txn.commit().await?;
+
+    // Change the configured VNI and run startup reconciliation again.
+    db_init::create_admin_vpc(&env.pool, Some(updated_vni)).await?;
+
+    // Fetch from the DB to verify the existing admin VPC was updated in place.
+    let mut txn = env.pool.begin().await?;
+    let mut updated_admin_vpcs = db::vpc::find_by_vni(&mut txn, updated_vni as i32).await?;
+    assert_eq!(updated_admin_vpcs.len(), 1);
+    let updated_admin_vpc = updated_admin_vpcs.remove(0);
+    assert_eq!(updated_admin_vpc.id, initial_admin_vpc.id);
+    assert_eq!(updated_admin_vpc.vni, Some(updated_vni as i32));
+    assert_eq!(
+        updated_admin_vpc
+            .status
+            .as_ref()
+            .and_then(|status| status.vni),
+        Some(updated_vni as i32)
+    );
+    assert!(
+        db::vpc::find_by_vni(&mut txn, initial_vni as i32)
+            .await?
+            .is_empty()
+    );
+
+    // Verify reconciliation did not create a duplicate admin VPC row.
+    let admin_vpcs = db::vpc::find_by_name(&env.pool, "admin").await?;
+    assert_eq!(admin_vpcs.len(), 1);
+
+    // Verify every admin segment still points at the same reconciled VPC.
+    for admin_segment in db::network_segment::admin(&mut txn).await? {
+        assert_eq!(Some(updated_admin_vpc.id), admin_segment.config.vpc_id);
+    }
+
+    Ok(())
+}
+
+#[crate::sqlx_test]
+async fn create_admin_vpc_rejects_existing_tenant_vpc_vni(
+    pool: sqlx::PgPool,
+) -> Result<(), eyre::Report> {
+    let env = create_test_env(pool).await;
+    let vni = 60001;
+
+    // Create a tenant VPC with the same VNI before the admin VPC is seeded.
+    let tenant_vpc = env
+        .api
+        .create_vpc(
+            VpcCreationRequest::builder("tenant-admin-vni-conflict")
+                .vni(vni)
+                .metadata(rpc::forge::Metadata {
+                    name: "tenant-admin-vni-conflict".to_string(),
+                    ..Default::default()
+                })
+                .tonic_request(),
+        )
+        .await?
+        .into_inner();
+
+    // Verify the VNI actually persisted before running admin reconciliation.
+    let mut txn = env.pool.begin().await?;
+    let mut tenant_vpcs = db::vpc::find_by_vni(&mut txn, vni as i32).await?;
+    assert_eq!(tenant_vpcs.len(), 1);
+    assert_eq!(tenant_vpcs.remove(0).id, tenant_vpc.id.unwrap());
+    txn.commit().await?;
+
+    // Seeding the admin VPC must fail instead of adopting the tenant VPC.
+    let err = db_init::create_admin_vpc(&env.pool, Some(vni))
+        .await
+        .expect_err("admin VPC seeding should reject an already-used tenant VNI");
+    assert!(
+        err.to_string()
+            .contains("but no admin VPC is attached to admin network segments")
+    );
+
+    // Verify the admin segments remain unattached after the rejected seed.
+    let mut txn = env.pool.begin().await?;
+    for admin_segment in db::network_segment::admin(&mut txn).await? {
+        assert!(admin_segment.config.vpc_id.is_none());
+    }
+
+    Ok(())
+}
+
+#[crate::sqlx_test]
 async fn create_update_network_security_group_for_vpc(
     pool: sqlx::PgPool,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -1056,6 +1168,107 @@ async fn test_increment_vpc_version_detects_concurrent_writes(
         final_version_nr - initial_version_nr,
         1,
         "exactly one increment should have happened after the race"
+    );
+
+    Ok(())
+}
+
+#[crate::sqlx_test]
+async fn create_flat_vpc_succeeds_without_routing_profile(
+    pool: sqlx::PgPool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Flat VPCs are for zero-DPU hosts and don't have a Carbide-managed
+    // routing layer. The create handler should skip the FNN-flavored
+    // routing-profile validation entirely and still allocate a VNI.
+    let env = create_test_env(pool).await;
+
+    let tenant = env
+        .api
+        .create_tenant(tonic::Request::new(rpc::forge::CreateTenantRequest {
+            organization_id: "flat-tenant".to_string(),
+            routing_profile_type: None,
+            metadata: Some(rpc::forge::Metadata {
+                name: "flat-tenant".to_string(),
+                description: "".to_string(),
+                labels: vec![],
+            }),
+        }))
+        .await?
+        .into_inner()
+        .tenant
+        .unwrap();
+
+    let vpc = env
+        .api
+        .create_vpc(
+            VpcCreationRequest::builder(tenant.organization_id.clone())
+                .network_virtualization_type(rpc::forge::VpcVirtualizationType::Flat as i32)
+                .metadata(rpc::forge::Metadata {
+                    name: "flat".to_string(),
+                    ..Default::default()
+                })
+                .tonic_request(),
+        )
+        .await?
+        .into_inner();
+
+    assert_eq!(
+        vpc.network_virtualization_type,
+        Some(rpc::forge::VpcVirtualizationType::Flat as i32),
+    );
+    assert!(vpc.routing_profile_type.is_none());
+    assert!(
+        vpc.status.as_ref().and_then(|s| s.vni).is_some(),
+        "Flat VPCs still allocate a VNI for pluggable SDN hooks (e.g. switch-side VTEPs)",
+    );
+
+    Ok(())
+}
+
+#[crate::sqlx_test]
+async fn create_flat_vpc_rejects_routing_profile_type(
+    pool: sqlx::PgPool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Routing profile types are FNN-specific. Sending one on a Flat VPC
+    // create is contradictory and should be rejected up front.
+    let env = create_test_env(pool).await;
+
+    let tenant = env
+        .api
+        .create_tenant(tonic::Request::new(rpc::forge::CreateTenantRequest {
+            organization_id: "flat-tenant".to_string(),
+            routing_profile_type: None,
+            metadata: Some(rpc::forge::Metadata {
+                name: "flat-tenant".to_string(),
+                description: "".to_string(),
+                labels: vec![],
+            }),
+        }))
+        .await?
+        .into_inner()
+        .tenant
+        .unwrap();
+
+    let err = env
+        .api
+        .create_vpc(
+            VpcCreationRequest::builder(tenant.organization_id)
+                .network_virtualization_type(rpc::forge::VpcVirtualizationType::Flat as i32)
+                .routing_profile_type("EXTERNAL".to_string())
+                .metadata(rpc::forge::Metadata {
+                    name: "flat".to_string(),
+                    ..Default::default()
+                })
+                .tonic_request(),
+        )
+        .await
+        .expect_err("Flat VPC + routing_profile_type must be rejected");
+
+    assert_eq!(err.code(), tonic::Code::InvalidArgument, "got: {err}");
+    assert!(
+        err.message().contains("flat") && err.message().contains("routing_profile_type"),
+        "error should mention flat VPC and the routing_profile_type field, got: {}",
+        err.message()
     );
 
     Ok(())

@@ -18,8 +18,9 @@
 //!
 //! `measurement report` subcommand dispatcher + backing functions.
 
-use ::rpc::admin_cli::ToTable;
+use ::rpc::measured_boot::FromGrpcOpt;
 use ::rpc::protos::measured_boot::ListMeasurementReportRequest;
+use measured_boot::ToTable;
 use measured_boot::bundle::MeasurementBundle;
 use measured_boot::records::MeasurementReportRecord;
 use measured_boot::report::MeasurementReport;
@@ -45,28 +46,28 @@ pub async fn dispatch(
             cli_output(
                 create_for_id(cli.grpc_conn, local_args).await?,
                 &cli.args.format,
-                ::rpc::admin_cli::Destination::Stdout(),
+                crate::Destination::Stdout(),
             )?;
         }
         CmdReport::Delete(local_args) => {
             cli_output(
                 delete(cli.grpc_conn, local_args).await?,
                 &cli.args.format,
-                ::rpc::admin_cli::Destination::Stdout(),
+                crate::Destination::Stdout(),
             )?;
         }
         CmdReport::Promote(local_args) => {
             cli_output(
                 promote(cli.grpc_conn, local_args).await?,
                 &cli.args.format,
-                ::rpc::admin_cli::Destination::Stdout(),
+                crate::Destination::Stdout(),
             )?;
         }
         CmdReport::Revoke(local_args) => {
             cli_output(
                 revoke(cli.grpc_conn, local_args).await?,
                 &cli.args.format,
-                ::rpc::admin_cli::Destination::Stdout(),
+                crate::Destination::Stdout(),
             )?;
         }
         CmdReport::Show(selector) => match selector {
@@ -74,20 +75,20 @@ pub async fn dispatch(
                 cli_output(
                     show_for_id(cli.grpc_conn, local_args).await?,
                     &cli.args.format,
-                    ::rpc::admin_cli::Destination::Stdout(),
+                    crate::Destination::Stdout(),
                 )?;
             }
             ShowFor::Machine(local_args) => {
                 cli_output(
                     show_for_machine(cli.grpc_conn, local_args).await?,
                     &cli.args.format,
-                    ::rpc::admin_cli::Destination::Stdout(),
+                    crate::Destination::Stdout(),
                 )?;
             }
             ShowFor::All => cli_output(
                 show_all(cli.grpc_conn).await?,
                 &cli.args.format,
-                ::rpc::admin_cli::Destination::Stdout(),
+                crate::Destination::Stdout(),
             )?,
         },
         CmdReport::List(selector) => match selector {
@@ -95,14 +96,14 @@ pub async fn dispatch(
                 cli_output(
                     list_machines(cli.grpc_conn, local_args).await?,
                     &cli.args.format,
-                    ::rpc::admin_cli::Destination::Stdout(),
+                    crate::Destination::Stdout(),
                 )?;
             }
             List::All(_) => {
                 cli_output(
                     list_all(cli.grpc_conn).await?,
                     &cli.args.format,
-                    ::rpc::admin_cli::Destination::Stdout(),
+                    crate::Destination::Stdout(),
                 )?;
             }
         },
@@ -110,7 +111,7 @@ pub async fn dispatch(
             cli_output(
                 match_values(cli.grpc_conn, local_args).await?,
                 &cli.args.format,
-                ::rpc::admin_cli::Destination::Stdout(),
+                crate::Destination::Stdout(),
             )?;
         }
     }
@@ -124,7 +125,7 @@ pub async fn create_for_id(
 ) -> CarbideCliResult<MeasurementReport> {
     let response = grpc_conn.0.create_measurement_report(create).await?;
 
-    MeasurementReport::from_grpc(response.report.as_ref())
+    MeasurementReport::from_grpc_opt(response.report)
         .map_err(|e| crate::CarbideCliError::GenericError(e.to_string()))
 }
 
@@ -132,7 +133,7 @@ pub async fn create_for_id(
 pub async fn delete(grpc_conn: &ApiClient, delete: Delete) -> CarbideCliResult<MeasurementReport> {
     let response = grpc_conn.0.delete_measurement_report(delete).await?;
 
-    MeasurementReport::from_grpc(response.report.as_ref())
+    MeasurementReport::from_grpc_opt(response.report)
         .map_err(|e| crate::CarbideCliError::GenericError(e.to_string()))
 }
 
@@ -145,7 +146,7 @@ pub async fn promote(
 ) -> CarbideCliResult<MeasurementBundle> {
     let response = grpc_conn.0.promote_measurement_report(promote).await?;
 
-    MeasurementBundle::from_grpc(response.bundle.as_ref())
+    MeasurementBundle::from_grpc_opt(response.bundle)
         .map_err(|e| crate::CarbideCliError::GenericError(e.to_string()))
 }
 
@@ -157,7 +158,7 @@ pub async fn promote(
 pub async fn revoke(grpc_conn: &ApiClient, revoke: Revoke) -> CarbideCliResult<MeasurementBundle> {
     let response = grpc_conn.0.revoke_measurement_report(revoke).await?;
 
-    MeasurementBundle::from_grpc(response.bundle.as_ref())
+    MeasurementBundle::from_grpc_opt(response.bundle)
         .map_err(|e| crate::CarbideCliError::GenericError(e.to_string()))
 }
 
@@ -171,7 +172,7 @@ pub async fn show_for_id(
         .show_measurement_report_for_id(show_for_id)
         .await?;
 
-    MeasurementReport::from_grpc(response.report.as_ref())
+    MeasurementReport::from_grpc_opt(response.report)
         .map_err(|e| crate::CarbideCliError::GenericError(e.to_string()))
 }
 

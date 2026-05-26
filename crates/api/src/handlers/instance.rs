@@ -19,6 +19,7 @@ use std::str::FromStr;
 
 use ::rpc::errors::RpcDataConversionError;
 use ::rpc::forge::{self as rpc, AdminForceDeleteMachineResponse};
+use ::rpc::model::RpcTryFrom;
 use carbide_redfish::libredfish::RedfishAuth;
 use carbide_uuid::infiniband::IBPartitionId;
 use carbide_uuid::instance::InstanceId;
@@ -282,7 +283,7 @@ pub(crate) async fn find_by_machine_id(
     };
 
     let maybe_instance =
-        Option::<rpc::Instance>::try_from(mh_snapshot).map_err(CarbideError::from)?;
+        Option::<rpc::Instance>::rpc_try_from(mh_snapshot).map_err(CarbideError::from)?;
 
     let instances = if let Some(instance) = maybe_instance {
         vec![instance]
@@ -329,7 +330,7 @@ fn create_tenant_reported_issue_override(
 /// Creates a RequestRepair health override template
 fn create_request_repair_override(issue: &rpc::Issue) -> HealthReport {
     HealthReport {
-        source: "repair-request".to_string(),
+        source: health_report::REPAIR_REQUEST_MERGE_SOURCE.to_string(),
         observed_at: Some(chrono::Utc::now()),
         alerts: vec![HealthProbeAlert {
             id: HealthProbeId::from_str("RequestRepair")
@@ -442,7 +443,10 @@ async fn handle_instance_release_from_repair_tenant(
     machine: &model::machine::Machine,
     tenant_organization_id: &str,
 ) -> Result<(), CarbideError> {
-    let has_request_repair = machine.health_reports.merges.contains_key("repair-request");
+    let has_request_repair = machine
+        .health_reports
+        .merges
+        .contains_key(health_report::REPAIR_REQUEST_MERGE_SOURCE);
 
     if !has_request_repair {
         // No existing RequestRepair override
@@ -488,7 +492,7 @@ async fn handle_instance_release_from_repair_tenant(
         remove_health_override(
             txn,
             machine_id,
-            "repair-request",
+            health_report::REPAIR_REQUEST_MERGE_SOURCE,
             "RequestRepair removed - repair completed successfully",
         )
         .await?;
@@ -529,7 +533,7 @@ async fn handle_instance_release_from_repair_tenant(
         remove_health_override(
             txn,
             machine_id,
-            "repair-request",
+            health_report::REPAIR_REQUEST_MERGE_SOURCE,
             "RequestRepair removed for incomplete repair",
         )
         .await?;
@@ -1536,7 +1540,7 @@ fn snapshot_to_instance(
     mh_snapshot: ManagedHostStateSnapshot,
 ) -> Result<rpc::Instance, CarbideError> {
     let machine_id = mh_snapshot.host_snapshot.id;
-    Option::<rpc::Instance>::try_from(mh_snapshot)
+    Option::<rpc::Instance>::rpc_try_from(mh_snapshot)
         .map_err(CarbideError::from)?
         .ok_or_else(|| {
             CarbideError::internal(format!(

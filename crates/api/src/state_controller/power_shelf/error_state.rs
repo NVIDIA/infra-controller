@@ -19,27 +19,43 @@
 
 use carbide_uuid::power_shelf::PowerShelfId;
 use model::power_shelf::{PowerShelf, PowerShelfControllerState};
-
-use crate::state_controller::power_shelf::context::PowerShelfStateHandlerContextObjects;
-use crate::state_controller::state_handler::{
+use state_controller::state_handler::{
     StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
 
+use crate::state_controller::power_shelf::context::PowerShelfStateHandlerContextObjects;
+
 /// Handles the Error state for a power shelf.
 ///
-/// If marked for deletion, transition to `Deleting`; otherwise hold the
-/// shelf in `Error` for manual intervention.
+/// Deletion takes precedence over a pending maintenance request so a stale
+/// request cannot block deletion.
 pub async fn handle_error(
     power_shelf_id: &PowerShelfId,
     state: &mut PowerShelf,
     _ctx: &mut StateHandlerContext<'_, PowerShelfStateHandlerContextObjects>,
 ) -> Result<StateHandlerOutcome<PowerShelfControllerState>, StateHandlerError> {
-    tracing::info!("PowerShelf {} is in error state", power_shelf_id);
     if state.is_marked_as_deleted() {
-        Ok(StateHandlerOutcome::transition(
+        tracing::info!(
+            power_shelf_id = %power_shelf_id,
+            "PowerShelf in Error is marked for deletion; transitioning to Deleting"
+        );
+        return Ok(StateHandlerOutcome::transition(
             PowerShelfControllerState::Deleting,
-        ))
-    } else {
-        Ok(StateHandlerOutcome::do_nothing())
+        ));
     }
+
+    if let Some(req) = state.power_shelf_maintenance_requested.as_ref() {
+        tracing::info!(
+            operation = ?req.operation,
+            initiator = %req.initiator,
+            "PowerShelf maintenance requested from Error; transitioning to Maintenance"
+        );
+        return Ok(StateHandlerOutcome::transition(
+            PowerShelfControllerState::Maintenance {
+                operation: req.operation,
+            },
+        ));
+    }
+
+    Ok(StateHandlerOutcome::do_nothing())
 }

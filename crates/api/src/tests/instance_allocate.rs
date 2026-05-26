@@ -126,6 +126,16 @@ async fn create_test_env_for_instance_allocation(
         .unwrap()
         .into_inner();
 
+    // HostInband segments now require Flat VPCs. Create two so that the
+    // "different VPCs" test variant can put each HostInband segment in a
+    // distinct Flat VPC.
+    let flat_vpc_1_id =
+        common::api_fixtures::network_segment::create_default_flat_vpc(&env.api, "test flat vpc 1")
+            .await;
+    let flat_vpc_2_id =
+        common::api_fixtures::network_segment::create_default_flat_vpc(&env.api, "test flat vpc 2")
+            .await;
+
     create_underlay_network_segment(&env.api).await;
     create_admin_network_segment(&env.api).await;
 
@@ -147,8 +157,9 @@ async fn create_test_env_for_instance_allocation(
     )
     .await;
 
-    create_host_inband_network_segment(&env.api, vpc_1.id).await;
-    // Make sure second host_inband network segment has the same VPC ID
+    create_host_inband_network_segment(&env.api, Some(flat_vpc_1_id)).await;
+    // Second HostInband segment lives in the same Flat VPC, or a different
+    // Flat VPC if the test wants to assert allocation rejection.
     create_network_segment(
         &env.api,
         "HOST_INBAND_2",
@@ -161,12 +172,11 @@ async fn create_test_env_for_instance_allocation(
             .ip()
             .to_string(),
         forge::NetworkSegmentType::HostInband,
-        // One test asserts that allocation should fail if each segment is in a different VPC
-        if options.host_inband_segments_in_different_vpcs {
-            vpc_2.id
+        Some(if options.host_inband_segments_in_different_vpcs {
+            flat_vpc_2_id
         } else {
-            vpc_1.id
-        },
+            flat_vpc_1_id
+        }),
         true,
     )
     .await;
@@ -216,7 +226,6 @@ async fn test_zero_dpu_instance_allocation_rejects_explicit_interfaces(
                     variant: Some(forge::instance_operating_system_config::Variant::Ipxe(
                         forge::InlineIpxe {
                             ipxe_script: "exit".to_string(),
-                            user_data: None,
                         },
                     )),
                 }),
@@ -292,7 +301,6 @@ async fn test_zero_dpu_instance_allocation_auto(
                     variant: Some(forge::instance_operating_system_config::Variant::Ipxe(
                         forge::InlineIpxe {
                             ipxe_script: "exit".to_string(),
-                            user_data: None,
                         },
                     )),
                 }),
@@ -387,7 +395,6 @@ async fn test_zero_dpu_instance_allocation_rejects_missing_auto(
                     variant: Some(forge::instance_operating_system_config::Variant::Ipxe(
                         forge::InlineIpxe {
                             ipxe_script: "exit".to_string(),
-                            user_data: None,
                         },
                     )),
                 }),
@@ -475,7 +482,6 @@ async fn test_zero_dpu_instance_allocation_auto_multi_segment(
                     variant: Some(forge::instance_operating_system_config::Variant::Ipxe(
                         forge::InlineIpxe {
                             ipxe_script: "exit".to_string(),
-                            user_data: None,
                         },
                     )),
                 }),
@@ -621,7 +627,6 @@ async fn test_reject_single_dpu_instance_allocation_no_network_config(
                     variant: Some(forge::instance_operating_system_config::Variant::Ipxe(
                         forge::InlineIpxe {
                             ipxe_script: "exit".to_string(),
-                            user_data: None,
                         },
                     )),
                 }),
@@ -681,7 +686,6 @@ async fn test_reject_single_dpu_instance_allocation_host_inband_network_config(
                     variant: Some(forge::instance_operating_system_config::Variant::Ipxe(
                         forge::InlineIpxe {
                             ipxe_script: "exit".to_string(),
-                            user_data: None,
                         },
                     )),
                 }),
@@ -711,7 +715,16 @@ async fn test_reject_single_dpu_instance_allocation_host_inband_network_config(
     .await;
 
     match result {
-        Err(e) if e.code() == tonic::Code::InvalidArgument => {}
+        // The rejection can come from two distinct gates:
+        //   - InvalidArgument from segment-type rules
+        //   - FailedPrecondition from the DPU-host-vs-Flat-VPC gate
+        // Both are valid rejections of "DPU host instance referencing a
+        // HostInband segment"; the test only cares that allocation fails.
+        Err(e)
+            if matches!(
+                e.code(),
+                tonic::Code::InvalidArgument | tonic::Code::FailedPrecondition
+            ) => {}
         _ => panic!(
             "Creating an instance on a dpu host while specifying a host_inband network segment should throw an error, got {result:?}"
         ),
@@ -832,7 +845,6 @@ async fn test_reject_zero_dpu_instance_allocation_multiple_vpcs(
                     variant: Some(forge::instance_operating_system_config::Variant::Ipxe(
                         forge::InlineIpxe {
                             ipxe_script: "exit".to_string(),
-                            user_data: None,
                         },
                     )),
                 }),
@@ -892,7 +904,6 @@ async fn test_single_dpu_instance_allocation(
                     variant: Some(forge::instance_operating_system_config::Variant::Ipxe(
                         forge::InlineIpxe {
                             ipxe_script: "exit".to_string(),
-                            user_data: None,
                         },
                     )),
                 }),
@@ -1038,7 +1049,6 @@ async fn test_reject_zero_dpu_instance_with_tenant_network_segment(
                     variant: Some(forge::instance_operating_system_config::Variant::Ipxe(
                         forge::InlineIpxe {
                             ipxe_script: "exit".to_string(),
-                            user_data: None,
                         },
                     )),
                 }),
@@ -1117,7 +1127,6 @@ async fn test_zero_dpu_instance_surfaces_underlay_ip_in_status(
                     variant: Some(forge::instance_operating_system_config::Variant::Ipxe(
                         forge::InlineIpxe {
                             ipxe_script: "exit".to_string(),
-                            user_data: None,
                         },
                     )),
                 }),
@@ -1245,7 +1254,6 @@ async fn test_reject_zero_dpu_instance_with_extension_services(
                     variant: Some(forge::instance_operating_system_config::Variant::Ipxe(
                         forge::InlineIpxe {
                             ipxe_script: "exit".to_string(),
-                            user_data: None,
                         },
                     )),
                 }),
@@ -1309,7 +1317,6 @@ async fn test_instance_allocation_rejects_auto_with_explicit_interfaces(
                     variant: Some(forge::instance_operating_system_config::Variant::Ipxe(
                         forge::InlineIpxe {
                             ipxe_script: "exit".to_string(),
-                            user_data: None,
                         },
                     )),
                 }),
@@ -1381,7 +1388,6 @@ async fn test_instance_allocation_rejects_auto_on_dpu_host(
                     variant: Some(forge::instance_operating_system_config::Variant::Ipxe(
                         forge::InlineIpxe {
                             ipxe_script: "exit".to_string(),
-                            user_data: None,
                         },
                     )),
                 }),

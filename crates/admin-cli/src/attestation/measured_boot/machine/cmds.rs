@@ -18,8 +18,9 @@
 //!
 //! `measurement mock-machine` subcommand dispatcher + backing functions.
 
-use ::rpc::admin_cli::ToTable;
+use ::rpc::measured_boot::FromGrpcOpt;
 use ::rpc::protos::measured_boot::ShowCandidateMachineRequest;
+use measured_boot::ToTable;
 use measured_boot::machine::CandidateMachine;
 use measured_boot::records::CandidateMachineSummary;
 use measured_boot::report::MeasurementReport;
@@ -42,7 +43,7 @@ pub async fn dispatch(
             cli_output(
                 attest(cli.grpc_conn, local_args).await?,
                 &cli.args.format,
-                ::rpc::admin_cli::Destination::Stdout(),
+                crate::Destination::Stdout(),
             )?;
         }
         CmdMachine::Show(local_args) => {
@@ -50,13 +51,13 @@ pub async fn dispatch(
                 cli_output(
                     show_by_id(cli.grpc_conn, local_args).await?,
                     &cli.args.format,
-                    ::rpc::admin_cli::Destination::Stdout(),
+                    crate::Destination::Stdout(),
                 )?;
             } else {
                 cli_output(
                     show_all(cli.grpc_conn, local_args).await?,
                     &cli.args.format,
-                    ::rpc::admin_cli::Destination::Stdout(),
+                    crate::Destination::Stdout(),
                 )?;
             }
         }
@@ -64,7 +65,7 @@ pub async fn dispatch(
             cli_output(
                 list(cli.grpc_conn).await?,
                 &cli.args.format,
-                ::rpc::admin_cli::Destination::Stdout(),
+                crate::Destination::Stdout(),
             )?;
         }
     }
@@ -76,7 +77,7 @@ pub async fn dispatch(
 pub async fn attest(grpc_conn: &ApiClient, attest: Attest) -> CarbideCliResult<MeasurementReport> {
     let response = grpc_conn.0.attest_candidate_machine(attest).await?;
 
-    MeasurementReport::from_grpc(response.report.as_ref())
+    MeasurementReport::from_grpc_opt(response.report)
         .map_err(|e| CarbideCliError::GenericError(e.to_string()))
 }
 
@@ -87,7 +88,7 @@ pub async fn show_by_id(grpc_conn: &ApiClient, show: Show) -> CarbideCliResult<C
         .show_candidate_machine(ShowCandidateMachineRequest::try_from(show)?)
         .await?;
 
-    CandidateMachine::from_grpc(response.machine.as_ref())
+    CandidateMachine::from_grpc_opt(response.machine)
         .map_err(|e| CarbideCliError::GenericError(e.to_string()))
 }
 

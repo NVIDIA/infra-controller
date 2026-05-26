@@ -27,7 +27,7 @@ use db::measured_boot::interface::report::{
     get_all_measurement_report_records, get_measurement_report_records_for_machine_id,
     match_latest_reports,
 };
-use measured_boot::pcr::{PcrRegisterValue, PcrSet, parse_pcr_index_input};
+use measured_boot::pcr::{PcrSet, parse_pcr_index_input};
 use rpc::protos::measured_boot::{
     CreateMeasurementReportRequest, CreateMeasurementReportResponse,
     DeleteMeasurementReportRequest, DeleteMeasurementReportResponse, ListMeasurementReportRequest,
@@ -42,6 +42,7 @@ use tonic::Status;
 
 use crate::CarbideError;
 use crate::api::Api;
+use crate::measured_boot::convert_vec;
 
 /// handle_create_measurement_report handles the CreateMeasurementReport
 /// API endpoint.
@@ -55,7 +56,7 @@ pub async fn handle_create_measurement_report(
         MachineId::from_str(&req.machine_id).map_err(|_| {
             CarbideError::from(RpcDataConversionError::InvalidMachineId(req.machine_id))
         })?,
-        &PcrRegisterValue::from_pb_vec(req.pcr_values),
+        &convert_vec(req.pcr_values),
     )
     .await
     .map_err(|e| CarbideError::Internal {
@@ -274,7 +275,7 @@ pub async fn handle_match_measurement_report(
     api: &Api,
     req: MatchMeasurementReportRequest,
 ) -> Result<MatchMeasurementReportResponse, Status> {
-    let pcr_register = PcrRegisterValue::from_pb_vec(req.pcr_values);
+    let pcr_register = convert_vec(req.pcr_values);
     let mut reports = match_latest_reports(&api.database_connection, &pcr_register)
         .await
         .map_err(|e| CarbideError::Internal {

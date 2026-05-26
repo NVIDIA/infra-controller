@@ -98,12 +98,6 @@ async fn setup_vault_with_secrets() -> Option<(
             },
             cred("mqtt-user", "mqtt-pass"),
         ),
-        (
-            CredentialKey::RackFirmware {
-                firmware_id: "fw-1".to_string(),
-            },
-            cred("fw-user", "fw-pass"),
-        ),
     ];
 
     for (key, c) in &secrets {
