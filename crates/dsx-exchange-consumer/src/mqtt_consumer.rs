@@ -47,14 +47,19 @@ pub enum MqttMessage {
 /// Sets up the MQTT client, registers message handlers, subscribes to topics,
 /// and connects. Returns a receiver that yields messages with drop-on-overflow.
 ///
-/// The underlying mqttea event loop is configured to rebuild its
-/// rumqttc client (replaying tracked subscriptions on a fresh session)
-/// if it stays continuously disconnected from the broker for
-/// `config.reconnect_rebuild_threshold`. Recovery path for NVBug
-/// 6191840, where after a broker outage the library left a TCP
-/// socket established without ever re-issuing MQTT CONNECT/SUBSCRIBE
-/// and the pod sat 1/1 Ready consuming nothing until manually
-/// restarted.
+/// The underlying mqttea event loop has two layered recoveries for the
+/// NVBug 6191840 wedge (broker outage leaves TCP connected but no
+/// MQTT subscribe ever follows, consumer goes idle):
+///
+/// * On every CONNACK, mqttea re-issues SUBSCRIBE for every tracked
+///   topic so a fresh broker session always has the subscriptions we
+///   expect, even though the underlying client uses clean_session=false.
+///
+/// * If the event loop goes `config.reconnect_rebuild_threshold` without
+///   a successful SubAck/Publish/PingResp, mqttea tears down and rebuilds
+///   the rumqttc client (replaying tracked subscriptions on the new
+///   session). Backstop for the rare case where rumqttc gets fully
+///   wedged and never reaches CONNACK on its own.
 pub async fn connect(
     config: &MqttConfig,
     metrics: ConsumerMetrics,

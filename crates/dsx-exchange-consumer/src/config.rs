@@ -112,13 +112,14 @@ pub struct MqttConfig {
     /// Messages are dropped when this limit is exceeded.
     pub queue_capacity: usize,
 
-    /// How long the MQTT event loop is allowed to stay continuously
-    /// disconnected from the broker before mqttea tears down the
-    /// underlying rumqttc client and stands up a fresh one (replaying
-    /// tracked subscriptions on the new session). Recovery path for
-    /// NVBug 6191840, where after a broker outage the library left a
-    /// TCP socket established without ever re-issuing MQTT
-    /// CONNECT/SUBSCRIBE and the consumer sat idle. Defaults to 30s.
+    /// How long the MQTT event loop is allowed to go without a
+    /// successful SubAck/Publish/PingResp before mqttea tears down its
+    /// rumqttc client and stands up a fresh one (replaying tracked
+    /// subscriptions on the new session). Backstop for the rare case
+    /// where rumqttc gets stuck without ever reaching CONNACK -- the
+    /// common case (broker briefly down then back up) is handled by
+    /// mqttea's CONNACK-resubscribe path without this firing.
+    /// Defaults to 30s.
     #[serde(with = "humantime_serde")]
     pub reconnect_rebuild_threshold: Duration,
 

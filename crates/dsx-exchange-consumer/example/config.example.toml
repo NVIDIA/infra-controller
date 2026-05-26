@@ -11,12 +11,13 @@ client_id = "carbide-dsx-exchange-consumer"
 topic_prefix = "BMS/v1"
 # Maximum number of messages to buffer before dropping (default: 1024)
 queue_capacity = 1024
-# How long the MQTT event loop is allowed to stay continuously
-# disconnected from the broker before mqttea tears down the underlying
-# rumqttc client and stands up a fresh one with the tracked
-# subscriptions replayed (default: 30s). Recovery path for NVBug
-# 6191840, where after a broker outage the library left a TCP socket
-# established without ever re-issuing MQTT CONNECT/SUBSCRIBE.
+# How long the MQTT event loop is allowed to go without a successful
+# SubAck/Publish/PingResp before mqttea tears down its rumqttc client
+# and stands up a fresh one with tracked subscriptions replayed
+# (default: 30s). Backstop for the rare case where rumqttc never
+# reaches CONNACK on its own -- the common case (broker briefly down
+# then back up) is handled by mqttea's CONNACK-resubscribe path
+# without this firing.
 reconnect_rebuild_threshold = "30s"
 
 # ==============================================================================

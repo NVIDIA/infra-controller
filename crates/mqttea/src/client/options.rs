@@ -70,13 +70,15 @@ pub struct ClientOptions {
     // rebuild_after_persistent_disconnect, if set, makes the event
     // loop tear down the underlying rumqttc `AsyncClient`/`EventLoop`
     // pair and stand up a fresh one (replaying tracked subscriptions)
-    // once it has been continuously failing to poll the broker for
-    // longer than this duration. Recovery path for situations where
-    // the in-place reconnect ends up in a stuck state -- for example
-    // the wedge observed in NVBug 6191840 where a TCP socket was
-    // established to the broker but no MQTT CONNECT/SUBSCRIBE ever
-    // followed. If unset, the event loop just keeps retrying with
-    // backoff (the existing behavior).
+    // once it has gone this long without a successful poll. "Successful"
+    // here means SubAck, Publish, or PingResp -- events that prove the
+    // MQTT session is actually working end-to-end; transient
+    // ConnAck/Outgoing(Connect) don't count because the wedge in
+    // NVBug 6191840 produces those without ever subscribing. Backstop
+    // for the rare case where rumqttc gets fully stuck; the common case
+    // (broker outage, recovery) is handled by mqttea's auto-resubscribe
+    // on CONNACK without this watchdog ever firing. If unset, the event
+    // loop just keeps retrying with backoff (the existing behavior).
     pub rebuild_after_persistent_disconnect: Option<Duration>,
 }
 
@@ -118,10 +120,11 @@ impl ClientOptions {
     }
 
     /// Make the event loop rebuild the underlying rumqttc client
-    /// (replaying tracked subscriptions) once it has been continuously
-    /// failing to poll the broker for `threshold`. Intended for
-    /// consumers where the library's in-place reconnect can wedge after
-    /// a sustained broker outage.
+    /// (replaying tracked subscriptions) once it has gone `threshold`
+    /// without a successful SubAck/Publish/PingResp. Backstop for the
+    /// rare case where rumqttc gets fully wedged; the common case
+    /// (broker outage and recovery) is already handled by mqttea's
+    /// CONNACK-resubscribe path.
     pub fn with_rebuild_after_persistent_disconnect(mut self, threshold: Duration) -> Self {
         self.rebuild_after_persistent_disconnect = Some(threshold);
         self

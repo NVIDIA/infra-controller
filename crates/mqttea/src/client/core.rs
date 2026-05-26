@@ -214,6 +214,7 @@ impl MqtteaClient {
         }
 
         *self.client.write().await = new_client;
+        self.queue_stats.increment_client_rebuilds();
         Ok(new_event_loop)
     }
 
@@ -283,9 +284,53 @@ impl MqtteaClient {
             loop {
                 match event_loop.poll().await {
                     Ok(event) => {
-                        // Any successful poll means we're talking to the
-                        // broker again; clear the outage clock.
-                        first_error_at = None;
+                        // Only events that prove the MQTT session is
+                        // actually functional reset the outage clock.
+                        // Transient handshake events (Outgoing(Connect),
+                        // Incoming(ConnAck)) can fire during a wedge --
+                        // rumqttc keeps cycling TCP/CONNECT/CONNACK
+                        // without ever issuing SUBSCRIBE -- so treating
+                        // them as "success" makes the rebuild watchdog
+                        // never accumulate threshold and fire. SubAck,
+                        // Publish, and PingResp are the events that
+                        // actually demonstrate we're sending and
+                        // receiving on the wire.
+                        match &event {
+                            Event::Incoming(Packet::SubAck(_))
+                            | Event::Incoming(Packet::Publish(_))
+                            | Event::Incoming(Packet::PingResp) => {
+                                first_error_at = None;
+                            }
+                            _ => {}
+                        }
+
+                        // Every fresh MQTT session needs subscriptions
+                        // reissued. rumqttc with clean_session=false
+                        // assumes the broker remembers our session, but
+                        // the broker may have restarted and lost it (the
+                        // NVBug 6191840 wedge scenario). Defensively
+                        // resend SUBSCRIBE on every CONNACK so the new
+                        // session has the subscriptions we expect.
+                        if let Event::Incoming(Packet::ConnAck(_)) = &event {
+                            let current_client = client_for_rebuild.current_client().await;
+                            let subs_snapshot: Vec<(String, QoS)> = client_for_rebuild
+                                .subscriptions
+                                .read()
+                                .await
+                                .iter()
+                                .map(|(topic, qos)| (topic.clone(), *qos))
+                                .collect();
+                            for (topic, qos) in subs_snapshot {
+                                if let Err(e) = current_client.subscribe(topic.as_str(), qos).await
+                                {
+                                    error!(
+                                        "Failed to re-subscribe to {} after CONNACK: {:?}",
+                                        topic, e
+                                    );
+                                }
+                            }
+                        }
+
                         if let Event::Incoming(Packet::Publish(publish)) = event {
                             if let Some(msg) =
                                 ReceivedMessage::from_publish(&publish, registry_clone.clone())
