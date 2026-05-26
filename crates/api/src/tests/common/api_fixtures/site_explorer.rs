@@ -1932,6 +1932,7 @@ pub async fn create_expected_switches(
                 None
             },
             bmc_ip_address: None,
+            nvos_ip_address: None,
             metadata: Metadata {
                 name: format!("Switch{}", i + 1),
                 description: format!("Test Switch {}", i + 1),

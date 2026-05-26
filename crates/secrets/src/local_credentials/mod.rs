@@ -332,15 +332,10 @@ mod tests {
     #[test]
     fn snapshot_unsupported_keys_return_none() {
         let snap = populated_snapshot();
-        let keys: Vec<CredentialKey> = vec![
-            CredentialKey::ExtensionService {
-                service_id: "svc".to_string(),
-                version: "1".to_string(),
-            },
-            CredentialKey::RackFirmware {
-                firmware_id: "fw".to_string(),
-            },
-        ];
+        let keys: Vec<CredentialKey> = vec![CredentialKey::ExtensionService {
+            service_id: "svc".to_string(),
+            version: "1".to_string(),
+        }];
         for key in &keys {
             assert_eq!(snap.get_credentials(key), None, "expected None for {key:?}");
         }

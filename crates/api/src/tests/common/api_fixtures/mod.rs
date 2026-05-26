@@ -29,13 +29,25 @@ use async_trait::async_trait;
 use carbide_ib_fabric::IbFabricMonitor;
 use carbide_ib_fabric::config::{IBFabricConfig, IbFabricDefinition};
 use carbide_ib_fabric::ib::{self, IBFabricManagerImpl, IBFabricManagerType};
+use carbide_ib_partition_controller::context::IBPartitionStateHandlerServices;
+use carbide_ib_partition_controller::handler::IBPartitionStateHandler;
+use carbide_ib_partition_controller::io::IBPartitionStateControllerIO;
 use carbide_ipmi::IPMITool;
+use carbide_network_segment_controller::context::NetworkSegmentStateHandlerServices;
+use carbide_network_segment_controller::handler::NetworkSegmentStateHandler;
+use carbide_network_segment_controller::io::NetworkSegmentStateControllerIO;
 use carbide_nvlink_manager::NvlPartitionMonitor;
 use carbide_nvlink_manager::config::NvLinkConfig;
 use carbide_nvlink_manager::nvlink::test_support::NmxcSimClient;
 use carbide_redfish::libredfish::test_support::{RedfishSim, RedfishSimTestOverrides};
 use carbide_site_explorer::SiteExplorer;
 use carbide_site_explorer::config::{SiteExplorerConfig, SiteExplorerExploreMode};
+use carbide_spdm_controller::context::SpdmStateHandlerServices;
+use carbide_spdm_controller::handler::SpdmAttestationStateHandler;
+use carbide_spdm_controller::io::SpdmStateControllerIO;
+use carbide_switch_controller::context::SwitchStateHandlerServices;
+use carbide_switch_controller::handler::SwitchStateHandler;
+use carbide_switch_controller::io::SwitchStateControllerIO;
 use carbide_utils::test_support::test_meter::TestMeter;
 use carbide_uuid::instance::InstanceId;
 use carbide_uuid::instance_type::InstanceTypeId;
@@ -115,25 +127,20 @@ use crate::rack::rms_client::test_support::RmsSim;
 use crate::scout_stream;
 use crate::state_controller::common_services::CommonStateHandlerServices;
 use crate::state_controller::controller::{Enqueuer, StateController};
-use crate::state_controller::ib_partition::handler::IBPartitionStateHandler;
-use crate::state_controller::ib_partition::io::IBPartitionStateControllerIO;
 use crate::state_controller::machine::handler::{
     MachineStateHandler, MachineStateHandlerBuilder, PowerOptionConfig, ReachabilityParams,
 };
 use crate::state_controller::machine::io::MachineStateControllerIO;
-use crate::state_controller::network_segment::handler::NetworkSegmentStateHandler;
-use crate::state_controller::network_segment::io::NetworkSegmentStateControllerIO;
+use crate::state_controller::power_shelf::context::PowerShelfStateHandlerServices;
 use crate::state_controller::power_shelf::handler::PowerShelfStateHandler;
 use crate::state_controller::power_shelf::io::PowerShelfStateControllerIO;
+use crate::state_controller::rack::config::{RackConfig, RackValidationConfig, RmsConfig};
+use crate::state_controller::rack::context::RackStateHandlerServices;
 use crate::state_controller::rack::handler::RackStateHandler;
 use crate::state_controller::rack::io::RackStateControllerIO;
-use crate::state_controller::spdm::handler::SpdmAttestationStateHandler;
-use crate::state_controller::spdm::io::SpdmStateControllerIO;
 use crate::state_controller::state_handler::{
     StateHandler, StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
-use crate::state_controller::switch::handler::SwitchStateHandler;
-use crate::state_controller::switch::io::SwitchStateControllerIO;
 use crate::tests::common::api_fixtures::endpoint_explorer::MockEndpointExplorer;
 use crate::tests::common::api_fixtures::managed_host::ManagedHostConfig;
 use crate::tests::common::api_fixtures::network_segment::{
@@ -411,6 +418,23 @@ impl TestEnv {
             ipmi_tool: self.ipmi_tool.clone(),
             site_config: self.config.clone(),
             dpa_info: None,
+            rms_client: self.rms_sim.as_rms_client(),
+            switch_system_image_rms_client: self.rms_sim.as_switch_system_image_rms_client(),
+            credential_manager: self.test_credential_manager.clone(),
+        }
+    }
+
+    /// Creates an instance of CommonStateHandlerServices that are suitable for this
+    /// test environment
+    pub fn rack_state_handler_services(&self) -> RackStateHandlerServices {
+        RackStateHandlerServices {
+            db_pool: self.pool.clone(),
+            site_config: RackConfig {
+                rms: self.config.rms.clone(),
+                rack_validation_config: self.config.rack_validation_config.clone(),
+                rack_profiles: self.config.rack_profiles.clone(),
+            }
+            .into(),
             rms_client: self.rms_sim.as_rms_client(),
             switch_system_image_rms_client: self.rms_sim.as_switch_system_image_rms_client(),
             credential_manager: self.test_credential_manager.clone(),
@@ -1128,7 +1152,7 @@ pub fn get_config() -> CarbideConfig {
         default_tenant_routing_profile_type: "EXTERNAL".to_string(),
         web_ui_sidebar_tools: vec![],
         bgp_leaf_session_password: None,
-        rack_validation_config: crate::cfg::file::RackValidationConfig {
+        rack_validation_config: RackValidationConfig {
             enabled: true,
             ..Default::default()
         },
@@ -1284,7 +1308,7 @@ pub fn get_config() -> CarbideConfig {
         }),
         mlxconfig_profiles: None,
         rack_management_enabled: false,
-        rms: crate::cfg::file::RmsConfig {
+        rms: RmsConfig {
             api_url: Some(
                 SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080).to_string(),
             ),
@@ -1308,6 +1332,7 @@ pub fn get_config() -> CarbideConfig {
         dpf: crate::cfg::file::DpfConfig::default(),
         x86_pxe_boot_url_override: None,
         arm_pxe_boot_url_override: None,
+        set_http_boot_uri_for_vendors: vec![],
         external_api_url: None,
         external_pxe_url: None,
         external_static_pxe_url: None,
@@ -1711,7 +1736,13 @@ pub async fn create_test_env_with_overrides(
         .database(db_pool.clone(), work_lock_manager_handle.clone())
         .meter("spdm", test_meter.meter())
         .processor_id(state_controller_id.clone())
-        .services(handler_services.clone())
+        .services(
+            SpdmStateHandlerServices {
+                db_pool: handler_services.db_pool.clone(),
+                redfish_client_pool: handler_services.redfish_client_pool.clone(),
+            }
+            .into(),
+        )
         .state_handler(Arc::new(spdm_swap.clone()))
         .io(Arc::new(SpdmStateControllerIO {}))
         .build_for_manual_iterations(cancel_token.clone())
@@ -1725,7 +1756,14 @@ pub async fn create_test_env_with_overrides(
         .database(db_pool.clone(), work_lock_manager_handle.clone())
         .meter("carbide_machines", test_meter.meter())
         .processor_id(state_controller_id.clone())
-        .services(handler_services.clone())
+        .services(
+            IBPartitionStateHandlerServices {
+                db_pool: handler_services.db_pool.clone(),
+                ib_fabric_manager: handler_services.ib_fabric_manager.clone(),
+                ib_pools: handler_services.ib_pools.clone(),
+            }
+            .into(),
+        )
         .state_handler(Arc::new(ib_swap.clone()))
         .build_for_manual_iterations(cancel_token.clone())
         .expect("Unable to build state controller");
@@ -1744,7 +1782,12 @@ pub async fn create_test_env_with_overrides(
         .database(db_pool.clone(), work_lock_manager_handle.clone())
         .meter("carbide_machines", test_meter.meter())
         .processor_id(state_controller_id.clone())
-        .services(handler_services.clone())
+        .services(
+            NetworkSegmentStateHandlerServices {
+                db_pool: handler_services.db_pool.clone(),
+            }
+            .into(),
+        )
         .state_handler(Arc::new(network_swap.clone()))
         .build_for_manual_iterations(cancel_token.clone())
         .expect("Unable to build state controller");
@@ -1753,7 +1796,14 @@ pub async fn create_test_env_with_overrides(
         .database(db_pool.clone(), work_lock_manager_handle.clone())
         .meter("carbide_power_shelves", test_meter.meter())
         .processor_id(state_controller_id.clone())
-        .services(handler_services.clone())
+        .services(
+            PowerShelfStateHandlerServices {
+                db_pool: handler_services.db_pool.clone(),
+                rms_client: handler_services.rms_client.clone(),
+                credential_manager: handler_services.credential_manager.clone(),
+            }
+            .into(),
+        )
         .state_handler(Arc::new(PowerShelfStateHandler::default()))
         .build_for_manual_iterations(cancel_token.clone())
         .expect("Unable to build PowerShelfStateController");
@@ -1762,7 +1812,14 @@ pub async fn create_test_env_with_overrides(
         .database(db_pool.clone(), work_lock_manager_handle.clone())
         .meter("carbide_switches", test_meter.meter())
         .processor_id(state_controller_id.clone())
-        .services(handler_services.clone())
+        .services(
+            SwitchStateHandlerServices {
+                db_pool: handler_services.db_pool.clone(),
+                rms_client: handler_services.rms_client.clone(),
+                credential_manager: handler_services.credential_manager.clone(),
+            }
+            .into(),
+        )
         .state_handler(Arc::new(SwitchStateHandler::default()))
         .build_for_manual_iterations(cancel_token.clone())
         .expect("Unable to build state controller");
@@ -1771,7 +1828,26 @@ pub async fn create_test_env_with_overrides(
         .database(db_pool.clone(), work_lock_manager_handle.clone())
         .meter("carbide_racks", test_meter.meter())
         .processor_id(state_controller_id.clone())
-        .services(handler_services.clone())
+        .services(
+            RackStateHandlerServices {
+                db_pool: handler_services.db_pool.clone(),
+                rms_client: handler_services.rms_client.clone(),
+                site_config: RackConfig {
+                    rms: handler_services.site_config.rms.clone(),
+                    rack_validation_config: handler_services
+                        .site_config
+                        .rack_validation_config
+                        .clone(),
+                    rack_profiles: handler_services.site_config.rack_profiles.clone(),
+                }
+                .into(),
+                switch_system_image_rms_client: handler_services
+                    .switch_system_image_rms_client
+                    .clone(),
+                credential_manager: handler_services.credential_manager.clone(),
+            }
+            .into(),
+        )
         .state_handler(Arc::new(RackStateHandler::default()))
         .build_for_manual_iterations(cancel_token.clone())
         .expect("Unable to build RackStateController");
@@ -1813,6 +1889,7 @@ pub async fn create_test_env_with_overrides(
             switches_created_per_run: 1,
             rotate_switch_nvos_credentials: Arc::new(false.into()),
             force_dpu_nic_mode: Arc::new(false.into()),
+            dpu_mode: None,
             // Tests use MockEndpointExplorer. So this doesn't affect anything.
             explore_mode: SiteExplorerExploreMode::NvRedfish,
         },

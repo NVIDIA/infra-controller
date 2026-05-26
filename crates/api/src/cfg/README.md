@@ -90,6 +90,7 @@ applicable.
 | `dpf` | `DpfConfig` | *(see below)* | DPF (DPU Platform Framework) Kubernetes deployment (see [DpfConfig](#dpfconfig)). |
 | `x86_pxe_boot_url_override` | `Option<String>` | — | Override PXE boot URL for x86 machines. |
 | `arm_pxe_boot_url_override` | `Option<String>` | — | Override PXE boot URL for ARM machines. |
+| `set_http_boot_uri_for_vendors` | `Vec<BMCVendor>` | `[]` | Vendors for which the state controller pins the UEFI HTTP boot URL on the BMC via Redfish `HttpBootUri`. Empty = all machines rely on carbide-dhcp option 67 for the URL. |
 | `compute_allocation_enforcement` | `ComputeAllocationEnforcement` | `WarnOnly` | Controls enforcement of compute allocations on new instance requests. |
 | `supernic_firmware_profiles` | nested `HashMap` | `{}` | SuperNIC firmware profiles keyed by `part_number` then `PSID`. |
 | `component_manager` | `Option<ComponentManagerConfig>` | — | Component manager for NvLink switches and power shelves. |

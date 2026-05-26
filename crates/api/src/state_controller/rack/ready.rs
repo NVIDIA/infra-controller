@@ -17,6 +17,8 @@
 
 //! Handler for RackState::Ready.
 
+use carbide_rack_controller::context::RackStateHandlerContextObjects;
+use carbide_rack_controller::maintenance::first_maintenance_state;
 use carbide_uuid::rack::RackId;
 use db::{
     machine as db_machine, power_shelf as db_power_shelf, rack as db_rack, switch as db_switch,
@@ -26,12 +28,11 @@ use model::machine::machine_search_config::MachineSearchConfig;
 use model::power_shelf::PowerShelfSearchFilter;
 use model::rack::{FirmwareUpgradeState, Rack, RackConfig, RackMaintenanceState, RackState};
 use model::switch::SwitchSearchFilter;
-
-use crate::state_controller::rack::context::RackStateHandlerContextObjects;
-use crate::state_controller::rack::maintenance::first_maintenance_state;
-use crate::state_controller::state_handler::{
+use state_controller::state_handler::{
     StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
+
+use crate::state_controller::rack as carbide_rack_controller;
 
 const COMPONENT_ERROR_STATE: &str = "error";
 const MACHINE_FAILED_STATE: &str = "failed";

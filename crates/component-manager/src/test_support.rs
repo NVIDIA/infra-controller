@@ -163,6 +163,7 @@ pub(crate) async fn seed_switch(
             serial_number: label.to_owned(),
             bmc_mac_address: mac,
             bmc_ip_address: None,
+            nvos_ip_address: None,
             bmc_username: "admin".into(),
             bmc_password: "pass".into(),
             nvos_username: None,

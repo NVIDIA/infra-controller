@@ -116,6 +116,8 @@ navigation:
           path: manuals/breakfix_integration.md
         - page: IP Resource Pools
           path: manuals/networking/ip_resource_pools.md
+        - page: BGP Peering
+          path: manuals/networking/bgp_peering.md
         - section: Managing VPCs
           contents:
             - page: VPC Routing Profiles
