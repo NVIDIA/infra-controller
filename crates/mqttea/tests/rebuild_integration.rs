@@ -35,8 +35,8 @@
 
 use std::time::Duration;
 
-use mqttea::client::{ClientOptions, MqtteaClient};
 use mqttea::QoS;
+use mqttea::client::{ClientOptions, MqtteaClient};
 
 // Picks a TCP port that's reserved by the kernel but immediately released,
 // giving us a port we can confidently point an MqtteaClient at and expect
@@ -70,7 +70,10 @@ async fn rebuild_watchdog_fires_when_broker_is_unreachable() {
         .await
         .expect("subscribe should queue command even when broker is down");
 
-    client.connect().await.expect("connect should spawn the event loop task");
+    client
+        .connect()
+        .await
+        .expect("connect should spawn the event loop task");
 
     // Give the watchdog enough time to fire at least twice: each cycle
     // it accrues 500ms of poll errors -> rebuild -> new EventLoop also
@@ -104,7 +107,10 @@ async fn rebuild_disabled_means_no_rebuilds() {
         .await
         .expect("client construction should succeed");
 
-    client.connect().await.expect("connect should spawn the event loop task");
+    client
+        .connect()
+        .await
+        .expect("connect should spawn the event loop task");
 
     tokio::time::sleep(Duration::from_secs(2)).await;
 

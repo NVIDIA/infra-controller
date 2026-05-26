@@ -113,7 +113,8 @@ impl MqtteaClient {
         client_options: Option<ClientOptions>,
     ) -> Result<Arc<Self>, MqtteaClientError> {
         let mqtt_options =
-            build_mqtt_options(client_id, broker_host, broker_port, client_options.as_ref()).await?;
+            build_mqtt_options(client_id, broker_host, broker_port, client_options.as_ref())
+                .await?;
 
         let (client, event_loop) = AsyncClient::new(
             mqtt_options,
