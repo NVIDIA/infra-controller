@@ -132,6 +132,7 @@ pub async fn run(
         create_machines: carbide_config.site_explorer.create_machines.clone(),
         bmc_proxy: carbide_config.site_explorer.bmc_proxy.clone(),
         tracing_enabled: tconf.tracing_enabled,
+        log_stream: tconf.log_stream,
     };
     dynamic_settings.start_reset_task(
         &mut join_set,
