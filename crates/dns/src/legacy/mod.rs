@@ -52,6 +52,7 @@ struct LegacyDnsMetrics {
     negative_cache_hit: Counter<u64>,
     negative_cache_miss: Counter<u64>,
     negative_cache_eviction: Counter<u64>,
+    negative_cache_drop: Counter<u64>,
 }
 
 impl LegacyDnsMetrics {
@@ -65,6 +66,9 @@ impl LegacyDnsMetrics {
                 .build(),
             negative_cache_eviction: meter
                 .u64_counter("carbide_dns_negative_cache_eviction_count")
+                .build(),
+            negative_cache_drop: meter
+                .u64_counter("carbide_dns_negative_cache_drop_count")
                 .build(),
         }
     }
@@ -95,6 +99,38 @@ struct NegativeEntry {
 struct CacheKey {
     qname: String,
     qtype: RecordType,
+}
+
+/// Upper bound on the number of entries the negative cache may hold.
+// The cache keys on `(qname, qtype)`, so a flood of queries for distinct
+// non-existent names — a random-subdomain or a misbehaving client — would otherwise
+// grow the HashMap without bound until the process is OOM-killed. The periodic sweep only
+// removes *expired* entries, so it cannot remove a burst that arrives faster than
+// entries age out.
+//
+// At roughly 150-330 (depending on qname) bytes per entry (key string + value + map overhead)
+// this cap corresponds to a less than 100MB ceiling. Refusing to admit new keys once full.
+//
+// TODO: make this configurable via Config alongside negative_cache_ttl.
+const MAX_NEGATIVE_CACHE_ENTRIES: usize = 200_000;
+
+/// Store a negative result, enforcing a hard cap on the number of live entries.
+///
+/// Returns `true` if the entry was stored. A *new* key is refused once the
+/// cache holds `max_entries` — this is the bound that prevents unbounded growth
+/// under a flood of distinct names. A key that is *already present* is always
+/// refreshed.
+fn store_negative(
+    cache: &mut HashMap<CacheKey, NegativeEntry>,
+    key: CacheKey,
+    entry: NegativeEntry,
+    max_entries: usize,
+) -> bool {
+    if cache.len() >= max_entries && !cache.contains_key(&key) {
+        return false;
+    }
+    cache.insert(key, entry);
+    true
 }
 
 #[async_trait::async_trait]
@@ -186,22 +222,46 @@ impl RequestHandler for LegacyDnsServer {
 
                             if matches!(code, ResponseCode::NXDomain | ResponseCode::Refused) {
                                 tracing::debug!(%qname, %qtype, "negative cache miss");
-                                tracing::info!(
-                                    "Adding {} for {:?} to negative cache",
-                                    format!("{code:?}"),
-                                    cache_key
-                                );
-                                let mut cache = self.negative_cache.write().await;
-                                cache.insert(
-                                    cache_key,
-                                    NegativeEntry {
-                                        reason_code: code,
-                                        expires_at: Instant::now() + self.negative_ttl,
-                                    },
-                                );
                                 self.metrics
                                     .negative_cache_miss
                                     .add(1, &[KeyValue::new("response_code", format!("{code:?}"))]);
+
+                                let entry = NegativeEntry {
+                                    reason_code: code,
+                                    expires_at: Instant::now() + self.negative_ttl,
+                                };
+
+                                // Hold the write lock only for the insertion
+                                // itself; metrics and logging happen after it is
+                                // released.
+                                let stored = {
+                                    let mut cache = self.negative_cache.write().await;
+                                    store_negative(
+                                        &mut cache,
+                                        cache_key,
+                                        entry,
+                                        MAX_NEGATIVE_CACHE_ENTRIES,
+                                    )
+                                };
+
+                                if stored {
+                                    tracing::info!(
+                                        %qname, %qtype,
+                                        "Adding {} to negative cache",
+                                        format!("{code:?}")
+                                    );
+                                } else {
+                                    // The cache is full
+                                    self.metrics.negative_cache_drop.add(
+                                        1,
+                                        &[KeyValue::new("response_code", format!("{code:?}"))],
+                                    );
+                                    warn!(
+                                        %qname, %qtype,
+                                        max_entries = MAX_NEGATIVE_CACHE_ENTRIES,
+                                        "negative cache full; not caching this response"
+                                    );
+                                }
                             }
 
                             (code, None)
@@ -323,6 +383,15 @@ impl LegacyDnsServer {
                 if evicted > 0 {
                     cache_eviction_counter.add(evicted as u64, &[]);
                 }
+
+                // `retain` removes entries but never shrinks the backing
+                // allocation, so without this the map would hold onto the peak
+                // capacity reached during a burst indefinitely. Once the backing HashMap's
+                // capacity exceeds 4* the number of live entries, shrink it back down towards
+                // the current size
+                if cache.capacity() > 4 * cache.len() {
+                    cache.shrink_to_fit();
+                }
             }
         });
 
@@ -350,5 +419,67 @@ impl LegacyDnsServer {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry() -> NegativeEntry {
+        NegativeEntry {
+            reason_code: ResponseCode::NXDomain,
+            expires_at: Instant::now() + Duration::from_secs(120),
+        }
+    }
+
+    fn key(qname: &str) -> CacheKey {
+        CacheKey {
+            qname: qname.to_string(),
+            qtype: A,
+        }
+    }
+
+    #[test]
+    fn refuses_new_keys_once_full() {
+        let mut cache = HashMap::new();
+        assert!(store_negative(
+            &mut cache,
+            key("a.example.com."),
+            entry(),
+            2
+        ));
+        assert!(store_negative(
+            &mut cache,
+            key("b.example.com."),
+            entry(),
+            2
+        ));
+
+        assert!(!store_negative(
+            &mut cache,
+            key("c.example.com."),
+            entry(),
+            2
+        ));
+        assert_eq!(cache.len(), 2);
+    }
+
+    #[test]
+    fn refreshes_existing_key_when_full() {
+        let mut cache = HashMap::new();
+        store_negative(&mut cache, key("a.example.com."), entry(), 2);
+        store_negative(&mut cache, key("b.example.com."), entry(), 2);
+
+        // Refreshing a key already present must succeed even at capacity: it
+        // does not grow the map, and refusing it would let live entries expire
+        // and defeat the cache for legitimately-repeated bad names.
+        assert!(store_negative(
+            &mut cache,
+            key("a.example.com."),
+            entry(),
+            2
+        ));
+        assert_eq!(cache.len(), 2);
     }
 }

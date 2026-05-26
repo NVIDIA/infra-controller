@@ -191,6 +191,7 @@ impl PowerShelfManager for StateControllerPowerShelf {
             MaintenanceActivity::FirmwareUpgrade {
                 firmware_version,
                 components: vec![],
+                force_update: false,
             },
         )
         .await

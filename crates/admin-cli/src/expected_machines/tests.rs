@@ -493,8 +493,9 @@ fn validate_patch_all_fields() {
 }
 
 // parse_add_without_dpu_mode ensures the flag is optional and defaults to
-// unset; downstream, unset is treated as "use site default" (as in, use
-// the site-wide `force_dpu_nic_mode` flag).
+// unset; downstream, unset is treated as "defer to the site-wide
+// `[site_explorer] dpu_mode` setting" (which itself falls back to
+// `DpuMode::DpuMode` when not set).
 #[test]
 fn parse_add_without_dpu_mode() {
     let cmd = Cmd::try_parse_from([
