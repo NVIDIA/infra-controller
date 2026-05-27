@@ -110,7 +110,7 @@ use crate::state_controller::machine::{
     MeasuringOutcome, get_measuring_prerequisites, handle_measuring_state,
 };
 
-mod attestation;
+pub mod attestation;
 mod bios_config;
 mod dpf;
 mod helpers;

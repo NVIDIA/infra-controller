@@ -24,6 +24,9 @@ use libredfish::{Redfish, SystemPowerControl};
 use model::machine::{
     BiosConfigInfo, BiosConfigState, ManagedHostState, ManagedHostStateSnapshot, PowerState,
 };
+use state_controller::state_handler::{
+    StateHandlerContext, StateHandlerError, StateHandlerOutcome,
+};
 
 use super::{
     ReachabilityParams, RebootStatus, call_machine_setup_and_handle_no_dpu_error,
@@ -31,9 +34,6 @@ use super::{
 };
 use crate::state_controller::machine::config::MachineStateControllerConfig;
 use crate::state_controller::machine::context::MachineStateHandlerContextObjects;
-use crate::state_controller::state_handler::{
-    StateHandlerContext, StateHandlerError, StateHandlerOutcome,
-};
 
 /// Outcome of configure_host_bios function.
 pub(super) enum BiosConfigOutcome {
