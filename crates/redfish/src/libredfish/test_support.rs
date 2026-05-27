@@ -911,6 +911,7 @@ impl Redfish for RedfishSimClient {
         Box::pin(async move {
             Ok(ServiceRoot {
                 vendor: Some("Nvidia".to_string()),
+                product: Some("GB200 NVL".to_string()),
                 component_integrity: Some(ODataId {
                     odata_id: "Valid Data".to_string(),
                 }),
@@ -1499,6 +1500,40 @@ impl Redfish for RedfishSimClient {
                 },
                 ComponentIntegrity {
                     component_integrity_enabled: true,
+                    component_integrity_type: "SPDM".to_string(),
+                    component_integrity_type_version: "1.1.0".to_string(),
+                    id: "HGX_IRoT_GPU_2".to_string(),
+                    name: "SPDM Integrity for HGX_IRoT_GPU_2".to_string(),
+                    target_component_uri: Some("/redfish/v1/Chassis/HGX_IRoT_GPU_2".to_string()),
+                    spdm: Some(libredfish::model::component_integrity::SPDMData {
+                        identity_authentication:
+                            libredfish::model::component_integrity::IdentityAuthentication { responder_authentication: libredfish::model::component_integrity::ResponderAuthentication {
+                                component_certificate: ODataId {
+                                    odata_id:
+                                        "/redfish/v1/Chassis/HGX_IRoT_GPU_2/Certificates/CertChain"
+                                            .to_string(),
+                                },
+                            } },
+                        requester: ODataId {
+                            odata_id: "/redfish/v1/Managers/BMC_0".to_string(),
+                        },
+                    }),
+                    actions: Some(libredfish::model::component_integrity::SPDMActions {
+                        get_signed_measurements: Some(
+                            libredfish::model::component_integrity::SPDMGetSignedMeasurements {
+                                action_info: "/redfish/v1/ComponentIntegrity/HGX_IRoT_GPU_2/SPDMGetSignedMeasurementsActionInfo".to_string(),
+                                target: "/redfish/v1/ComponentIntegrity/HGX_IRoT_GPU_2/Actions/ComponentIntegrity.SPDMGetSignedMeasurements".to_string(),
+                            },
+                        ),
+                    }),
+                    links: Some(
+                        libredfish::model::component_integrity::ComponentsProtectedLinks {
+                            components_protected: vec![ODataId{ odata_id: "/redfish/v1/Systems/HGX_Baseboard_0/Processors/GPU_2".to_string() }]
+                        },
+                    ),
+                },
+                ComponentIntegrity {
+                    component_integrity_enabled: true,
                     component_integrity_type: "TPM".to_string(),
                     component_integrity_type_version: "1.1.0".to_string(),
                     id: "HGX_IRoT_GPU_1".to_string(),
@@ -1601,7 +1636,7 @@ impl Redfish for RedfishSimClient {
                 },
                 ],
                 name: "ComponentIntegrities".to_string(),
-                count: 6,
+                count: 7,
             })
         })
     }
