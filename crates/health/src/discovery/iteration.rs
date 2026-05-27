@@ -100,7 +100,9 @@ mod tests {
     use mac_address::MacAddress;
 
     use super::*;
-    use crate::endpoint::{BmcAddr, BmcCredentials, EndpointMetadata, SwitchData};
+    use crate::endpoint::{
+        BmcAddr, BmcCredentials, EndpointMetadata, SwitchData, SwitchEndpointRole,
+    };
 
     fn endpoint(mac: MacAddress, switch: bool) -> Arc<BmcEndpoint> {
         Arc::new(BmcEndpoint::with_fixed_credentials(
@@ -119,6 +121,9 @@ mod tests {
                     serial: format!("serial-{mac}"),
                     slot_number: None,
                     tray_index: None,
+                    endpoint_role: SwitchEndpointRole::Host,
+                    is_primary: false,
+                    nmxt_enabled: false,
                 }))
             } else {
                 None

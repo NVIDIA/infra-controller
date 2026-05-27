@@ -19,8 +19,6 @@ use std::collections::HashMap;
 use std::fmt;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 
 use bmc_vendor::BMCVendor;
 use carbide_authn::config::{AllowedCertCriteria, TrustConfig};
@@ -28,10 +26,10 @@ use carbide_firmware::FirmwareConfig;
 use carbide_ib_fabric::config::{IBFabricConfig, IbFabricDefinition};
 use carbide_nvlink_manager::config::NvLinkConfig;
 use carbide_preingestion_manager::PreingestionManagerConfig;
+use carbide_rack_controller::config::{RackValidationConfig, RmsConfig};
 use carbide_site_explorer::config::SiteExplorerConfig;
-use carbide_utils::config::{
-    as_duration, as_std_duration, deserialize_arc_atomic_bool, serialize_arc_atomic_bool,
-};
+use carbide_state_controller_common::config::StateControllerConfig;
+use carbide_utils::config::{as_duration, as_std_duration};
 use chrono::Duration;
 use duration_str::{deserialize_duration, deserialize_duration_chrono};
 use figment::Figment;
@@ -53,7 +51,11 @@ use model::tenant::identity_config::SigningAlgorithm;
 use regex::Regex;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::state_controller::config::IterationConfig;
+use crate::state_controller::machine::config::power_manager::default_power_options;
+use crate::state_controller::machine::config::{
+    BomValidationConfig, FirmwareGlobal, MachineStateControllerConfig,
+    MachineStateHandlerSiteConfig, PowerManagerOptions,
+};
 
 static BF2_NIC: &str = "24.47.2682";
 static BF2_BMC: &str = "BF-25.10-20";
@@ -475,7 +477,7 @@ pub struct CarbideConfig {
     /// (disconnected / air-gapped) infrastructure manager for racks of GB200/GB300/VR144.
     /// Only set this if using NICo site controller with Rack Manager to manage GB200/300/VR144.
     /// It will change site controller behavior significantly in the following ways, etc.:
-    /// 1. skip dpu management and use dpus in nic mode (optional, can set force_dpu_nic_mode=false)
+    /// 1. skip dpu management and use dpus in nic mode (set the site-wide `[site_explorer] dpu_mode = "nic_mode"`, or per-host `ExpectedMachine.dpu_mode`)
     ///    a. no dpu bfb upgrade and host power cycle
     ///    b. no firmware upgrade and host power cycle
     ///    c. no hbn deployment (no ecmp, etc)
@@ -518,16 +520,6 @@ pub struct CarbideConfig {
     #[serde(default)]
     pub rack_profiles: model::rack_type::RackProfileConfig,
 
-    /// Treat any dpu found as a regular NIC and skip configuring it as a managed dpu.
-    /// This is specifically for dev labs to allow using GB200/300 and VR compute
-    /// trays with bluefield dpus as NICs.
-    #[serde(
-        default = "SiteExplorerConfig::default_force_dpu_nic_mode",
-        deserialize_with = "deserialize_arc_atomic_bool",
-        serialize_with = "serialize_arc_atomic_bool"
-    )]
-    pub force_dpu_nic_mode: Arc<AtomicBool>,
-
     /// SPDM (Security Protocol and Data Model) configuration for hardware attestation.
     #[serde(default)]
     pub spdm: SpdmConfig,
@@ -552,6 +544,20 @@ pub struct CarbideConfig {
     /// The URL to use for overriding the PXE boot url on ARM machines.
     #[serde(default)]
     pub arm_pxe_boot_url_override: Option<String>,
+
+    /// Vendors for which the state controller should pin the UEFI HTTP boot
+    /// URL on the BMC (via Redfish `HttpBootUri`) in addition to the existing
+    /// DHCP option 67 path. Machines whose BMC vendor is NOT in this list
+    /// continue to rely on carbide-dhcp's option 67 for the URL.
+    ///
+    /// Empty by default — no machines get the BMC-pinned URL until vendors
+    /// are explicitly added here (typically after per-vendor verification on
+    /// real hardware). Adding a vendor that libredfish doesn't yet implement
+    /// (e.g., `Dell` / `Lenovo` until their libredfish impls land) will
+    /// surface a runtime `NotSupported` error; carbide-dhcp option 67 is the
+    /// fallback URL source.
+    #[serde(default)]
+    pub set_http_boot_uri_for_vendors: Vec<BMCVendor>,
 
     /// Alternate API URL for external hosts that cannot resolve
     /// https://carbide-pxe.forge. This be an IP (e.g., "https://10.0.0.1:1079"),
@@ -640,6 +646,27 @@ pub struct CarbideConfig {
     pub web_ui_sidebar_tools: Vec<ToolLink>,
 }
 
+impl CarbideConfig {
+    pub fn machine_state_handler_site_config(&self) -> MachineStateHandlerSiteConfig {
+        MachineStateHandlerSiteConfig {
+            firmware_global: self.firmware_global.clone(),
+            machine_state_controller: self.machine_state_controller.clone(),
+            host_health: self.host_health,
+
+            selected_profile: self.selected_profile,
+            bios_profiles: self.bios_profiles.clone(),
+            oem_manager_profiles: self.oem_manager_profiles.clone(),
+
+            dpa_enabled: self.is_dpa_enabled(),
+            dpf_enabled: self.dpf.enabled,
+            spdm_enabled: self.spdm.enabled,
+
+            dpu_enable_secure_boot: self.dpu_config.dpu_enable_secure_boot,
+            allow_zero_dpu_hosts: self.site_explorer.allow_zero_dpu_hosts,
+        }
+    }
+}
+
 /// One external tool link rendered in the admin web UI's "Tools"
 /// sidebar.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -714,7 +741,7 @@ impl Default for DpfConfig {
 }
 
 fn default_dpf_bfb_url() -> String {
-    "https://content.mellanox.com/BlueField/BFBs/Ubuntu24.04/bf-bundle-3.2.1-34_25.11_ubuntu-24.04_64k_prod.bfb".to_string()
+    "https://content.mellanox.com/BlueField/BFBs/Ubuntu24.04/bf-bundle-3.2.2-125_26.02_ubuntu-24.04_64k_prod.bfb".to_string()
 }
 
 fn default_dpf_deployment_name() -> String {
@@ -899,43 +926,6 @@ pub struct SpdmConfig {
     /// verification.
     #[serde(default)]
     pub nras_config: Option<nras::Config>,
-}
-
-/// Power management configuration controlling retry
-/// intervals and reboot timing.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct PowerManagerOptions {
-    /// Master switch to enable or disable power
-    /// management.
-    #[serde(default)]
-    pub enabled: bool,
-    /// Interval before retrying power operations after
-    /// a successful attempt.
-    /// Default is 5 minutes.
-    #[serde(
-        default = "default_next_duration_success",
-        deserialize_with = "deserialize_duration_chrono",
-        serialize_with = "as_duration"
-    )]
-    pub next_try_duration_on_success: chrono::TimeDelta,
-    /// Interval before retrying power operations after
-    /// a failed attempt.
-    /// Default is 2 minutes.
-    #[serde(
-        default = "default_next_duration_failure",
-        deserialize_with = "deserialize_duration_chrono",
-        serialize_with = "as_duration"
-    )]
-    pub next_try_duration_on_failure: chrono::TimeDelta,
-    /// Time to wait after power-down before powering on
-    /// the host.
-    /// Default is 15 minutes.
-    #[serde(
-        default = "default_wait_duration_next_reboot",
-        deserialize_with = "deserialize_duration_chrono",
-        serialize_with = "as_duration"
-    )]
-    pub wait_duration_until_host_reboot: chrono::TimeDelta,
 }
 
 /// A BGP route target used in FNN VRF import/export policies.
@@ -1320,98 +1310,6 @@ impl MaxConcurrentUpdates {
     }
 }
 
-/// MachineStateController related config.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct MachineStateControllerConfig {
-    /// Common state controller configs
-    #[serde(default = "StateControllerConfig::default")]
-    pub controller: StateControllerConfig,
-
-    /// How long should we wait before a DPU goes down for sure.
-    #[serde(
-        default = "MachineStateControllerConfig::dpu_wait_time_default",
-        deserialize_with = "deserialize_duration_chrono",
-        serialize_with = "as_duration"
-    )]
-    pub dpu_wait_time: Duration,
-    /// How long to wait for after power down before power on the machine.
-    #[serde(
-        default = "MachineStateControllerConfig::power_down_wait_default",
-        deserialize_with = "deserialize_duration_chrono",
-        serialize_with = "as_duration"
-    )]
-    pub power_down_wait: Duration,
-    /// After how much time, state machine should retrigger reboot if machine does not call back.
-    #[serde(
-        default = "MachineStateControllerConfig::failure_retry_time_default",
-        deserialize_with = "deserialize_duration_chrono",
-        serialize_with = "as_duration"
-    )]
-    pub failure_retry_time: Duration,
-    /// How long to wait for a health report from the DPU before we assume it's down
-    #[serde(
-        default = "MachineStateControllerConfig::dpu_up_threshold_default",
-        deserialize_with = "deserialize_duration_chrono",
-        serialize_with = "as_duration"
-    )]
-    pub dpu_up_threshold: Duration,
-    /// Duration after which a host is considered unhealthy if scout hasn't reported back
-    #[serde(
-        default = "MachineStateControllerConfig::scout_reporting_timeout_default",
-        deserialize_with = "deserialize_duration_chrono",
-        serialize_with = "as_duration"
-    )]
-    pub scout_reporting_timeout: Duration,
-    /// How long to wait for UEFI boot to complete after rebooting a host
-    #[serde(
-        default = "MachineStateControllerConfig::uefi_boot_wait_default",
-        deserialize_with = "deserialize_duration_chrono",
-        serialize_with = "as_duration"
-    )]
-    pub uefi_boot_wait: Duration,
-}
-
-impl MachineStateControllerConfig {
-    pub fn dpu_wait_time_default() -> Duration {
-        Duration::minutes(5)
-    }
-
-    pub fn power_down_wait_default() -> Duration {
-        Duration::minutes(2)
-    }
-
-    pub fn failure_retry_time_default() -> Duration {
-        Duration::minutes(90)
-    }
-
-    pub fn dpu_up_threshold_default() -> Duration {
-        Duration::minutes(5)
-    }
-
-    fn scout_reporting_timeout_default() -> Duration {
-        Duration::minutes(5)
-    }
-
-    pub fn uefi_boot_wait_default() -> Duration {
-        Duration::minutes(5)
-    }
-}
-
-impl Default for MachineStateControllerConfig {
-    fn default() -> Self {
-        Self {
-            controller: StateControllerConfig::default(),
-            dpu_wait_time: MachineStateControllerConfig::dpu_wait_time_default(),
-            power_down_wait: MachineStateControllerConfig::power_down_wait_default(),
-            failure_retry_time: MachineStateControllerConfig::failure_retry_time_default(),
-            dpu_up_threshold: MachineStateControllerConfig::dpu_up_threshold_default(),
-            scout_reporting_timeout: MachineStateControllerConfig::scout_reporting_timeout_default(
-            ),
-            uefi_boot_wait: MachineStateControllerConfig::uefi_boot_wait_default(),
-        }
-    }
-}
-
 /// NetworkSegmentStateController related config.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct NetworkSegmentStateControllerConfig {
@@ -1491,143 +1389,6 @@ pub struct SpdmStateControllerConfig {
     /// Common state controller configs
     #[serde(default = "StateControllerConfig::default")]
     pub controller: StateControllerConfig,
-}
-
-/// Common StateController configurations
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct StateControllerConfig {
-    /// Configures the desired duration for one state controller iteration
-    ///
-    /// Lower iteration times will make the controller react faster to state changes.
-    /// However they will also increase the load on the system
-    #[serde(
-        default = "StateControllerConfig::iteration_time_default",
-        deserialize_with = "deserialize_duration",
-        serialize_with = "as_std_duration"
-    )]
-    pub iteration_time: std::time::Duration,
-
-    /// Configures the maximum time that the state handler will spend on evaluating
-    /// and advancing the state of a single object. If more time elapses during
-    /// state handling than this timeout allows for, state handling will fail with
-    /// a `TimeoutError`.
-    /// How long to wait for after power down before power on the machine.
-    #[serde(
-        default = "StateControllerConfig::max_object_handling_time_default",
-        deserialize_with = "deserialize_duration",
-        serialize_with = "as_std_duration"
-    )]
-    pub max_object_handling_time: std::time::Duration,
-
-    /// Configures the maximum amount of concurrency for the object state controller
-    ///
-    /// The controller will attempt to advance the state of this amount of objects
-    /// in parallel.
-    #[serde(default = "StateControllerConfig::max_concurrency_default")]
-    pub max_concurrency: usize,
-
-    /// Configures the maximum time the state processor will wait when checking
-    /// for and dispatching new tasks.
-    /// This value needs to be lower than `iteration_time` in order to assure that
-    /// tasks are executed more often than generated.
-    /// If the value is set to 0, the processor will dispatch object handling tasks
-    /// immediately once they are enqueued. The downside of 0 (or low) interval is
-    /// however that the state controller will poll the database for new tasks
-    /// with the same low interval.
-    #[serde(
-        default = "StateControllerConfig::processor_dispatch_interval_default",
-        deserialize_with = "deserialize_duration",
-        serialize_with = "as_std_duration"
-    )]
-    pub processor_dispatch_interval: std::time::Duration,
-
-    /// Configures how often the state handling processor will emit log messages
-    #[serde(
-        default = "StateControllerConfig::processor_log_interval_default",
-        deserialize_with = "deserialize_duration",
-        serialize_with = "as_std_duration"
-    )]
-    pub processor_log_interval: std::time::Duration,
-
-    /// Configures how often the state handling processor will reassess metrics and emit them.
-    /// Calculating aggregate metrics is expensive (all object metrics need to be traversed).
-    /// Therefore this should not happen much more frequently than the observabilty system
-    /// will access them.
-    #[serde(
-        default = "StateControllerConfig::metric_emission_interval",
-        deserialize_with = "deserialize_duration",
-        serialize_with = "as_std_duration"
-    )]
-    pub metric_emission_interval: std::time::Duration,
-
-    /// Configures for how long metrics for each object managed by the state controller
-    /// will show up before they get evicted.
-    /// The duration of this needs to be longer than the time between state handler
-    /// invocations for the object
-    #[serde(
-        default = "StateControllerConfig::metric_hold_time",
-        deserialize_with = "deserialize_duration",
-        serialize_with = "as_std_duration"
-    )]
-    pub metric_hold_time: std::time::Duration,
-}
-
-impl StateControllerConfig {
-    pub const fn max_object_handling_time_default() -> std::time::Duration {
-        std::time::Duration::from_secs(3 * 60)
-    }
-
-    pub const fn iteration_time_default() -> std::time::Duration {
-        std::time::Duration::from_secs(30)
-    }
-
-    pub const fn processor_dispatch_interval_default() -> std::time::Duration {
-        std::time::Duration::from_secs(2)
-    }
-
-    pub const fn processor_log_interval_default() -> std::time::Duration {
-        std::time::Duration::from_secs(60)
-    }
-
-    pub const fn metric_emission_interval() -> std::time::Duration {
-        std::time::Duration::from_secs(60)
-    }
-
-    pub const fn metric_hold_time() -> std::time::Duration {
-        std::time::Duration::from_secs(5 * 60)
-    }
-
-    pub const fn max_concurrency_default() -> usize {
-        10
-    }
-}
-
-impl Default for StateControllerConfig {
-    fn default() -> Self {
-        Self {
-            iteration_time: Self::iteration_time_default(),
-            max_object_handling_time: Self::max_object_handling_time_default(),
-            processor_dispatch_interval: Self::processor_dispatch_interval_default(),
-            processor_log_interval: Self::processor_log_interval_default(),
-            max_concurrency: Self::max_concurrency_default(),
-            metric_emission_interval: Self::metric_emission_interval(),
-            metric_hold_time: Self::metric_hold_time(),
-        }
-    }
-}
-
-impl From<&StateControllerConfig> for IterationConfig {
-    fn from(config: &StateControllerConfig) -> Self {
-        IterationConfig {
-            iteration_time: config.iteration_time,
-            max_object_handling_time: config.max_object_handling_time,
-            max_concurrency: config.max_concurrency,
-            processor_dispatch_interval: config.processor_dispatch_interval,
-            processor_log_interval: config.processor_log_interval,
-            metric_emission_interval: config.metric_emission_interval,
-            metric_hold_time: config.metric_hold_time,
-        }
-    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -1724,30 +1485,6 @@ fn default_listen() -> SocketAddr {
 
 fn default_max_database_connections() -> u32 {
     1000
-}
-
-fn default_rms_enforce_tls() -> bool {
-    true
-}
-
-/// Rack Manager Service (RMS) configuration for API connectivity and mTLS.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-pub struct RmsConfig {
-    /// URL of the RMS API for rack-level firmware upgrades and power sequencing.
-    pub api_url: Option<String>,
-
-    /// Path to the root CA certificate for TLS verification when connecting to RMS.
-    pub root_ca_path: Option<String>,
-
-    /// Path to the client certificate PEM for mTLS with RMS.
-    pub client_cert: Option<String>,
-
-    /// Path to the client private key PEM for mTLS with RMS.
-    pub client_key: Option<String>,
-
-    /// Enforce TLS when connecting to RMS. Defaults to true.
-    #[serde(default = "default_rms_enforce_tls")]
-    pub enforce_tls: bool,
 }
 
 /// DpuConfig related internal configuration
@@ -1998,104 +1735,6 @@ impl Default for NetworkSecurityGroupConfig {
     }
 }
 
-/// Global firmware management settings controlling
-/// update policies, concurrency, and retry behavior.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-pub struct FirmwareGlobal {
-    /// Enables automatic host firmware updates via the
-    /// background firmware manager.
-    #[serde(default)]
-    pub autoupdate: bool,
-    /// Host model names to force-enable autoupdate on,
-    /// regardless of the global `autoupdate` setting.
-    #[serde(default)]
-    pub host_enable_autoupdate: Vec<String>,
-    /// Host model names to force-disable autoupdate on,
-    /// regardless of the global `autoupdate` setting.
-    #[serde(default)]
-    pub host_disable_autoupdate: Vec<String>,
-    /// Frequency at which the firmware manager checks for
-    /// and applies updates.
-    /// Default is 30 seconds.
-    #[serde(
-        default = "FirmwareGlobal::run_interval_default",
-        deserialize_with = "deserialize_duration_chrono",
-        serialize_with = "as_duration"
-    )]
-    pub run_interval: Duration,
-    /// Maximum concurrent firmware uploads allowed.
-    /// Default is 4.
-    #[serde(default = "FirmwareGlobal::max_uploads_default")]
-    pub max_uploads: usize,
-    /// Maximum concurrent firmware flashing operations
-    /// across all machines.
-    /// Default is 16.
-    #[serde(default = "FirmwareGlobal::concurrency_limit_default")]
-    pub concurrency_limit: usize,
-    /// Local directory where firmware binaries are stored.
-    /// Default is `/opt/carbide/firmware`.
-    #[serde(default = "FirmwareGlobal::firmware_directory_default")]
-    pub firmware_directory: PathBuf,
-    /// Delay before retrying a failed host firmware
-    /// upgrade.
-    /// Default is 60 minutes.
-    #[serde(
-        default = "FirmwareGlobal::host_firmware_upgrade_retry_interval_default",
-        deserialize_with = "deserialize_duration_chrono",
-        serialize_with = "as_duration"
-    )]
-    pub host_firmware_upgrade_retry_interval: Duration,
-    /// Requires manual tagging of instances before
-    /// firmware updates are applied.
-    #[serde(default = "FirmwareGlobal::instance_updates_manual_tagging_default")]
-    pub instance_updates_manual_tagging: bool,
-    /// Disables retry logic after BMC resets during
-    /// firmware operations.
-    #[serde(default)]
-    pub no_reset_retries: bool,
-    /// Delay after GPU reboot before the HGX BMC can be
-    /// accessed again.
-    /// Default is 30 seconds.
-    #[serde(
-        default = "FirmwareGlobal::hgx_bmc_gpu_reboot_delay_default",
-        deserialize_with = "deserialize_duration_chrono",
-        serialize_with = "as_duration"
-    )]
-    pub hgx_bmc_gpu_reboot_delay: Duration,
-    /// Forces all firmware upgrades to require explicit
-    /// administrator approval.
-    #[serde(default)]
-    pub requires_manual_upgrade: bool,
-    #[serde(default = "FirmwareGlobal::max_concurrent_bfb_copies_default")]
-    pub max_concurrent_bfb_copies: usize,
-}
-
-impl FirmwareGlobal {
-    #[cfg(test)]
-    pub fn test_default() -> Self {
-        FirmwareGlobal {
-            autoupdate: true,
-            host_enable_autoupdate: vec![],
-            host_disable_autoupdate: vec![],
-            max_uploads: 4,
-            run_interval: Duration::seconds(5),
-            concurrency_limit: FirmwareGlobal::concurrency_limit_default(),
-            firmware_directory: PathBuf::default(),
-            host_firmware_upgrade_retry_interval: Self::get_retry_interval(),
-            instance_updates_manual_tagging: false,
-            no_reset_retries: false,
-            hgx_bmc_gpu_reboot_delay: FirmwareGlobal::hgx_bmc_gpu_reboot_delay_default(),
-            requires_manual_upgrade: false,
-            max_concurrent_bfb_copies: FirmwareGlobal::max_concurrent_bfb_copies_default(),
-        }
-    }
-
-    #[cfg(test)]
-    pub fn get_retry_interval() -> Duration {
-        Duration::seconds(1)
-    }
-}
-
 /// Configuration for rolling machine updates and
 /// maintenance windows.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
@@ -2119,54 +1758,6 @@ pub struct TimePeriod {
     pub start: chrono::DateTime<chrono::Utc>,
     /// End of the time window (UTC).
     pub end: chrono::DateTime<chrono::Utc>,
-}
-
-impl FirmwareGlobal {
-    pub fn instance_updates_manual_tagging_default() -> bool {
-        true
-    }
-    pub fn run_interval_default() -> Duration {
-        Duration::seconds(30)
-    }
-    pub fn max_uploads_default() -> usize {
-        4
-    }
-    pub fn concurrency_limit_default() -> usize {
-        16
-    }
-    pub fn firmware_directory_default() -> PathBuf {
-        PathBuf::from("/opt/carbide/firmware")
-    }
-    pub fn host_firmware_upgrade_retry_interval_default() -> Duration {
-        Duration::minutes(60)
-    }
-    pub fn hgx_bmc_gpu_reboot_delay_default() -> Duration {
-        Duration::seconds(30)
-    }
-    pub fn max_concurrent_bfb_copies_default() -> usize {
-        10
-    }
-}
-
-impl Default for FirmwareGlobal {
-    fn default() -> FirmwareGlobal {
-        FirmwareGlobal {
-            autoupdate: false,
-            host_enable_autoupdate: vec![],
-            host_disable_autoupdate: vec![],
-            run_interval: FirmwareGlobal::run_interval_default(),
-            max_uploads: FirmwareGlobal::max_uploads_default(),
-            concurrency_limit: FirmwareGlobal::concurrency_limit_default(),
-            firmware_directory: FirmwareGlobal::firmware_directory_default(),
-            host_firmware_upgrade_retry_interval:
-                FirmwareGlobal::host_firmware_upgrade_retry_interval_default(),
-            instance_updates_manual_tagging: false,
-            no_reset_retries: false,
-            hgx_bmc_gpu_reboot_delay: FirmwareGlobal::hgx_bmc_gpu_reboot_delay_default(),
-            requires_manual_upgrade: false,
-            max_concurrent_bfb_copies: FirmwareGlobal::max_concurrent_bfb_copies_default(),
-        }
-    }
 }
 
 pub fn default_max_find_by_ids() -> u32 {
@@ -2195,27 +1786,6 @@ pub fn default_datacenter_asn() -> u32 {
     // identifier.  It's used in pre-FNN sites and in FNN
     // on DPU routes, but we'll transition away from that.
     11414
-}
-
-pub fn default_next_duration_success() -> Duration {
-    Duration::minutes(5)
-}
-
-pub fn default_next_duration_failure() -> Duration {
-    Duration::minutes(2)
-}
-
-pub fn default_wait_duration_next_reboot() -> Duration {
-    Duration::minutes(15)
-}
-
-pub fn default_power_options() -> PowerManagerOptions {
-    PowerManagerOptions {
-        enabled: false,
-        next_try_duration_on_success: default_next_duration_success(),
-        next_try_duration_on_failure: default_next_duration_failure(),
-        wait_duration_until_host_reboot: default_wait_duration_next_reboot(),
-    }
 }
 
 pub fn default_to_true() -> bool {
@@ -2320,35 +1890,6 @@ pub struct MachineValidationTestConfig {
 }
 
 impl MachineValidationConfig {
-    const fn default_run_interval() -> std::time::Duration {
-        std::time::Duration::from_secs(60)
-    }
-}
-
-/// Configuration for rack-level validation (partition-based
-/// multi-node tests run after firmware upgrade / maintenance).
-///
-/// Example:
-/// ```toml
-/// [rack_validation_config]
-/// enabled = true
-/// run_interval = "60s"
-/// ```
-#[derive(Default, Clone, Debug, Deserialize, Serialize)]
-pub struct RackValidationConfig {
-    /// Enables rack validation testing.
-    #[serde(default)]
-    pub enabled: bool,
-
-    #[serde(
-        default = "RackValidationConfig::default_run_interval",
-        deserialize_with = "deserialize_duration",
-        serialize_with = "as_std_duration"
-    )]
-    pub run_interval: std::time::Duration,
-}
-
-impl RackValidationConfig {
     const fn default_run_interval() -> std::time::Duration {
         std::time::Duration::from_secs(60)
     }
@@ -2668,54 +2209,6 @@ impl DsxExchangeEventBusConfig {
     }
 }
 
-/// MachineValidation related configuration
-#[derive(Default, Clone, Copy, Debug, Deserialize, Serialize)]
-pub struct BomValidationConfig {
-    /// Whether BOM Validation is enabled
-    #[serde(default)]
-    pub enabled: bool,
-
-    /// Allow machines that do not have a SKU assigned to bypass SKU validation
-    /// When true, machines in WaitingForSkuAssignment state can proceed without a SKU
-    #[serde(default)]
-    pub ignore_unassigned_machines: bool,
-
-    /// Allow machines to stay in Ready state and remain allocatable even when SKU validation fails
-    /// When false (default): Standard mode - validation failures block allocation (machine enters failed state)
-    /// When true: Allow allocation mode - validation still occurs and health reports are recorded, but machines do not transition
-    /// into failed states (SkuVerificationFailed, SkuMissing, WaitingForSkuAssignment) and can proceed to Ready/MachineValidation
-    #[serde(default)]
-    pub allow_allocation_on_validation_failure: bool,
-
-    /// The interval since the last time the state machine attempted
-    /// to find an existing SKU that matches the machine.
-    #[serde(
-        default = "BomValidationConfig::default_bom_validation_interval",
-        deserialize_with = "deserialize_duration",
-        serialize_with = "as_std_duration"
-    )]
-    pub find_match_interval: std::time::Duration,
-
-    /// When a SKU is assigned to a machine, but doesn't exist
-    /// attempt to create a SKU for the machine.  This only
-    /// applies to SKUs assigned via expected machines.
-    #[serde(default)]
-    pub auto_generate_missing_sku: bool,
-    /// The inteveral between attempting to generate a SKU from amachine
-    #[serde(
-        default = "BomValidationConfig::default_bom_validation_interval",
-        deserialize_with = "deserialize_duration",
-        serialize_with = "as_std_duration"
-    )]
-    pub auto_generate_missing_sku_interval: std::time::Duration,
-}
-
-impl BomValidationConfig {
-    const fn default_bom_validation_interval() -> std::time::Duration {
-        std::time::Duration::from_secs(300)
-    }
-}
-
 /// Auto machine repair plugin related configuration
 #[derive(Default, Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct AutoMachineRepairPluginConfig {
@@ -2823,6 +2316,7 @@ pub fn default_host_intercept_bridge_port() -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use std::sync::atomic::Ordering as AtomicOrdering;
 
     use carbide_authn::config::CertComponent;
@@ -2832,6 +2326,7 @@ mod tests {
     use figment::providers::{Env, Format, Toml};
     use libmlx::variables::value::MlxValueType;
     use libredfish::model::service_root::RedfishVendor;
+    use model::expected_machine::DpuMode;
     use model::network_segment::NetworkDefinitionSegmentType;
     use model::resource_pool;
 
@@ -3190,7 +2685,7 @@ mod tests {
                 create_switches: Arc::new(true.into()),
                 switches_created_per_run: 9,
                 rotate_switch_nvos_credentials: Arc::new(false.into()),
-                force_dpu_nic_mode: Arc::new(false.into()),
+                dpu_mode: None,
                 explore_mode: SiteExplorerExploreMode::LibRedfish,
             }
         );
@@ -3364,7 +2859,7 @@ mod tests {
                 create_switches: Arc::new(true.into()),
                 switches_created_per_run: 9,
                 rotate_switch_nvos_credentials: Arc::new(false.into()),
-                force_dpu_nic_mode: Arc::new(false.into()),
+                dpu_mode: None,
                 explore_mode: SiteExplorerExploreMode::LibRedfish,
             }
         );
@@ -3673,7 +3168,7 @@ mod tests {
                 create_switches: Arc::new(true.into()),
                 switches_created_per_run: 9,
                 rotate_switch_nvos_credentials: Arc::new(false.into()),
-                force_dpu_nic_mode: Arc::new(false.into()),
+                dpu_mode: None,
                 explore_mode: SiteExplorerExploreMode::LibRedfish,
             }
         );
@@ -3823,6 +3318,56 @@ mod tests {
         Ok(())
     }
 
+    /// Verifies the `[site_explorer] dpu_mode = ...` setting parses
+    /// correctly for every named variant. When unset (the default),
+    /// `site_explorer.dpu_mode` is `None` and hosts resolve to
+    /// `DpuMode::DpuMode`.
+    #[test]
+    fn site_explorer_dpu_mode_parses_and_defaults_to_none() {
+        let config: CarbideConfig = Figment::new()
+            .merge(Toml::file(format!("{TEST_DATA_DIR}/min_config.toml")))
+            .extract()
+            .unwrap();
+        assert_eq!(config.site_explorer.dpu_mode, None);
+
+        for (toml_value, expected) in [
+            ("dpu_mode", DpuMode::DpuMode),
+            ("nic_mode", DpuMode::NicMode),
+            ("no_dpu", DpuMode::NoDpu),
+        ] {
+            let config: CarbideConfig = Figment::new()
+                .merge(Toml::file(format!("{TEST_DATA_DIR}/min_config.toml")))
+                .merge(Toml::string(&format!(
+                    "[site_explorer]\ndpu_mode = \"{toml_value}\"\n"
+                )))
+                .extract()
+                .unwrap();
+            assert_eq!(
+                config.site_explorer.dpu_mode,
+                Some(expected),
+                "[site_explorer] dpu_mode = {toml_value:?} should parse to {expected:?}",
+            );
+        }
+    }
+
+    /// Real-world site TOMLs may still carry the now-removed
+    /// `force_dpu_nic_mode` setting (top-level and/or under
+    /// `[site_explorer]`). serde silently ignores unknown keys, so
+    /// those files should keep parsing cleanly after the rip-out --
+    /// this is the regression guard for that.
+    #[test]
+    fn legacy_force_dpu_nic_mode_in_toml_still_parses() {
+        let _config: CarbideConfig = Figment::new()
+            .merge(Toml::file(format!("{TEST_DATA_DIR}/min_config.toml")))
+            .merge(Toml::string(
+                "force_dpu_nic_mode = false\n\
+                 [site_explorer]\n\
+                 force_dpu_nic_mode = true\n",
+            ))
+            .extract()
+            .expect("legacy force_dpu_nic_mode in TOML must still parse");
+    }
+
     #[test]
     fn test_max_concurrent_updates() -> eyre::Result<()> {
         let test = MaxConcurrentUpdates {
@@ -3905,54 +3450,6 @@ num_of_vfs = 127
                 .to_string()
                 .contains("dpu_config.num_of_vfs must be <= 126"),
             "{error}"
-        );
-    }
-
-    #[test]
-    fn test_power_manager_default() {
-        let toml = r#"
-enabled = true
-next_try_duration_on_success = "3m"
-"#;
-
-        let power_config: PowerManagerOptions =
-            Figment::new().merge(Toml::string(toml)).extract().unwrap();
-
-        println!("{power_config:?}");
-        assert!(power_config.enabled);
-        assert_eq!(
-            Duration::minutes(3),
-            power_config.next_try_duration_on_success
-        );
-        assert_eq!(
-            Duration::minutes(2),
-            power_config.next_try_duration_on_failure
-        );
-        assert_eq!(
-            Duration::minutes(15),
-            power_config.wait_duration_until_host_reboot
-        );
-    }
-
-    #[test]
-    fn test_power_manager_default_1() {
-        let toml = r#""#;
-
-        let power_config: PowerManagerOptions =
-            Figment::new().merge(Toml::string(toml)).extract().unwrap();
-
-        assert!(!power_config.enabled);
-        assert_eq!(
-            Duration::minutes(5),
-            power_config.next_try_duration_on_success
-        );
-        assert_eq!(
-            Duration::minutes(2),
-            power_config.next_try_duration_on_failure
-        );
-        assert_eq!(
-            Duration::minutes(15),
-            power_config.wait_duration_until_host_reboot
         );
     }
 

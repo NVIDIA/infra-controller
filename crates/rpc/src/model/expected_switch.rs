@@ -46,6 +46,7 @@ impl From<ExpectedSwitch> for rpc::forge::ExpectedSwitch {
                 .bmc_ip_address
                 .map(|ip| ip.to_string())
                 .unwrap_or_default(),
+            nvos_ip_address: expected_switch.nvos_ip_address.map(|ip| ip.to_string()),
             metadata: Some(expected_switch.metadata.into()),
             rack_id: expected_switch.rack_id,
             bmc_retain_credentials: expected_switch.bmc_retain_credentials.filter(|&v| v),
@@ -80,6 +81,15 @@ impl TryFrom<rpc::forge::ExpectedSwitch> for ExpectedSwitch {
         } else {
             rpc.bmc_ip_address.parse().ok()
         };
+        let nvos_ip_address = rpc
+            .nvos_ip_address
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map(|s| {
+                s.parse()
+                    .map_err(|_| RpcDataConversionError::InvalidArgument(s.to_string()))
+            })
+            .transpose()?;
 
         Ok(ExpectedSwitch {
             expected_switch_id,
@@ -90,6 +100,7 @@ impl TryFrom<rpc::forge::ExpectedSwitch> for ExpectedSwitch {
             nvos_username: rpc.nvos_username,
             nvos_password: rpc.nvos_password,
             bmc_ip_address,
+            nvos_ip_address,
             metadata,
             rack_id: rpc.rack_id,
             nvos_mac_addresses,

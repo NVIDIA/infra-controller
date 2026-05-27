@@ -21,7 +21,6 @@ use std::collections::{HashMap, HashSet};
 use std::mem::discriminant as enum_discr;
 use std::net::IpAddr;
 use std::str::FromStr;
-use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use attestation::{
@@ -31,6 +30,7 @@ use carbide_firmware::{FirmwareConfig, FirmwareConfigSnapshot, FirmwareDownloade
 use carbide_redfish::libredfish::conv::{
     IntoLibredfish, IntoModel, machine_last_reboot_requested_mode,
 };
+use carbide_redfish::libredfish::error::state_handler_redfish_error as redfish_error;
 use carbide_uuid::machine::MachineId;
 use carbide_uuid::vpc::VpcId;
 use chrono::{DateTime, Duration, Utc};
@@ -85,6 +85,9 @@ use model::resource_pool::common::CommonPools;
 use model::site_explorer::ExploredEndpoint;
 use sku::{handle_bom_validation_requested, handle_bom_validation_state};
 use sqlx::PgConnection;
+use state_controller::state_handler::{
+    StateHandler, StateHandlerContext, StateHandlerError, StateHandlerOutcome,
+};
 use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 use tokio::sync::Semaphore;
@@ -92,21 +95,17 @@ use tracing::instrument;
 use version_compare::Cmp;
 
 use crate::CarbideError;
-use crate::cfg::file::{
-    BomValidationConfig, CarbideConfig, MachineValidationConfig, PowerManagerOptions, TimePeriod,
-};
+use crate::cfg::file::{MachineValidationConfig, TimePeriod};
 use crate::dpf::DpfOperations;
 use crate::redfish::{
     self, host_power_control, host_power_control_with_location, set_host_uefi_password,
 };
-use crate::state_controller::common_services::CommonStateHandlerServices;
-use crate::state_controller::external_service_error::redfish_error;
-use crate::state_controller::machine::context::MachineStateHandlerContextObjects;
+use crate::state_controller::machine::config::{FirmwareGlobal, MachineStateHandlerSiteConfig};
+use crate::state_controller::machine::context::{
+    MachineStateHandlerContextObjects, MachineStateHandlerServices,
+};
 use crate::state_controller::machine::{
     MeasuringOutcome, get_measuring_prerequisites, handle_measuring_state,
-};
-use crate::state_controller::state_handler::{
-    StateHandler, StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
 
 mod attestation;
@@ -126,8 +125,9 @@ use helpers::{
     ReprovisionStateHelper, all_equal,
 };
 use rpc::forge_agent_control_response::FileArtifact;
+use state_controller::db_write_batch::DbWriteBatch;
 
-use crate::state_controller::db_write_batch::DbWriteBatch;
+use crate::state_controller::machine::config::{BomValidationConfig, PowerManagerOptions};
 use crate::state_controller::machine::write_ops::MachineWriteOp;
 
 // We can't use http::StatusCode because libredfish has a newer version
@@ -736,32 +736,17 @@ impl MachineStateHandler {
                         },
                     ))
                 } else {
+                    // There used to be a `force_dpu_nic_mode` related return
+                    // here that skipped DPU discovery entirely for operator-flagged
+                    // NIC-mode hosts (site or individual), but we dropped it,
+                    // becuse site-explorer doesn't have DPU IDs associated with
+                    // the host in the first place; `associated_dpu_machine_ids`
+                    // is empty, and the outer branch above already transitions
+                    // to HostInit before we ever reach this. What's nice is, this
+                    // also allows NicMode hosts to get actively reconfigured to
+                    // NIC mode via `set_nic_mode` during site-explorer ingestion,
+                    // which is something we do, but `force_dpu_nic_mode` never did.
                     let mut state_handler_outcome = StateHandlerOutcome::do_nothing();
-                    if ctx
-                        .services
-                        .site_config
-                        .force_dpu_nic_mode
-                        .load(Ordering::Relaxed)
-                    {
-                        // skip dpu discovery and init entirely, treat it as a nic
-                        return Ok(StateHandlerOutcome::transition(
-                            ManagedHostState::HostInit {
-                                machine_state: MachineState::WaitingForPlatformConfiguration {
-                                    retry_count: 0,
-                                },
-                            },
-                        ));
-                        /*
-                        // todo: check for machine type before skipping? not sure site explorer is setting this
-                        if let Some(hwinfo) = mh_snapshot.host_snapshot.hardware_info.clone() {
-                            if let Some(dmi_data) = hwinfo.dmi_data {
-                                if dmi_data.product_name.contains("GB200 NVL") {
-
-                                }
-                            }
-                        }
-                         */
-                    }
                     for dpu_snapshot in &mh_snapshot.dpu_snapshots {
                         state_handler_outcome = self
                             .dpu_handler
@@ -903,7 +888,7 @@ impl MachineStateHandler {
                     let reprov_state = ReprovisionState::next_substate_based_on_bfb_support(
                         self.enable_secure_boot,
                         mh_snapshot,
-                        ctx.services.site_config.dpf.enabled,
+                        ctx.services.site_config.dpf_enabled,
                     );
 
                     let next_state = reprov_state.next_state_with_all_dpus_updated(
@@ -1556,7 +1541,7 @@ impl MachineStateHandler {
                             CleanupState::Init,
                             CleanupContext::Deprovision,
                         );
-                        if !ctx.services.site_config.spdm.enabled {
+                        if !ctx.services.site_config.spdm_enabled {
                             return Ok(StateHandlerOutcome::transition(next_skip_state));
                         }
                         match spdm_measuring_state {
@@ -1594,7 +1579,7 @@ impl MachineStateHandler {
                 spdm_measuring_state,
             } => {
                 let next_skip_state = ManagedHostState::StartAssignmentCycle;
-                if !ctx.services.site_config.spdm.enabled {
+                if !ctx.services.site_config.spdm_enabled {
                     return Ok(StateHandlerOutcome::transition(next_skip_state));
                 }
                 match spdm_measuring_state {
@@ -1654,7 +1639,7 @@ impl MachineStateHandler {
                     instance_state: InstanceState::DpaProvisioning,
                 };
 
-                if !ctx.services.site_config.is_dpa_enabled() {
+                if !ctx.services.site_config.dpa_enabled {
                     // If DPA is not enabled, we don't need to do any DPA provisioning.
                     // So go directly to WaitingForDpaToBeReady state, where we will change
                     // the network status of our DPUs.
@@ -1778,7 +1763,7 @@ impl MachineStateHandler {
         let reprov_state = ReprovisionState::next_substate_based_on_bfb_support(
             self.enable_secure_boot,
             state,
-            ctx.services.site_config.dpf.enabled,
+            ctx.services.site_config.dpf_enabled,
         );
         Ok(Some(reprov_state.next_state_with_all_dpus_updated(
             &state.managed_state,
@@ -1835,7 +1820,7 @@ impl MachineStateHandler {
                     ReprovisionState::next_substate_based_on_bfb_support(
                         self.enable_secure_boot,
                         state,
-                        ctx.services.site_config.dpf.enabled,
+                        ctx.services.site_config.dpf_enabled,
                     )
                     .next_state_with_all_dpus_updated(
                         &state.managed_state,
@@ -3389,7 +3374,7 @@ impl DpuMachineStateHandler {
                     DpuDiscoveringState::next_substate_based_on_bfb_support(
                         self.enable_secure_boot,
                         state,
-                        ctx.services.site_config.dpf.enabled,
+                        ctx.services.site_config.dpf_enabled,
                     );
 
                 tracing::info!(
@@ -5051,7 +5036,7 @@ impl StateHandler for HostMachineStateHandler {
                     let next_skip_state = ManagedHostState::HostInit {
                         machine_state: MachineState::WaitingForDiscovery,
                     };
-                    if !ctx.services.site_config.spdm.enabled {
+                    if !ctx.services.site_config.spdm_enabled {
                         return Ok(StateHandlerOutcome::transition(next_skip_state));
                     }
                     match spdm_measuring_state {
@@ -5189,14 +5174,13 @@ impl StateHandler for HostMachineStateHandler {
                             ))
                         }
                         LockdownState::TimeWaitForDPUDown => {
-                            if ctx
-                                .services
-                                .site_config
-                                .force_dpu_nic_mode
-                                .load(Ordering::Relaxed)
-                            {
-                                // skip wait for dpu reboot TimeWaitForDPUDown, WaitForDPUUp
-                                // GB200/300, etc with dpu disconnected or in nic mode
+                            if mh_snapshot.is_zero_dpu() {
+                                // No DPU to wait for going down/up -- skip
+                                // straight to BomValidating. Covers
+                                // NicMode/NoDpu hosts and anything else
+                                // with no DPU snapshots; otherwise we'd
+                                // wait `dpu_wait_time` for a DPU that's
+                                // never going to come up.
                                 let next_state = ManagedHostState::BomValidating {
                                     bom_validating_state: BomValidating::MatchingSku(
                                         BomValidatingContext {
@@ -5965,7 +5949,7 @@ impl StateHandler for InstanceStateHandler {
                         let next_state = ReprovisionState::next_substate_based_on_bfb_support(
                             self.enable_secure_boot,
                             mh_snapshot,
-                            ctx.services.site_config.dpf.enabled,
+                            ctx.services.site_config.dpf_enabled,
                         )
                         .next_state_with_all_dpus_updated(
                             &mh_snapshot.managed_state,
@@ -6068,7 +6052,7 @@ impl StateHandler for InstanceStateHandler {
 
                     // Check each DPA interface associated with the machine to make sure the DPA NIC has updated
                     // its network config (setting VNI to zero in this case).
-                    if ctx.services.site_config.is_dpa_enabled() {
+                    if ctx.services.site_config.dpa_enabled {
                         for dpa_interface in &mh_snapshot.dpa_interface_snapshots {
                             // We're heading back to admin and a DPA still in
                             // Provisioning has nothing to ack -- it never
@@ -6295,7 +6279,7 @@ impl StateHandler for InstanceStateHandler {
                     // DPA state controller re-evaluates with the new host value
                     // (READY -> WaitingForSetVNI, triggering SetVNI).
                     let mut txn = ctx.services.db_pool.begin().await?;
-                    if ctx.services.site_config.is_dpa_enabled() {
+                    if ctx.services.site_config.dpa_enabled {
                         for dpa_interface in &mh_snapshot.dpa_interface_snapshots {
                             db::dpa_interface::try_update_network_config(
                                 &mut txn,
@@ -6316,7 +6300,7 @@ impl StateHandler for InstanceStateHandler {
                     // This involves the DPA State Machine sending SetVNI commands to the NICs, and getting
                     // an ACK. If any of the interfaces has not yet heard back the ACk, we will continue to
                     // be in the current state.
-                    if ctx.services.site_config.is_dpa_enabled() {
+                    if ctx.services.site_config.dpa_enabled {
                         for dpa_interface in &mh_snapshot.dpa_interface_snapshots {
                             if !dpa_interface.managed_host_network_config_version_synced() {
                                 return Ok(StateHandlerOutcome::wait(
@@ -6881,6 +6865,68 @@ impl std::fmt::Debug for HostUpgradeState {
     }
 }
 
+/// If the machine's parent rack is in `RackState::Error`, clear
+/// `host_reprovisioning_requested` and short-circuit back to the machine's
+/// pre-reprovisioning steady state (`Ready`, or `Assigned { instance_state:
+/// Ready }` if currently assigned). The rack will never advance the
+/// remaining `HostReprovision` sub-states once it has bailed out.
+///
+/// Only applies to rack-level reprovisioning requests; non-rack-initiated
+/// reprovisions are independent of the rack's lifecycle.
+async fn rack_failed_abort_host_reprovision_outcome(
+    state: &ManagedHostStateSnapshot,
+    ctx: &mut StateHandlerContext<'_, MachineStateHandlerContextObjects>,
+    machine_id: &MachineId,
+) -> Result<Option<StateHandlerOutcome<ManagedHostState>>, StateHandlerError> {
+    if !is_rack_level_reprovisioning(state) {
+        return Ok(None);
+    }
+
+    let Some(rack_id) = state.host_snapshot.rack_id.as_ref() else {
+        return Ok(None);
+    };
+
+    let mut conn = ctx.services.db_pool.acquire().await?;
+    let racks = db::rack::find_by(
+        conn.as_mut(),
+        db::ObjectColumnFilter::One(db::rack::IdColumn, rack_id),
+    )
+    .await?;
+    drop(conn);
+    let Some(rack) = racks.into_iter().next() else {
+        return Ok(None);
+    };
+    if !matches!(
+        rack.controller_state.value,
+        model::rack::RackState::Error { .. }
+    ) {
+        return Ok(None);
+    }
+
+    let target_state = match &state.managed_state {
+        ManagedHostState::Assigned {
+            instance_state: InstanceState::HostReprovision { .. },
+        } => ManagedHostState::Assigned {
+            instance_state: InstanceState::Ready,
+        },
+        _ => ManagedHostState::Ready,
+    };
+
+    tracing::info!(
+        machine_id = %machine_id,
+        rack_id = %rack_id,
+        from = ?state.managed_state,
+        to = ?target_state,
+        "Rack is in Error; aborting machine HostReprovision and returning to Ready",
+    );
+
+    let mut txn = ctx.services.db_pool.begin().await?;
+    db::host_machine_update::clear_host_reprovisioning_request(txn.as_mut(), machine_id).await?;
+    Ok(Some(
+        StateHandlerOutcome::transition(target_state).with_txn(txn),
+    ))
+}
+
 impl HostUpgradeState {
     // Handles when in HostReprovisioning or when entering it
     async fn handle_host_reprovision(
@@ -6890,6 +6936,12 @@ impl HostUpgradeState {
         machine_id: &MachineId,
         scenario: HostFirmwareScenario,
     ) -> Result<StateHandlerOutcome<ManagedHostState>, StateHandlerError> {
+        if let Some(outcome) =
+            rack_failed_abort_host_reprovision_outcome(state, ctx, machine_id).await?
+        {
+            return Ok(outcome);
+        }
+
         // Treat Ready (but flagged to do updates) the same as HostReprovisionState/CheckingFirmware
         let original_state = &state.managed_state.clone();
         let (mut host_reprovision_state, retry_count) = match &state.managed_state {
@@ -7291,7 +7343,7 @@ impl HostUpgradeState {
         // temporary check if manual upgrade is required before proceeding with automatic ones,
         // should be removed once we complete upgrades through the scout.
         // For now, only gb200s need manual upgrades.
-        if requires_manual_firmware_upgrade(state, &ctx.services.site_config) {
+        if requires_manual_firmware_upgrade(state, &ctx.services.site_config.firmware_global) {
             tracing::info!(
                 "Machine {} (GB200) requires manual firmware upgrade, transitioning to WaitingForManualUpgrade",
                 machine_id
@@ -7725,7 +7777,7 @@ impl HostUpgradeState {
     async fn pre_update_resets(
         &self,
         state: &ManagedHostStateSnapshot,
-        services: &CommonStateHandlerServices,
+        services: &MachineStateHandlerServices,
         scenario: HostFirmwareScenario,
         phase: Option<InitialResetPhase>,
         last_time: &Option<DateTime<Utc>>,
@@ -8687,9 +8739,9 @@ pub async fn host_power_state(
 
 fn requires_manual_firmware_upgrade(
     state: &ManagedHostStateSnapshot,
-    config: &CarbideConfig,
+    firmware_global: &FirmwareGlobal,
 ) -> bool {
-    if !config.firmware_global.requires_manual_upgrade {
+    if !firmware_global.requires_manual_upgrade {
         return false;
     }
 
@@ -9286,7 +9338,7 @@ pub async fn handler_host_power_control_with_location(
 
 async fn restart_dpu(
     machine: &Machine,
-    services: &CommonStateHandlerServices,
+    services: &MachineStateHandlerServices,
     dpf_used_for_ingestion: bool,
 ) -> Result<(), StateHandlerError> {
     let dpu_redfish_client = services.create_redfish_client_from_machine(machine).await?;
@@ -9294,8 +9346,8 @@ async fn restart_dpu(
     // We have seen the boot order be reset on DPUs in some edge cases (for example, after upgrading the BMC and CEC on BF3s)
     // This should take care of handling such cases. It is a no-op most of the time.
     // Skip for DPUs that get their BFB installed via redfish or DPF, they don't need to HTTP boot.
-    let redfish_install = machine.bmc_info.supports_bfb_install()
-        && services.site_config.dpu_config.dpu_enable_secure_boot;
+    let redfish_install =
+        machine.bmc_info.supports_bfb_install() && services.site_config.dpu_enable_secure_boot;
 
     if !redfish_install && !dpf_used_for_ingestion {
         let _ = dpu_redfish_client
@@ -9483,7 +9535,7 @@ pub(super) async fn call_machine_setup_and_handle_no_dpu_error(
     redfish_client: &dyn Redfish,
     boot_interface_mac: Option<&str>,
     expected_dpu_count: usize,
-    site_config: &CarbideConfig,
+    site_config: &MachineStateHandlerSiteConfig,
 ) -> Result<Option<String>, RedfishError> {
     let setup_result = redfish_client
         .machine_setup(
@@ -9496,7 +9548,7 @@ pub(super) async fn call_machine_setup_and_handle_no_dpu_error(
     match (
         setup_result,
         expected_dpu_count,
-        site_config.site_explorer.allow_zero_dpu_hosts,
+        site_config.allow_zero_dpu_hosts,
     ) {
         (Err(RedfishError::NoDpu), 0, true) => {
             tracing::info!(
@@ -9513,16 +9565,12 @@ async fn set_boot_order_dpu_first_and_handle_no_dpu_error(
     redfish_client: &dyn Redfish,
     boot_interface_mac: &str,
     expected_dpu_count: usize,
-    site_config: &CarbideConfig,
+    allow_zero_dpu_hosts: bool,
 ) -> Result<Option<String>, RedfishError> {
     let setup_result = redfish_client
         .set_boot_order_dpu_first(boot_interface_mac)
         .await;
-    match (
-        setup_result,
-        expected_dpu_count,
-        site_config.site_explorer.allow_zero_dpu_hosts,
-    ) {
+    match (setup_result, expected_dpu_count, allow_zero_dpu_hosts) {
         (Err(RedfishError::NoDpu), 0, true) => {
             tracing::info!(
                 "redfish set_boot_order_dpu_first failed due to there being no DPUs on the host. This is expected as the host has no DPUs, and we are configured to allow this."
@@ -10132,21 +10180,18 @@ async fn set_host_boot_order(
 ) -> Result<SetBootOrderOutcome, StateHandlerError> {
     match set_boot_order_info.set_boot_order_state {
         SetBootOrderState::SetBootOrder => {
-            if mh_snapshot.dpu_snapshots.is_empty() {
-                // MachineState::SetBootOrder is a NO-OP for the Zero-DPU case
-                if ctx
-                    .services
-                    .site_config
-                    .force_dpu_nic_mode
-                    .load(Ordering::Relaxed)
-                {
-                    redfish_client
-                        .boot_first(Boot::UefiHttp)
-                        .await
-                        .map_err(|e| redfish_error("boot_first", e))?;
-                    return Ok(SetBootOrderOutcome::Done);
-                }
-            }
+            // There used to be a `force_dpu_nic_mode`-gated short-circuit
+            // here that, for zero-DPU hosts when the flag was set, called
+            // `boot_first(Boot::UefiHttp)` and returned `Done` to skip
+            // the rest of the SetBootOrder flow. Dropped along with the
+            // flag. We don't extend the `boot_first(UefiHttp)` call to
+            // all zero-DPU hosts because libredfish doesn't implement
+            // `boot_first` for every vendor yet (Dell currently returns
+            // `NotSupported`); zero-DPU hosts fall through to the
+            // `set_boot_order_dpu_first` path below, which downgrades
+            // the resulting `NoDpu` error via `allow_zero_dpu_hosts`
+            // and still hits `CheckBootOrder` for verification.
+            //
             // Resolve the boot NIC MAC the same way `CheckHostConfig` does,
             // supporting hosts with DPU(s) and zero DPUs alike.
             let boot_interface_mac = mh_snapshot.boot_interface_mac().ok_or_else(|| {
@@ -10160,7 +10205,7 @@ async fn set_host_boot_order(
                 redfish_client,
                 &boot_interface_mac.to_string(),
                 mh_snapshot.host_snapshot.associated_dpu_machine_ids().len(),
-                &ctx.services.site_config,
+                ctx.services.site_config.allow_zero_dpu_hosts,
             )
             .await
             {
@@ -10650,8 +10695,13 @@ mod tests {
             .await
             .unwrap();
 
-        let result =
-            call_machine_setup_and_handle_no_dpu_error(client.as_ref(), None, 1, &config).await;
+        let result = call_machine_setup_and_handle_no_dpu_error(
+            client.as_ref(),
+            None,
+            1,
+            &config.machine_state_handler_site_config(),
+        )
+        .await;
 
         assert!(result.is_ok());
 

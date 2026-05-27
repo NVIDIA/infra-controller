@@ -30,7 +30,7 @@ use uuid::Uuid;
 
 use super::common::api_fixtures::{self, TestEnv};
 use crate::tests::common::api_fixtures::network_segment::{
-    FIXTURE_TENANT_NETWORK_SEGMENT_GATEWAYS, create_tenant_network_segment,
+    FIXTURE_TENANT_NETWORK_SEGMENT_GATEWAYS, create_network_segment, create_tenant_network_segment,
 };
 use crate::tests::common::api_fixtures::{create_managed_host, create_test_env};
 use crate::tests::common::rpc_builder::VpcCreationRequest;
@@ -617,6 +617,255 @@ async fn test_vpc_peering_network_config_ordered_peerings(
     let mut expected_peer_prefixes = peer_prefixes.clone();
     expected_peer_prefixes.sort_unstable();
     assert_eq!(*peer_prefixes, expected_peer_prefixes);
+
+    Ok(())
+}
+
+#[crate::sqlx_test]
+async fn flat_vpc_can_peer_with_etv_under_exclusive_policy(
+    pool: sqlx::PgPool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Flat VPCs short-circuit the ETV<->FNN exclusion under Exclusive policy
+    // because Flat VPCs do not own a Carbide-managed data plane.
+    let env = api_fixtures::create_test_env(pool).await;
+
+    let (_, etv_vpc) = api_fixtures::vpc::create_vpc(
+        &env,
+        "etv".to_string(),
+        Some("2829bbe3-c169-4cd9-8b2a-19a8b1618a93".to_string()),
+        None,
+    )
+    .await;
+    let (_, flat_vpc) = api_fixtures::vpc::create_flat_vpc(
+        &env,
+        "flat".to_string(),
+        Some("2829bbe3-c169-4cd9-8b2a-19a8b1618a93".to_string()),
+    )
+    .await;
+
+    env.api
+        .create_vpc_peering(Request::new(VpcPeeringCreationRequest {
+            vpc_id: etv_vpc.id,
+            peer_vpc_id: flat_vpc.id,
+            id: None,
+        }))
+        .await
+        .expect("Flat <-> ETV peering must be allowed under Exclusive policy");
+
+    Ok(())
+}
+
+#[crate::sqlx_test]
+async fn flat_vpc_can_peer_with_fnn_under_exclusive_policy(
+    pool: sqlx::PgPool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Same short-circuit as the ETV case, but on the FNN side: Flat VPCs are
+    // peer-policy-neutral.
+    let env = api_fixtures::create_test_env(pool).await;
+
+    let fnn_vpc = env
+        .api
+        .create_vpc(
+            VpcCreationRequest::builder("2829bbe3-c169-4cd9-8b2a-19a8b1618a93")
+                .metadata(Metadata {
+                    name: "fnn".to_string(),
+                    ..Default::default()
+                })
+                .network_virtualization_type(VpcVirtualizationType::Fnn)
+                .tonic_request(),
+        )
+        .await?
+        .into_inner();
+    let (_, flat_vpc) = api_fixtures::vpc::create_flat_vpc(
+        &env,
+        "flat".to_string(),
+        Some("2829bbe3-c169-4cd9-8b2a-19a8b1618a93".to_string()),
+    )
+    .await;
+
+    env.api
+        .create_vpc_peering(Request::new(VpcPeeringCreationRequest {
+            vpc_id: fnn_vpc.id,
+            peer_vpc_id: flat_vpc.id,
+            id: None,
+        }))
+        .await
+        .expect("Flat <-> FNN peering must be allowed under Exclusive policy");
+
+    Ok(())
+}
+
+#[crate::sqlx_test]
+async fn flat_vpc_can_peer_with_flat_under_exclusive_policy(
+    pool: sqlx::PgPool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Flat <-> Flat is structurally identical: no overlay state to mediate.
+    let env = api_fixtures::create_test_env(pool).await;
+
+    let (_, flat_a) = api_fixtures::vpc::create_flat_vpc(
+        &env,
+        "flat-a".to_string(),
+        Some("2829bbe3-c169-4cd9-8b2a-19a8b1618a93".to_string()),
+    )
+    .await;
+    let (_, flat_b) = api_fixtures::vpc::create_flat_vpc(
+        &env,
+        "flat-b".to_string(),
+        Some("2829bbe3-c169-4cd9-8b2a-19a8b1618a93".to_string()),
+    )
+    .await;
+
+    env.api
+        .create_vpc_peering(Request::new(VpcPeeringCreationRequest {
+            vpc_id: flat_a.id,
+            peer_vpc_id: flat_b.id,
+            id: None,
+        }))
+        .await
+        .expect("Flat <-> Flat peering must be allowed under Exclusive policy");
+
+    Ok(())
+}
+
+/// Coverage for the capability-driven peer-filter in `tenant_network`
+/// with an FNN VPC peered to a Flat VPC:
+///
+/// - Flat VPC's HostInband segment prefix appears in the FNN
+///   instance's `vpc_peer_prefixes`.
+/// - Flat VPC's VNI appears in the FNN instance's `vpc_peer_vnis` --
+///   Flat advertises its VNI for peer consumption (pluggable SDN
+///   integrations on the operator's fabric may use it), even though
+///   Flat itself doesn't run an overlay. The FNN DPU imports it on
+///   the self side via `imports_peer_vnis_into_overlay`.
+#[crate::sqlx_test]
+async fn test_fnn_vpc_with_flat_peer_exchanges_prefixes_and_vnis(
+    pool: sqlx::PgPool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let env = api_fixtures::create_test_env(pool).await;
+
+    // FNN VPC + Tenant segment (the side the instance allocates on).
+    let fnn_vpc = env
+        .api
+        .create_vpc(
+            VpcCreationRequest::builder("2829bbe3-c169-4cd9-8b2a-19a8b1618a93")
+                .metadata(Metadata {
+                    name: "test fnn vpc".to_string(),
+                    ..Default::default()
+                })
+                .network_virtualization_type(VpcVirtualizationType::Fnn)
+                .tonic_request(),
+        )
+        .await?
+        .into_inner();
+    let fnn_vpc_id = fnn_vpc.id.expect("FNN VPC must have id");
+    let fnn_segment_id = create_tenant_network_segment(
+        &env.api,
+        Some(fnn_vpc_id),
+        FIXTURE_TENANT_NETWORK_SEGMENT_GATEWAYS[2],
+        "FNN_TENANT",
+        true,
+    )
+    .await;
+
+    // Flat VPC + HostInband segment (the peer side).
+    let (flat_vpc_id, _) = api_fixtures::vpc::create_flat_vpc(
+        &env,
+        "test flat vpc".to_string(),
+        Some("2829bbe3-c169-4cd9-8b2a-19a8b1618a93".to_string()),
+    )
+    .await;
+    // Use a different fixture-tenant gateway than the FNN side so the
+    // peer-prefix assertion is unambiguous.
+    let flat_gateway = FIXTURE_TENANT_NETWORK_SEGMENT_GATEWAYS[3];
+    let flat_prefix = format!("{}/{}", flat_gateway.network(), flat_gateway.prefix());
+    let _flat_segment_id = create_network_segment(
+        &env.api,
+        "FLAT_HOST_INBAND",
+        &flat_prefix,
+        &flat_gateway.ip().to_string(),
+        rpc::forge::NetworkSegmentType::HostInband,
+        Some(flat_vpc_id),
+        true,
+    )
+    .await;
+
+    env.run_network_segment_controller_iteration().await;
+    env.run_network_segment_controller_iteration().await;
+
+    // Peer the VPCs and allocate an instance in the FNN VPC.
+    let mh = create_managed_host(&env).await;
+    env.api
+        .create_vpc_peering(Request::new(VpcPeeringCreationRequest {
+            vpc_id: Some(fnn_vpc_id),
+            peer_vpc_id: Some(flat_vpc_id),
+            id: None,
+        }))
+        .await?;
+
+    let instance_network = rpc::InstanceNetworkConfig {
+        interfaces: vec![rpc::InstanceInterfaceConfig {
+            function_type: rpc::InterfaceFunctionType::Physical as i32,
+            network_segment_id: Some(fnn_segment_id),
+            network_details: None,
+            device: None,
+            device_instance: 0,
+            virtual_function_id: None,
+            ip_address: None,
+            ipv6_interface_config: None,
+        }],
+        auto: false,
+    };
+    mh.instance_builer(&env)
+        .network(instance_network)
+        .build()
+        .await;
+
+    // Pull the Flat VPC's VNI so we can assert it shows up.
+    let flat_vpc = env
+        .api
+        .find_vpcs_by_ids(Request::new(rpc::forge::VpcsByIdsRequest {
+            vpc_ids: vec![flat_vpc_id],
+        }))
+        .await?
+        .into_inner();
+    let flat_vni = flat_vpc.vpcs[0]
+        .status
+        .as_ref()
+        .and_then(|s| s.vni)
+        .expect("Flat VPC must have a VNI allocated") as u32;
+
+    let response = env
+        .api
+        .get_managed_host_network_config(Request::new(ManagedHostNetworkConfigRequest {
+            dpu_machine_id: Some(mh.dpu().id),
+        }))
+        .await?
+        .into_inner();
+
+    assert_eq!(response.tenant_interfaces.len(), 1);
+    let iface = &response.tenant_interfaces[0];
+
+    // The Flat VPC's HostInband prefix shows up.
+    assert_eq!(
+        iface.vpc_peer_prefixes.len(),
+        1,
+        "FNN instance's vpc_peer_prefixes should include the Flat VPC's prefix; got {:?}",
+        iface.vpc_peer_prefixes,
+    );
+    assert!(
+        iface.vpc_peer_prefixes.contains(&flat_prefix),
+        "expected Flat VPC's prefix {flat_prefix} in vpc_peer_prefixes, got {:?}",
+        iface.vpc_peer_prefixes,
+    );
+
+    // The Flat VPC's VNI shows up too -- Flat advertises its VNI for
+    // pluggable SDN integrations on the network operator's fabric.
+    assert_eq!(
+        iface.vpc_peer_vnis,
+        vec![flat_vni],
+        "FNN instance's vpc_peer_vnis should contain the Flat VPC's VNI ({flat_vni}); got {:?}",
+        iface.vpc_peer_vnis,
+    );
 
     Ok(())
 }

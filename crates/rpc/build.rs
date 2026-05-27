@@ -701,11 +701,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "SkuStatus",
             "#[derive(serde::Serialize, serde::Deserialize)]",
         )
-        .type_attribute("forge.RackFirmware", "#[derive(serde::Serialize)]")
-        .type_attribute("forge.RackFirmwareList", "#[derive(serde::Serialize)]")
-        .type_attribute("forge.RackFirmwareHistoryRecord", "#[derive(serde::Serialize)]")
-        .type_attribute("forge.RackFirmwareHistoryRecords", "#[derive(serde::Serialize)]")
-        .type_attribute("forge.RackFirmwareHistoryResponse", "#[derive(serde::Serialize)]")
         .type_attribute("common.RackHardwareType", "#[derive(serde::Serialize)]")
         .type_attribute("forge.RackCapabilitiesSet", "#[derive(serde::Serialize)]")
         .type_attribute("forge.RackCapabilityCompute", "#[derive(serde::Serialize)]")
@@ -846,7 +841,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .type_attribute(
             "forge.GetBmcCredentialsRequest",
             "#[derive(serde::Serialize)]",
-        ).type_attribute(
+        )
+        .type_attribute(
+            "forge.GetSwitchNvosCredentialsRequest",
+            "#[derive(serde::Serialize)]",
+        )
+        .type_attribute("forge.SwitchNvosInfo", "#[derive(serde::Serialize)]")
+        .type_attribute(
             "forge.PlacementInRack",
             "#[derive(serde::Serialize)]",
         )
@@ -868,7 +869,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &[
                 "proto/common.proto",
                 "proto/forge.proto",
-                "proto/dpa_rpc.proto",
                 "proto/machine_discovery.proto",
                 "proto/mlx_device.proto",
                 "proto/nmx_c.proto",

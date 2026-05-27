@@ -26,8 +26,8 @@ authors = ["NVIDIA Carbide Engineering <carbide-dev@exchange.nvidia.com>"]
 
 [workspace.dependencies]
 clap = { version = "4", features = ["derive", "env"] }
-libredfish = { git = "https://github.com/NVIDIA/libredfish.git", tag = "v0.44.2" }
-librms = { git = "https://github.com/NVIDIA/nv-rms-client.git", tag = "v0.0.12-rc1" }
+libredfish = { git = "https://github.com/NVIDIA/libredfish.git", tag = "v0.44.4" }
+librms = { git = "https://github.com/NVIDIA/nv-rms-client.git", tag = "v0.0.12-rc3" }
 ansi-to-html = "0.2.2"
 
 tokio = { version = "1", features = ["full", "tracing"] }
@@ -112,7 +112,7 @@ ctor = "1.0.1"
 dashmap = "6.1.0"
 data-encoding = "2.9.0"
 derive_builder = "0.20.2"
-dhcproto = "0.14.0"
+dhcproto = "0.15.0"
 diff = "0.1"
 domain = "0.12.0"
 duration-str = "0.21.0"
@@ -193,7 +193,7 @@ resolv-conf = "0.7.0"
 ringbuf = "0.5.0"
 rsa = "0.9.9"
 rtnetlink = "0.21"
-rumqttc = "0.25"
+rumqttc = { default-features = false, version = "0.25" }
 russh = "0.60.2"
 rustc-hash = "2.1.1"
 rustls-pemfile = "2.2.0"

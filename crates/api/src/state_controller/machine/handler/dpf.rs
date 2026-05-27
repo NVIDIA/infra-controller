@@ -27,15 +27,15 @@ use model::machine::{
     DpfState, DpuInitState, FailureCause, FailureDetails, FailureSource, InstanceState, Machine,
     ManagedHostState, ManagedHostStateSnapshot, ReprovisionState, StateMachineArea,
 };
+use state_controller::state_handler::{
+    StateHandlerContext, StateHandlerError, StateHandlerOutcome,
+};
 
 use super::helpers::{DpuInitStateHelper, ManagedHostStateHelper, ReprovisionStateHelper};
 use super::{handler_host_power_control, host_power_state};
 use crate::dpf::DpfOperations;
 use crate::state_controller::external_service_error::dpf_error;
 use crate::state_controller::machine::context::MachineStateHandlerContextObjects;
-use crate::state_controller::state_handler::{
-    StateHandlerContext, StateHandlerError, StateHandlerOutcome,
-};
 
 // wrapper so we can get an error without copying it at every call site
 fn bmc_ip(machine: &Machine) -> Result<&str, StateHandlerError> {

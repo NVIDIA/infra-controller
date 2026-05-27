@@ -139,6 +139,14 @@ pub async fn create_host_inband_network_segment(
     .to_string();
     let gateway = FIXTURE_HOST_INBAND_NETWORK_SEGMENT_GATEWAY.ip().to_string();
 
+    // HostInband segments must live in Flat VPCs. If the caller did not
+    // supply a VPC, create a Flat VPC here so the fixture mirrors the
+    // production binding rather than landing in the default ETV VPC.
+    let vpc_id = match vpc_id {
+        Some(id) => Some(id),
+        None => Some(create_default_flat_vpc(api, "FIXTURE_HOST_INBAND_FLAT").await),
+    };
+
     create_network_segment(
         api,
         "HOST_INBAND",
@@ -149,6 +157,26 @@ pub async fn create_host_inband_network_segment(
         true,
     )
     .await
+}
+
+/// Creates a Flat VPC for the default test tenant and returns its id. Used as
+/// the implicit parent VPC for HostInband segment fixtures.
+pub async fn create_default_flat_vpc(api: &Api, name: &str) -> VpcId {
+    let request = crate::tests::common::rpc_builder::VpcCreationRequest::builder(
+        "2829bbe3-c169-4cd9-8b2a-19a8b1618a93",
+    )
+    .metadata(rpc::forge::Metadata {
+        name: name.to_string(),
+        ..Default::default()
+    })
+    .network_virtualization_type(rpc::forge::VpcVirtualizationType::Flat as i32)
+    .tonic_request();
+    let vpc = api
+        .create_vpc(request)
+        .await
+        .expect("Unable to create Flat VPC fixture")
+        .into_inner();
+    vpc.id.expect("Created Flat VPC must have an id")
 }
 
 pub async fn create_tenant_network_segment(

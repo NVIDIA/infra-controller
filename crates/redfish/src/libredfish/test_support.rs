@@ -399,7 +399,14 @@ impl Redfish for RedfishSimClient {
         &'a self,
         _target: libredfish::Boot,
     ) -> libredfish::RedfishFuture<'a, Result<(), RedfishError>> {
-        Box::pin(async move { todo!() })
+        Box::pin(async move { Ok(()) })
+    }
+
+    fn set_boot_override<'a>(
+        &'a self,
+        _settings: libredfish::BootOverride,
+    ) -> libredfish::RedfishFuture<'a, Result<Option<String>, RedfishError>> {
+        Box::pin(async move { Ok(None) })
     }
 
     fn clear_tpm<'a>(&'a self) -> libredfish::RedfishFuture<'a, Result<(), RedfishError>> {

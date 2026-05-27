@@ -23,10 +23,10 @@ use carbide_uuid::rack::RackId;
 use mac_address::MacAddress;
 
 use crate::HealthError;
-use crate::config::StaticBmcEndpoint;
+use crate::config::{StaticBmcEndpoint, StaticSwitchEndpointRole};
 use crate::endpoint::{
     BmcAddr, BmcCredentials, BmcEndpoint, BoxFuture, EndpointMetadata, EndpointSource, MachineData,
-    PowerShelfData, SwitchData,
+    PowerShelfData, SwitchData, SwitchEndpointRole,
 };
 
 pub struct StaticEndpointSource {
@@ -93,12 +93,20 @@ impl StaticEndpointSource {
                         .clone()
                         .or_else(|| switch.id.clone())
                         .unwrap_or_else(|| cfg.mac.clone());
+                    let endpoint_role = match switch.endpoint_role {
+                        StaticSwitchEndpointRole::Bmc => SwitchEndpointRole::Bmc,
+                        StaticSwitchEndpointRole::Host => SwitchEndpointRole::Host,
+                    };
+                    let nmxt_enabled = switch.nmxt_enabled.unwrap_or(switch.is_primary);
 
                     Some(EndpointMetadata::Switch(SwitchData {
                         id,
                         serial,
                         slot_number: switch.slot_number,
                         tray_index: switch.tray_index,
+                        endpoint_role,
+                        is_primary: switch.is_primary,
+                        nmxt_enabled,
                     }))
                 } else if let Some(machine) = &cfg.machine {
                     let machine_id = &machine.id;

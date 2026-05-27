@@ -37,6 +37,11 @@
 
 use std::sync::Arc;
 
+use carbide_power_shelf_controller::context::{
+    PowerShelfStateHandlerContextObjects, PowerShelfStateHandlerServices,
+};
+use carbide_power_shelf_controller::handler::PowerShelfStateHandler;
+use carbide_power_shelf_controller::metrics::PowerShelfMetrics;
 use carbide_uuid::power_shelf::PowerShelfId;
 use carbide_uuid::rack::RackId;
 use db::{expected_power_shelf as db_expected_power_shelf, power_shelf as db_power_shelf};
@@ -47,15 +52,9 @@ use model::expected_power_shelf::ExpectedPowerShelf;
 use model::metadata::Metadata;
 use model::power_shelf::{PowerShelf, PowerShelfControllerState, PowerShelfMaintenanceOperation};
 use sqlx::PgConnection;
+use state_controller::db_write_batch::DbWriteBatch;
+use state_controller::state_handler::{StateHandler, StateHandlerContext, StateHandlerOutcome};
 
-use crate::state_controller::common_services::CommonStateHandlerServices;
-use crate::state_controller::db_write_batch::DbWriteBatch;
-use crate::state_controller::power_shelf::context::PowerShelfStateHandlerContextObjects;
-use crate::state_controller::power_shelf::handler::PowerShelfStateHandler;
-use crate::state_controller::power_shelf::metrics::PowerShelfMetrics;
-use crate::state_controller::state_handler::{
-    StateHandler, StateHandlerContext, StateHandlerOutcome,
-};
 use crate::tests::common::api_fixtures::site_explorer::new_power_shelf;
 use crate::tests::common::api_fixtures::{TestEnv, create_test_env};
 use crate::tests::power_shelf_state_controller::fixtures::power_shelf::set_power_shelf_controller_state;
@@ -69,18 +68,18 @@ const TEST_BMC_PASSWORD: &str = "password";
 fn services_with_rms_client(
     env: &TestEnv,
     rms_client: Option<Arc<dyn librms::RmsApi>>,
-) -> CommonStateHandlerServices {
-    let mut services = env.state_handler_services();
-    services.rms_client = rms_client;
-    // Force a credential manager that always resolves BMC creds via the
-    // site-wide fallback. This avoids relying on whatever the test-env
-    // happens to be seeded with for BMC creds.
-    services.credential_manager =
-        Arc::new(TestCredentialManager::new(Credentials::UsernamePassword {
+) -> PowerShelfStateHandlerServices {
+    PowerShelfStateHandlerServices {
+        db_pool: env.state_handler_services().db_pool,
+        rms_client,
+        // Force a credential manager that always resolves BMC creds via the
+        // site-wide fallback. This avoids relying on whatever the test-env
+        // happens to be seeded with for BMC creds.
+        credential_manager: Arc::new(TestCredentialManager::new(Credentials::UsernamePassword {
             username: TEST_BMC_USER.into(),
             password: TEST_BMC_PASSWORD.into(),
-        }));
-    services
+        })),
+    }
 }
 
 /// Drive a power shelf into `Maintenance { operation }` with a maintenance
@@ -158,7 +157,7 @@ async fn load_power_shelf(pool: &sqlx::PgPool, id: &PowerShelfId) -> PowerShelf 
 
 /// Run one iteration of the state handler against the supplied power shelf.
 async fn run_handler(
-    services: &mut CommonStateHandlerServices,
+    services: &mut PowerShelfStateHandlerServices,
     state: &mut PowerShelf,
 ) -> StateHandlerOutcome<PowerShelfControllerState> {
     let handler = PowerShelfStateHandler::default();

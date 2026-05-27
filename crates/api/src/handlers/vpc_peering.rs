@@ -17,8 +17,8 @@
 
 use ::db::{ObjectColumnFilter, vpc, vpc_peering as db};
 use ::rpc::forge as rpc;
-use carbide_network::virtualization::VpcVirtualizationType;
 use carbide_uuid::vpc_peering::VpcPeeringId;
+use model::vpc::VpcVirtualizationTypeCapabilities;
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
@@ -71,16 +71,13 @@ pub async fn create(
                 kind: "VPC",
                 id: peer_vpc_id.to_string(),
             })?;
-            // Peering not allowed between Fnn <-> ETV/ETV_NVUE.
-            // ETV and ETV_NVUE are treated as equivalent since NVUE is always enabled.
-            if vpc1.network_virtualization_type != vpc2.network_virtualization_type
-                && (vpc1.network_virtualization_type == VpcVirtualizationType::Fnn
-                    || vpc2.network_virtualization_type == VpcVirtualizationType::Fnn)
-            {
-                return Err(CarbideError::internal(
-                            "VPC peering between VPCs of different network virtualization type not allowed.".to_string(),
-                        ).into());
-            }
+
+            // Make sure the VPCs are allowed to peer based on their
+            // virtualization types. Their capabilities will determine
+            // if they are allowed or not.
+            vpc1.network_virtualization_type
+                .ensure_can_peer_with(vpc2.network_virtualization_type)
+                .map_err(CarbideError::from)?;
         }
         Some(VpcPeeringPolicy::Mixed) => {
             // Any combination of network virtualization types allowed

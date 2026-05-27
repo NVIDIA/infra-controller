@@ -20,7 +20,7 @@ mod sources;
 
 pub use model::{
     BmcAddr, BmcCredentials, BmcEndpoint, BoxFuture, CredentialProvider, EndpointMetadata,
-    EndpointSource, MachineData, PowerShelfData, SwitchData,
+    EndpointSource, MachineData, PowerShelfData, SwitchData, SwitchEndpointRole,
 };
 pub use sources::{CompositeEndpointSource, StaticEndpointSource};
 
@@ -186,6 +186,9 @@ mod tests {
                 serial: Some("SN-001".to_string()),
                 slot_number: Some(7),
                 tray_index: Some(3),
+                endpoint_role: crate::config::StaticSwitchEndpointRole::Host,
+                is_primary: true,
+                nmxt_enabled: None,
             }),
             rack_id: None,
         }];
@@ -200,6 +203,9 @@ mod tests {
                 assert_eq!(s.serial, "SN-001");
                 assert_eq!(s.slot_number, Some(7));
                 assert_eq!(s.tray_index, Some(3));
+                assert_eq!(s.endpoint_role, SwitchEndpointRole::Host);
+                assert!(s.is_primary);
+                assert!(s.nmxt_enabled);
             }
             other => panic!("expected Switch metadata, got {other:?}"),
         }

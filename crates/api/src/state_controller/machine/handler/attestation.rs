@@ -28,13 +28,12 @@ use model::machine::{
     ManagedHostStateSnapshot, SpdmMeasuringState, StateMachineArea,
 };
 use sqlx::PgPool;
-
-use crate::handlers::attestation as attestation_handlers;
-use crate::state_controller::external_service_error::redfish_client_creation_error;
-use crate::state_controller::machine::context::MachineStateHandlerContextObjects;
-use crate::state_controller::state_handler::{
+use state_controller::state_handler::{
     StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
+
+use crate::handlers::attestation as attestation_handlers;
+use crate::state_controller::machine::context::MachineStateHandlerContextObjects;
 
 /// When SPDM attestation failed, check whether attestation was restarted (admin / status) or
 /// disabled in config; if so, transition back to the appropriate measuring state based on
@@ -45,7 +44,7 @@ pub(crate) async fn handle_spdm_attestation_failed_recovery(
     details: &FailureDetails,
 ) -> Result<StateHandlerOutcome<ManagedHostState>, StateHandlerError> {
     let mut txn = ctx.services.db_pool.begin().await?;
-    let should_resume_attestation = if !ctx.services.site_config.spdm.enabled {
+    let should_resume_attestation = if !ctx.services.site_config.spdm_enabled {
         true
     } else {
         let attestation_status =
@@ -98,7 +97,7 @@ pub(crate) async fn handle_spdm_trigger_state(
     let redfish_client = redfish_client_pool
         .create_client_from_machine(&mh_snapshot.host_snapshot, db_pool)
         .await
-        .map_err(redfish_client_creation_error)?;
+        .map_err(StateHandlerError::from)?;
 
     let devices_scheduled = attestation_handlers::trigger_attestation(
         db_pool,
