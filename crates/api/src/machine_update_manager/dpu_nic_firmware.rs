@@ -29,8 +29,8 @@ use sqlx::PgConnection;
 use super::dpu_nic_firmware_metrics::DpuNicFirmwareUpdateMetrics;
 use super::machine_update_module::MachineUpdateModule;
 use crate::cfg::file::CarbideConfig;
-use crate::dpf::DpfOperations;
 use crate::machine_update_manager::MachineUpdateManager;
+use crate::state_controller::machine::dpf::DpfOperations;
 use crate::{CarbideResult, DatabaseError};
 
 /// DpuNicFirmwareUpdate is a module used [MachineUpdateManager](crate::machine_update_manager::MachineUpdateManager)

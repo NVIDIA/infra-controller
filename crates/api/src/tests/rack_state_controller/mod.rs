@@ -36,12 +36,12 @@ use model::rack::{
 use rpc::forge::StateHistoryRecord;
 use rpc::forge::forge_server::Forge;
 use state_controller::config::IterationConfig;
+use state_controller::controller::StateController;
 use state_controller::state_handler::{
     StateHandler, StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
 use tokio_util::sync::CancellationToken;
 
-use crate::state_controller::controller::StateController;
 use crate::tests::common::api_fixtures::site_explorer::TestRackDbBuilder;
 use crate::tests::common::api_fixtures::{
     TestEnvOverrides, create_test_env, create_test_env_with_overrides,
