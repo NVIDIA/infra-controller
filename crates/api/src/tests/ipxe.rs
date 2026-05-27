@@ -24,7 +24,9 @@ use common::api_fixtures::{
 use db::{self};
 use futures_util::FutureExt;
 use mac_address::MacAddress;
-use model::machine::{DpuInitState, HostReprovisionState, MachineState, ManagedHostState};
+use model::machine::{
+    CleanupContext, DpuInitState, HostReprovisionState, MachineState, ManagedHostState,
+};
 use rpc::forge::CloudInitInstructionsRequest;
 use rpc::forge::forge_server::Forge;
 
@@ -362,6 +364,7 @@ async fn test_pxe_host(pool: sqlx::PgPool) {
         host_id,
         &ManagedHostState::WaitingForCleanup {
             cleanup_state: model::machine::CleanupState::Init,
+            cleanup_context: CleanupContext::Deprovision,
         },
         &env.pool,
     )
@@ -436,6 +439,46 @@ async fn test_cloud_init_when_machine_is_not_created(pool: sqlx::PgPool) {
         .into_inner();
 
     assert!(cloud_init_cfg.discovery_instructions.is_some());
+}
+
+/// Verifies cloud-init discovery instructions carry the configured DPU VF count.
+#[crate::sqlx_test]
+async fn test_cloud_init_uses_configured_num_of_vfs(pool: sqlx::PgPool) {
+    let mut config = get_config();
+    config.dpu_config.num_of_vfs = 64;
+    let env = create_test_env_with_overrides(pool, TestEnvOverrides::with_config(config)).await;
+
+    // Discover an unassigned interface so the API returns discovery instructions.
+    let mac_address = "FF:FF:FF:FF:FF:FE".to_string();
+    env.api
+        .discover_dhcp(DhcpDiscovery::builder(&mac_address, "192.0.2.1").tonic_request())
+        .await
+        .unwrap();
+
+    // Look up the allocated IP address to request cloud-init instructions.
+    let mut txn = env.pool.begin().await.unwrap();
+    let interfaces = db::machine_interface::find_by_mac_address(
+        txn.as_mut(),
+        mac_address.parse::<MacAddress>().unwrap(),
+    )
+    .await
+    .unwrap();
+    txn.commit().await.unwrap();
+
+    let cloud_init_cfg = env
+        .api
+        .get_cloud_init_instructions(tonic::Request::new(CloudInitInstructionsRequest {
+            ip: interfaces[0].addresses[0].to_string(),
+        }))
+        .await
+        .expect("get_cloud_init_instructions returned an error")
+        .into_inner();
+
+    // The configured value should pass through to carbide-pxe unchanged.
+    let discovery_instructions = cloud_init_cfg
+        .discovery_instructions
+        .expect("expected discovery instructions");
+    assert_eq!(discovery_instructions.num_of_vfs, Some(64));
 }
 
 #[crate::sqlx_test]

@@ -45,15 +45,6 @@ pub async fn add_expected_power_shelf(
             message: format!("Database error: {}", e),
         })?;
 
-    if let Some(bmc_ip) = power_shelf.bmc_ip_address {
-        db::machine_interface::preallocate_bmc_machine_interface(
-            &mut txn,
-            power_shelf.bmc_mac_address,
-            bmc_ip,
-        )
-        .await?;
-    }
-
     db_expected_power_shelf::create(&mut txn, power_shelf)
         .await
         .map_err(CarbideError::from)?;

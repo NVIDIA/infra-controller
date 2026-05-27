@@ -1,0 +1,108 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package expectedrack
+
+import (
+	"errors"
+	"testing"
+
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/suite"
+
+	cwm "github.com/NVIDIA/infra-controller-rest/workflow/internal/metrics"
+	expectedRackActivity "github.com/NVIDIA/infra-controller-rest/workflow/pkg/activity/expectedrack"
+
+	"go.temporal.io/sdk/temporal"
+	"go.temporal.io/sdk/testsuite"
+
+	cwssaws "github.com/NVIDIA/infra-controller-rest/workflow-schema/schema/site-agent/workflows/v1"
+)
+
+type UpdateExpectedRackTestSuite struct {
+	suite.Suite
+	testsuite.WorkflowTestSuite
+
+	env *testsuite.TestWorkflowEnvironment
+}
+
+func (s *UpdateExpectedRackTestSuite) SetupTest() {
+	s.env = s.NewTestWorkflowEnvironment()
+}
+
+func (s *UpdateExpectedRackTestSuite) AfterTest(suiteName, testName string) {
+	s.env.AssertExpectations(s.T())
+}
+
+func (s *UpdateExpectedRackTestSuite) Test_UpdateExpectedRackInventory_Success() {
+	var expectedRackManager expectedRackActivity.ManageExpectedRack
+	var inventoryMetricsManager cwm.ManageInventoryMetrics
+
+	siteID := uuid.New()
+
+	inv := &cwssaws.ExpectedRackInventory{
+		ExpectedRacks: []*cwssaws.ExpectedRack{},
+	}
+
+	s.env.RegisterActivity(expectedRackManager.UpdateExpectedRacksInDB)
+	s.env.RegisterActivity(inventoryMetricsManager.RecordLatency)
+	s.env.OnActivity(expectedRackManager.UpdateExpectedRacksInDB, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	s.env.OnActivity(inventoryMetricsManager.RecordLatency, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+
+	s.env.ExecuteWorkflow(UpdateExpectedRackInventory, siteID.String(), inv)
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+}
+
+func (s *UpdateExpectedRackTestSuite) Test_UpdateExpectedRackInventory_ActivityFails() {
+	var expectedRackManager expectedRackActivity.ManageExpectedRack
+
+	siteID := uuid.New()
+
+	inv := &cwssaws.ExpectedRackInventory{
+		ExpectedRacks: []*cwssaws.ExpectedRack{},
+	}
+
+	s.env.RegisterActivity(expectedRackManager.UpdateExpectedRacksInDB)
+	s.env.OnActivity(expectedRackManager.UpdateExpectedRacksInDB, mock.Anything, mock.Anything, mock.Anything).Return(errors.New("UpdateExpectedRackInventory Failure"))
+
+	s.env.ExecuteWorkflow(UpdateExpectedRackInventory, siteID.String(), inv)
+	s.True(s.env.IsWorkflowCompleted())
+	err := s.env.GetWorkflowError()
+	s.NotNil(err)
+
+	var applicationErr *temporal.ApplicationError
+	s.True(errors.As(err, &applicationErr))
+	s.Equal("UpdateExpectedRackInventory Failure", applicationErr.Error())
+}
+
+func (s *UpdateExpectedRackTestSuite) Test_UpdateExpectedRackInventory_InvalidSiteID() {
+	inv := &cwssaws.ExpectedRackInventory{
+		ExpectedRacks: []*cwssaws.ExpectedRack{},
+	}
+
+	// No activities registered: workflow must reject before invoking any activity.
+	s.env.ExecuteWorkflow(UpdateExpectedRackInventory, "not-a-uuid", inv)
+	s.True(s.env.IsWorkflowCompleted())
+	err := s.env.GetWorkflowError()
+	s.NotNil(err)
+}
+
+func TestUpdateExpectedRackTestSuite(t *testing.T) {
+	suite.Run(t, new(UpdateExpectedRackTestSuite))
+}

@@ -122,6 +122,7 @@ impl Default for TxnHeldAcrossAwait {
     fn default() -> Self {
         let txn_symbol_paths = vec![
             "sqlx_core::transaction::Transaction",
+            "sqlx_core::pool::connection::PoolConnection",
             "sqlx_postgres::PgTransaction",
             "db::Transaction",
             "db::db_read::DbReader",

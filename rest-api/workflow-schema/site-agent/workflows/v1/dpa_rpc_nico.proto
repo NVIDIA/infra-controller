@@ -1,0 +1,47 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+syntax = "proto3";
+
+package dpa_rpc;
+
+option go_package = "github.com/NVIDIA/infra-controller-rest/workflow-schema/proto";
+
+// This should be sent to topic dpa/command/<macaddrwithout:chars>/SetVni
+// Example for topic: dpa/command/001122334455/SetVni
+
+message SetVNI {
+  DpaMetadata metadata = 1;
+  PFVNI pf_info = 2;
+}
+
+message DpaMetadata {
+  string dpa_id = 1;
+  string host_id = 2;
+  string revision = 3;
+  string transaction = 4;
+}
+
+message PFVNI {
+  int32 pf_id = 1;
+  string mac = 2;
+  int32 vni = 3;
+  string subnet_ip = 4;
+  int32 subnet_mask = 5;
+  string dhcp_ip = 6;
+  string host_ip = 7;
+}

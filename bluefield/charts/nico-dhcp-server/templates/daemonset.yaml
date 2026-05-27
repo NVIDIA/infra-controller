@@ -80,17 +80,17 @@ spec:
               value: "full"
           volumeMounts:
             - name: dhcp-conf
-              mountPath: /var/support/nico-dhcp/conf
+              mountPath: /var/support/forge-dhcp/conf
             - name: dhcp-logs
-              mountPath: /var/support/nico-dhcp/logs
+              mountPath: /var/support/forge-dhcp/logs
       volumes:
         - name: dhcp-conf
           hostPath:
-            path: /var/lib/hbn/var/support/nico-dhcp/conf
+            path: /var/lib/hbn/var/support/forge-dhcp/conf
             type: DirectoryOrCreate
         - name: dhcp-logs
           hostPath:
-            path: /var/lib/hbn/var/support/nico-dhcp/logs
+            path: /var/lib/hbn/var/support/forge-dhcp/logs
             type: DirectoryOrCreate
       {{- with .Values.tolerations }}
       tolerations:

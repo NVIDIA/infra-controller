@@ -75,20 +75,20 @@
                 action: deny
                 match:
                   any: {}
-          DPU_FROM_INSTANCE_PREFIX_LIST:
+          DPU_FROM_INSTANCE_PREFIX_LIST_vpc_100:
+            rule:
+              '65535':
+                action: deny
+                match:
+                  any: {}
+          DPU_FROM_INSTANCE_PREFIX_LIST_IPV6_vpc_100:
+            type: ipv6
             rule:
               '65535':
                 action: deny
                 match:
                   any: {}
           DPU_FROM_TRAFFIC_INTERCEPT_PEER_PREFIX_LIST:
-            rule:
-              '65535':
-                action: deny
-                match:
-                  any: {}
-          DPU_FROM_INSTANCE_PREFIX_LIST_IPV6:
-            type: ipv6
             rule:
               '65535':
                 action: deny
@@ -103,10 +103,6 @@
                   any: {}
           DPU_TO_EVPN_DROP_PREFIX_LIST:
             rule:
-              '10':
-                action: permit
-                match:
-                  10.0.0.2/32: {}
               '65535':
                 action: deny
                 match:
@@ -243,7 +239,7 @@
                   permit: {}
                 match:
                   type: ipv4
-                  ip-prefix-list: DPU_FROM_INSTANCE_PREFIX_LIST
+                  ip-prefix-list: DPU_FROM_INSTANCE_PREFIX_LIST_vpc_100
                 set:
                   tag: 65101
                   community:
@@ -260,7 +256,7 @@
                   permit: {}
                 match:
                   type: ipv6
-                  ip-prefix-list: DPU_FROM_INSTANCE_PREFIX_LIST_IPV6
+                  ip-prefix-list: DPU_FROM_INSTANCE_PREFIX_LIST_IPV6_vpc_100
                 set:
                   tag: 65101
                   community:
@@ -403,7 +399,7 @@
         loopback:
           ip:
             address:
-              10.0.0.2/32: {} 
+              10.0.0.2/32: {}
         router:
           bgp:
             path-selection:

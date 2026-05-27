@@ -22,6 +22,7 @@ use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 
 use carbide_uuid::machine::MachineId;
+use carbide_uuid::nvlink::NvLinkDomainId;
 use carbide_uuid::power_shelf::PowerShelfId;
 use carbide_uuid::rack::RackId;
 use carbide_uuid::switch::SwitchId;
@@ -105,6 +106,10 @@ impl BmcEndpoint {
         }
     }
 
+    pub fn switch_data(&self) -> Option<&SwitchData> {
+        self.metadata.as_ref().and_then(EndpointMetadata::as_switch)
+    }
+
     pub fn credentials(&self) -> BmcCredentials {
         self.credentials.read().expect("lock poisoned").to_owned()
     }
@@ -127,6 +132,13 @@ pub enum EndpointMetadata {
 }
 
 impl EndpointMetadata {
+    pub fn as_switch(&self) -> Option<&SwitchData> {
+        match self {
+            EndpointMetadata::Switch(switch) => Some(switch),
+            _ => None,
+        }
+    }
+
     pub fn serial_number(&self) -> Option<&str> {
         match self {
             EndpointMetadata::Machine(machine) => machine.machine_serial.as_deref(),
@@ -140,6 +152,9 @@ impl EndpointMetadata {
 pub struct MachineData {
     pub machine_id: MachineId,
     pub machine_serial: Option<String>,
+    pub slot_number: Option<i32>,
+    pub tray_index: Option<i32>,
+    pub nvlink_domain_uuid: Option<NvLinkDomainId>,
 }
 
 #[derive(Clone, Debug)]
@@ -148,10 +163,21 @@ pub struct PowerShelfData {
     pub serial: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SwitchEndpointRole {
+    Bmc,
+    Host,
+}
+
 #[derive(Clone, Debug)]
 pub struct SwitchData {
     pub id: Option<SwitchId>,
     pub serial: String,
+    pub slot_number: Option<i32>,
+    pub tray_index: Option<i32>,
+    pub endpoint_role: SwitchEndpointRole,
+    pub is_primary: bool,
+    pub nmxt_enabled: bool,
 }
 
 #[derive(Clone)]

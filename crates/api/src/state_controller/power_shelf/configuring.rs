@@ -19,11 +19,11 @@
 
 use carbide_uuid::power_shelf::PowerShelfId;
 use model::power_shelf::{PowerShelf, PowerShelfControllerState};
-
-use crate::state_controller::power_shelf::context::PowerShelfStateHandlerContextObjects;
-use crate::state_controller::state_handler::{
+use state_controller::state_handler::{
     StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
+
+use crate::state_controller::power_shelf::context::PowerShelfStateHandlerContextObjects;
 
 /// Handles the Configuring state for a power shelf.
 ///

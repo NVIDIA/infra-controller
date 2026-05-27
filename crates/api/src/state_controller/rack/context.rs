@@ -15,13 +15,35 @@
  * limitations under the License.
  */
 
-use crate::state_controller::common_services::CommonStateHandlerServices;
-use crate::state_controller::rack::metrics::RackMetrics;
-use crate::state_controller::state_handler::StateHandlerContextObjects;
+use std::sync::Arc;
+
+use carbide_rack::rms_client::SwitchSystemImageRmsClient;
+use carbide_rack_controller::config::RackConfig;
+use carbide_rack_controller::metrics::RackMetrics;
+use forge_secrets::credentials::CredentialManager;
+use librms::RmsApi;
+use sqlx::PgPool;
+use state_controller::state_handler::StateHandlerContextObjects;
+
+use crate::state_controller::rack as carbide_rack_controller;
 
 pub struct RackStateHandlerContextObjects {}
+#[derive(Clone)]
+pub struct RackStateHandlerServices {
+    pub db_pool: PgPool,
+    /// Rack Manager Service client
+    pub rms_client: Option<Arc<dyn RmsApi>>,
+    // TODO: probably this is not the best place for config. But this
+    // field is introduced during refactoring. In original code it was
+    // full CarbideConfig.
+    pub site_config: Arc<RackConfig>,
+    /// Shared client for switch system image RPCs that are not yet exposed through
+    /// librms::RmsApi.
+    pub switch_system_image_rms_client: Option<Arc<dyn SwitchSystemImageRmsClient>>,
+    pub credential_manager: Arc<dyn CredentialManager>,
+}
 
 impl StateHandlerContextObjects for RackStateHandlerContextObjects {
     type ObjectMetrics = RackMetrics;
-    type Services = CommonStateHandlerServices;
+    type Services = RackStateHandlerServices;
 }

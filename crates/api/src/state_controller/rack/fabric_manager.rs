@@ -17,6 +17,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use carbide_rack::firmware_update::build_new_node_info;
+use carbide_rack_controller::config::RmsConfig;
 use carbide_uuid::rack::RackId;
 use carbide_uuid::switch::SwitchId;
 use db::switch as db_switch;
@@ -26,7 +28,7 @@ use model::switch::{FabricManagerState, FabricManagerStatus};
 use serde::Deserialize;
 use sqlx::PgConnection;
 
-use crate::rack::firmware_update::build_new_node_info;
+use crate::state_controller::rack as carbide_rack_controller;
 
 pub(super) fn validate_switch_inventory_for_nmx_cluster(
     switches: &[FirmwareUpgradeDeviceInfo],
@@ -68,7 +70,7 @@ fn build_scale_up_fabric_services_status_request(
 }
 
 pub(super) async fn get_scale_up_fabric_services_status(
-    rms_config: &crate::cfg::file::RmsConfig,
+    rms_config: &RmsConfig,
     rack_id: &RackId,
     switches: &[FirmwareUpgradeDeviceInfo],
 ) -> Result<rms::GetScaleUpFabricServicesStatusResponse, String> {

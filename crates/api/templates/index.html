@@ -73,6 +73,79 @@
 				{% else %}
 					Disabled
 			{% endmatch %}</td></tr>
+	<tr>
+		<th>NVLink</th>
+		<td>
+			{% match carbide_config.nvlink_config %}
+				{% when Some with (config) %}
+					<details>
+						<summary>
+							{% if config.enabled %}
+								Enabled
+							{% else %}
+								Disabled
+							{% endif %}
+						</summary>
+						<table>
+							<tr>
+								<th>Monitor run interval</th>
+								<td>{{ config.monitor_run_interval.as_secs() }}s</td>
+							</tr>
+							<tr>
+								<th>Allow insecure</th>
+								<td>{{ config.allow_insecure }}</td>
+							</tr>
+							<tr>
+								<th>NMX-C TLS CA cert path</th>
+								<td>
+									{% match config.nmx_c_tls_ca_cert_path %}
+										{% when Some with (val) %}
+											{{ val }}
+										{% else %}
+											Not Configured
+									{% endmatch %}
+								</td>
+							</tr>
+							<tr>
+								<th>NMX-C TLS client cert path</th>
+								<td>
+									{% match config.nmx_c_tls_client_cert_path %}
+										{% when Some with (val) %}
+											{{ val }}
+										{% else %}
+											Not Configured
+									{% endmatch %}
+								</td>
+							</tr>
+							<tr>
+								<th>NMX-C TLS client key path</th>
+								<td>
+									{% match config.nmx_c_tls_client_key_path %}
+										{% when Some with (val) %}
+											{{ val }}
+										{% else %}
+											Not Configured
+									{% endmatch %}
+								</td>
+							</tr>
+							<tr>
+								<th>NMX-C TLS authority</th>
+								<td>
+									{% match config.nmx_c_tls_authority %}
+										{% when Some with (val) %}
+											{{ val }}
+										{% else %}
+											Not Configured
+									{% endmatch %}
+								</td>
+							</tr>
+						</table>
+					</details>
+				{% else %}
+					Not Configured
+			{% endmatch %}
+		</td>
+	</tr>
 	<tr><th>ASN</th><td>{{ carbide_config.asn }}</td></tr>
 	<tr><th>DHCP Servers</th><td>{{ carbide_config.dhcp_servers.join(", ") }}</td></tr>
 	<tr><th>Route Server State</th><td>{% if carbide_config.enable_route_servers %}Enabled{% else %}Disabled{% endif %}</td></tr>

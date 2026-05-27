@@ -17,21 +17,37 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
+use carbide_dpa_interface_controller::DpaInfo;
+use carbide_dpa_interface_controller::context::DpaInterfaceStateHandlerServices;
+use carbide_dpa_interface_controller::handler::DpaInterfaceStateHandler;
+use carbide_dpa_interface_controller::io::DpaInterfaceStateControllerIO;
 use carbide_firmware::FirmwareDownloader;
 use carbide_ib_fabric::IbFabricMonitor;
 use carbide_ib_fabric::ib::{self, IBFabricManager};
+use carbide_ib_partition_controller::context::IBPartitionStateHandlerServices;
+use carbide_ib_partition_controller::handler::IBPartitionStateHandler;
+use carbide_ib_partition_controller::io::IBPartitionStateControllerIO;
 use carbide_ipmi::IPMITool;
+use carbide_network_segment_controller::context::NetworkSegmentStateHandlerServices;
+use carbide_network_segment_controller::handler::NetworkSegmentStateHandler;
+use carbide_network_segment_controller::io::NetworkSegmentStateControllerIO;
 use carbide_nvlink_manager::NvlPartitionMonitor;
-use carbide_nvlink_manager::nvlink::{NmxmClientPool, NmxmClientPoolImpl};
 use carbide_preingestion_manager::PreingestionManager;
+use carbide_rack::bms_client::BmsDsxExchangeHandle;
 use carbide_redfish::libredfish::RedfishClientPool;
 use carbide_redfish::nv_redfish::NvRedfishClientPool;
 use carbide_site_explorer::SiteExplorer;
+use carbide_spdm_controller::context::SpdmStateHandlerServices;
+use carbide_spdm_controller::handler::SpdmAttestationStateHandler;
+use carbide_spdm_controller::io::SpdmStateControllerIO;
+use carbide_switch_controller::context::SwitchStateHandlerServices;
+use carbide_switch_controller::handler::SwitchStateHandler;
+use carbide_switch_controller::io::SwitchStateControllerIO;
 use carbide_utils::HostPortPair;
 use db::machine::update_dpu_asns;
 use db::resource_pool::DefineResourcePoolError;
@@ -63,7 +79,7 @@ use tracing_log::AsLog as _;
 use crate::api::Api;
 use crate::api::metrics::ApiMetricsEmitter;
 use crate::cfg::file::{CarbideConfig, InitialObjectsConfig, ListenMode};
-use crate::dpa::handler::{DpaInfo, start_dpa_handler};
+use crate::dpa::handler::start_dpa_handler;
 use crate::dynamic_settings::DynamicSettings;
 use crate::errors::CarbideError;
 use crate::handlers::machine_validation::apply_config_on_startup;
@@ -75,27 +91,20 @@ use crate::logging::service_health_metrics::{
 use crate::machine_update_manager::MachineUpdateManager;
 use crate::measured_boot::metrics_collector::MeasuredBootMetricsCollector;
 use crate::mqtt_state_change_hook::hook::MqttStateChangeHook;
-use crate::rack::bms_client::BmsDsxExchangeHandle;
 use crate::scout_stream::ConnectionRegistry;
 use crate::state_controller::common_services::CommonStateHandlerServices;
 use crate::state_controller::controller::{Enqueuer, StateController};
-use crate::state_controller::dpa_interface::handler::DpaInterfaceStateHandler;
-use crate::state_controller::dpa_interface::io::DpaInterfaceStateControllerIO;
-use crate::state_controller::ib_partition::handler::IBPartitionStateHandler;
-use crate::state_controller::ib_partition::io::IBPartitionStateControllerIO;
+use crate::state_controller::machine::context::MachineStateHandlerServices;
 use crate::state_controller::machine::handler::MachineStateHandlerBuilder;
 use crate::state_controller::machine::io::MachineStateControllerIO;
-use crate::state_controller::network_segment::handler::NetworkSegmentStateHandler;
-use crate::state_controller::network_segment::io::NetworkSegmentStateControllerIO;
+use crate::state_controller::power_shelf::context::PowerShelfStateHandlerServices;
 use crate::state_controller::power_shelf::handler::PowerShelfStateHandler;
 use crate::state_controller::power_shelf::io::PowerShelfStateControllerIO;
+use crate::state_controller::rack::config::RackConfig;
+use crate::state_controller::rack::context::RackStateHandlerServices;
 use crate::state_controller::rack::handler::RackStateHandler;
 use crate::state_controller::rack::io::RackStateControllerIO;
-use crate::state_controller::spdm::handler::SpdmAttestationStateHandler;
-use crate::state_controller::spdm::io::SpdmStateControllerIO;
 use crate::state_controller::state_change_emitter::StateChangeEmitterBuilder;
-use crate::state_controller::switch::handler::SwitchStateHandler;
-use crate::state_controller::switch::io::SwitchStateControllerIO;
 use crate::{attestation, db_init, ethernet_virtualization, listener};
 
 /// The resolved set of network declarations passed from `start_api` into
@@ -624,11 +633,14 @@ pub async fn start_api(
 
     let nvlink_config = carbide_config.nvlink_config.clone().unwrap_or_default();
 
-    let nmxm_client_pool =
-        libnmxm::NmxmClientPool::builder(nvlink_config.allow_insecure).build()?;
-    let nmxm_pool = NmxmClientPoolImpl::new(credential_manager.clone(), nmxm_client_pool);
-
-    let shared_nmxm_pool: Arc<dyn NmxmClientPool> = Arc::new(nmxm_pool);
+    let mut nmxc_builder = libnmxc::NmxcClientPool::builder();
+    if let Some(tls) = nmxc_tls_config_from_nvlink(&nvlink_config) {
+        nmxc_builder = nmxc_builder.tls(tls);
+    }
+    let nmxc_client_pool = nmxc_builder
+        .build()
+        .map_err(|e| eyre::eyre!("Failed to build NMX-C client pool: {e}"))?;
+    let shared_nmxc_pool: Arc<dyn libnmxc::NmxcPool> = Arc::new(nmxc_client_pool);
 
     // Create DPF SDK and initialize CRs if enabled
     // If we end up having static DPUDeployments, we could move the static CRs outside of the API.
@@ -724,7 +736,7 @@ pub async fn start_api(
         runtime_config: carbide_config.clone(),
         scout_stream_registry: ConnectionRegistry::new(),
         rms_client: rms_client.clone(),
-        nmxm_pool: shared_nmxm_pool,
+        nmxc_client_pool: shared_nmxc_pool.clone(),
         work_lock_manager_handle,
         dpf_sdk: dpf_sdk.clone(),
         machine_state_handler_enqueuer: Enqueuer::new(db_pool),
@@ -791,7 +803,6 @@ pub async fn initialize_and_start_controllers<'a>(
         database_connection: db_pool,
         ib_fabric_manager,
         redfish_pool: shared_redfish_pool,
-        nmxm_pool: shared_nmxm_pool,
         work_lock_manager_handle,
         rms_client,
         dpf_sdk,
@@ -955,10 +966,15 @@ pub async fn initialize_and_start_controllers<'a>(
                 }
             };
 
+            // Suffix the broker-level client identifier so multiple replicas
+            // (or a new pod coming up while the old one is still terminating)
+            // do not race for the same MQTT session and ping-pong each other
+            // off the broker.
+            let client_id = mqttea::unique_client_id("carbide-dsx-exchange-event-bus");
             let client = mqttea::MqtteaClient::new(
                 &config.mqtt_endpoint,
                 config.mqtt_broker_port,
-                "carbide-dsx-exchange-event-bus",
+                &client_id,
                 Some(options),
             )
             .map_err(|e| eyre::eyre!("Failed to create DSX Exchange Event Bus MQTT client: {e}"))
@@ -1028,7 +1044,7 @@ pub async fn initialize_and_start_controllers<'a>(
                 );
                 let rms_api_config = librms::client::RmsApiConfig::new(url, &rms_client_config);
                 Arc::new(librms::RackManagerApi::new(&rms_api_config))
-                    as Arc<dyn crate::rack::rms_client::SwitchSystemImageRmsClient>
+                    as Arc<dyn carbide_rack::rms_client::SwitchSystemImageRmsClient>
             }),
         credential_manager: credential_manager.clone(),
     });
@@ -1048,7 +1064,19 @@ pub async fn initialize_and_start_controllers<'a>(
         .database(db_pool.clone(), work_lock_manager_handle.clone())
         .meter("carbide_machines", meter.clone())
         .processor_id(state_controller_id.clone())
-        .services(handler_services.clone())
+        .services(
+            MachineStateHandlerServices {
+                db_pool: handler_services.db_pool.clone(),
+                db_reader: handler_services.db_reader.clone(),
+                redfish_client_pool: handler_services.redfish_client_pool.clone(),
+                ipmi_tool: handler_services.ipmi_tool.clone(),
+                site_config: handler_services
+                    .site_config
+                    .machine_state_handler_site_config()
+                    .into(),
+            }
+            .into(),
+        )
         .iteration_config((&carbide_config.machine_state_controller.controller).into())
         .state_handler(Arc::new(
             MachineStateHandlerBuilder::builder()
@@ -1118,7 +1146,12 @@ pub async fn initialize_and_start_controllers<'a>(
         .database(db_pool.clone(), work_lock_manager_handle.clone())
         .meter("carbide_network_segments", meter.clone())
         .processor_id(state_controller_id.clone())
-        .services(handler_services.clone());
+        .services(
+            NetworkSegmentStateHandlerServices {
+                db_pool: handler_services.db_pool.clone(),
+            }
+            .into(),
+        );
     ns_builder
         .iteration_config((&carbide_config.network_segment_state_controller.controller).into())
         .state_handler(Arc::new(NetworkSegmentStateHandler::new(
@@ -1137,9 +1170,17 @@ pub async fn initialize_and_start_controllers<'a>(
             .database(db_pool.clone(), work_lock_manager_handle.clone())
             .meter("carbide_dpa_interfaces", meter.clone())
             .processor_id(state_controller_id.clone())
-            .services(handler_services.clone())
+            .services(
+                DpaInterfaceStateHandlerServices {
+                    db_pool: handler_services.db_pool.clone(),
+                    db_reader: handler_services.db_reader.clone(),
+                    dpa_info: handler_services.dpa_info.clone(),
+                    hb_interval: handler_services.site_config.get_hb_interval(),
+                }
+                .into(),
+            )
             .iteration_config((&carbide_config.dpa_interface_state_controller.controller).into())
-            .state_handler(Arc::new(DpaInterfaceStateHandler::new()))
+            .state_handler(Arc::new(DpaInterfaceStateHandler {}))
             .build_and_spawn(join_set, cancel_token.clone())
             .expect("Unable to build DpaInterfaceStateController");
     }
@@ -1157,7 +1198,13 @@ pub async fn initialize_and_start_controllers<'a>(
             .database(db_pool.clone(), work_lock_manager_handle.clone())
             .meter("carbide_spdm_attestation", meter.clone())
             .processor_id(state_controller_id.clone())
-            .services(handler_services.clone())
+            .services(
+                SpdmStateHandlerServices {
+                    db_pool: handler_services.db_pool.clone(),
+                    redfish_client_pool: handler_services.redfish_client_pool.clone(),
+                }
+                .into(),
+            )
             .iteration_config((&carbide_config.spdm_state_controller.controller).into())
             .state_handler(Arc::new(SpdmAttestationStateHandler::new(
                 verifier,
@@ -1171,7 +1218,14 @@ pub async fn initialize_and_start_controllers<'a>(
         .database(db_pool.clone(), work_lock_manager_handle.clone())
         .meter("carbide_ib_partitions", meter.clone())
         .processor_id(state_controller_id.clone())
-        .services(handler_services.clone())
+        .services(
+            IBPartitionStateHandlerServices {
+                db_pool: handler_services.db_pool.clone(),
+                ib_fabric_manager: handler_services.ib_fabric_manager.clone(),
+                ib_pools: handler_services.ib_pools.clone(),
+            }
+            .into(),
+        )
         .iteration_config((&carbide_config.ib_partition_state_controller.controller).into())
         .state_handler(Arc::new(IBPartitionStateHandler::default()))
         .build_and_spawn(join_set, cancel_token.clone())
@@ -1181,7 +1235,14 @@ pub async fn initialize_and_start_controllers<'a>(
         .database(db_pool.clone(), work_lock_manager_handle.clone())
         .meter("carbide_power_shelves", meter.clone())
         .processor_id(state_controller_id.clone())
-        .services(handler_services.clone())
+        .services(
+            PowerShelfStateHandlerServices {
+                db_pool: handler_services.db_pool.clone(),
+                rms_client: handler_services.rms_client.clone(),
+                credential_manager: handler_services.credential_manager.clone(),
+            }
+            .into(),
+        )
         .iteration_config((&carbide_config.power_shelf_state_controller.controller).into())
         .state_handler(Arc::new(PowerShelfStateHandler::default()))
         .build_and_spawn(join_set, cancel_token.clone())
@@ -1191,7 +1252,26 @@ pub async fn initialize_and_start_controllers<'a>(
         .database(db_pool.clone(), work_lock_manager_handle.clone())
         .meter("carbide_racks", meter.clone())
         .processor_id(state_controller_id.clone())
-        .services(handler_services.clone())
+        .services(
+            RackStateHandlerServices {
+                db_pool: handler_services.db_pool.clone(),
+                rms_client: handler_services.rms_client.clone(),
+                site_config: RackConfig {
+                    rms: handler_services.site_config.rms.clone(),
+                    rack_validation_config: handler_services
+                        .site_config
+                        .rack_validation_config
+                        .clone(),
+                    rack_profiles: handler_services.site_config.rack_profiles.clone(),
+                }
+                .into(),
+                switch_system_image_rms_client: handler_services
+                    .switch_system_image_rms_client
+                    .clone(),
+                credential_manager: handler_services.credential_manager.clone(),
+            }
+            .into(),
+        )
         .state_handler(Arc::new(RackStateHandler::default()))
         .build_and_spawn(join_set, cancel_token.clone())
         .expect("Unable to build RackStateController");
@@ -1200,7 +1280,14 @@ pub async fn initialize_and_start_controllers<'a>(
         .database(db_pool.clone(), work_lock_manager_handle.clone())
         .meter("carbide_switches", meter.clone())
         .processor_id(state_controller_id.clone())
-        .services(handler_services.clone())
+        .services(
+            SwitchStateHandlerServices {
+                db_pool: handler_services.db_pool.clone(),
+                rms_client: handler_services.rms_client.clone(),
+                credential_manager: handler_services.credential_manager.clone(),
+            }
+            .into(),
+        )
         .iteration_config((&carbide_config.switch_state_controller.controller).into())
         .state_handler(Arc::new(SwitchStateHandler::default()))
         .build_and_spawn(join_set, cancel_token.clone())
@@ -1222,7 +1309,7 @@ pub async fn initialize_and_start_controllers<'a>(
 
     NvlPartitionMonitor::new(
         db_pool.clone(),
-        shared_nmxm_pool.clone(),
+        api_service.nmxc_client_pool.clone(),
         meter.clone(),
         carbide_config.nvlink_config.clone().unwrap_or_default(),
         carbide_config.host_health,
@@ -1287,6 +1374,27 @@ pub async fn initialize_and_start_controllers<'a>(
     .await?;
 
     Ok(())
+}
+
+fn nmxc_tls_config_from_nvlink(
+    cfg: &carbide_nvlink_manager::config::NvLinkConfig,
+) -> Option<libnmxc::NmxcTlsConfig> {
+    let ca = cfg.nmx_c_tls_ca_cert_path.as_ref().map(PathBuf::from);
+    let client_cert = cfg.nmx_c_tls_client_cert_path.as_ref().map(PathBuf::from);
+    let client_key = cfg.nmx_c_tls_client_key_path.as_ref().map(PathBuf::from);
+    if ca.is_none()
+        && client_cert.is_none()
+        && client_key.is_none()
+        && cfg.nmx_c_tls_authority.is_none()
+    {
+        return None;
+    }
+    Some(libnmxc::NmxcTlsConfig {
+        ca_cert_path: ca,
+        client_cert_path: client_cert,
+        client_key_path: client_key,
+        authority: cfg.nmx_c_tls_authority.clone(),
+    })
 }
 
 #[cfg(test)]

@@ -61,9 +61,11 @@ spec:
           {{- end }}
           env:
             - name: NICO_DPU_AGENT_METRICS_TARGET
-              value: nico-dpf-cluster-{{ .Values.nico_dpu_agent }}.dpf-operator-system.svc.cluster.local:8888
+              value: carbide-dpf-cluster-{{ .Values.nico_dpu_agent }}.dpf-operator-system.svc.cluster.local:8888
             - name: NICO_FMDS_METRICS_TARGET
-              value: nico-dpf-cluster-{{ .Values.nico_fmds }}.dpf-operator-system.svc.cluster.local:8888
+              value: carbide-dpf-cluster-{{ .Values.nico_fmds }}.dpf-operator-system.svc.cluster.local:8888
+            - name: NICO_DTS_METRICS_TARGET
+              value: carbide-dpf-cluster-{{ .Values.nico_dts }}-doca-telemetry.dpf-operator-system.svc.cluster.local:9189
             - name: NODE_NAME
               valueFrom:
                 fieldRef:
@@ -91,7 +93,7 @@ spec:
               mountPath: /var/log/auth.log
               readOnly: true
             - name: nico-certs
-              mountPath: /opt/nico
+              mountPath: {{ .Values.certsDir | default "/opt/nico" }}
               readOnly: true
             - name: machine-id
               mountPath: /run/otelcol-contrib
@@ -118,7 +120,7 @@ spec:
             type: FileOrCreate
         - name: nico-certs
           hostPath:
-            path: /opt/nico
+            path: {{ .Values.certsDir | default "/opt/nico" }}
             type: DirectoryOrCreate
         - name: machine-id
           hostPath:

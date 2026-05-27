@@ -18,7 +18,7 @@ use std::borrow::Cow;
 use std::fmt::Write;
 use std::str::FromStr;
 
-use ::rpc::admin_cli::{CarbideCliError, CarbideCliResult, OutputFormat};
+use ::rpc::admin_cli::OutputFormat;
 use ::rpc::forge::{self as forgerpc, Vpc, VpcsByIdsRequest};
 use carbide_uuid::instance::InstanceId;
 use carbide_uuid::machine::MachineId;
@@ -28,6 +28,7 @@ use prettytable::{Table, row};
 
 use super::args::Args;
 use crate::cfg::cli_options::SortField;
+use crate::errors::{CarbideCliError, CarbideCliResult};
 use crate::rpc::ApiClient;
 use crate::{async_write, async_writeln, invalid_machine_id};
 
@@ -559,6 +560,7 @@ pub async fn handle_show(
     Ok(())
 }
 
+#[allow(deprecated)]
 async fn get_vpc_for_interface_network_segment(
     api_client: &ApiClient,
     network_segment_id: NetworkSegmentId,
@@ -571,7 +573,7 @@ async fn get_vpc_for_interface_network_segment(
         && let Some(vpc_id) = network_segments
             .network_segments
             .first()
-            .and_then(|s| s.vpc_id)
+            .and_then(|s| s.config.as_ref().and_then(|c| c.vpc_id).or(s.vpc_id))
     {
         let vpc_ids: Vec<VpcId> = vec![vpc_id];
         Ok(api_client

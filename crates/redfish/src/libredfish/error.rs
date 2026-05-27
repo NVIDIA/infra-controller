@@ -17,6 +17,7 @@
 
 use forge_secrets::SecretsError;
 use libredfish::RedfishError;
+use state_controller::state_handler::{ExternalServiceError, StateHandlerError};
 
 #[derive(thiserror::Error, Debug)]
 pub enum RedfishClientCreationError {
@@ -39,5 +40,40 @@ pub enum RedfishClientCreationError {
 impl From<SecretsError> for RedfishClientCreationError {
     fn from(cause: SecretsError) -> Self {
         RedfishClientCreationError::SecretEngineError { cause }
+    }
+}
+
+impl From<RedfishClientCreationError> for StateHandlerError {
+    fn from(error: RedfishClientCreationError) -> StateHandlerError {
+        ExternalServiceError::with_source(
+            "redfish",
+            "create_client",
+            error.to_string(),
+            "redfish_client_creation_error",
+            error,
+        )
+        .into()
+    }
+}
+
+pub fn state_handler_redfish_error(
+    operation: &'static str,
+    error: RedfishError,
+) -> StateHandlerError {
+    ExternalServiceError::with_source(
+        "redfish",
+        operation,
+        error.to_string(),
+        redfish_operation_metric_label(operation),
+        error,
+    )
+    .into()
+}
+
+fn redfish_operation_metric_label(operation: &'static str) -> &'static str {
+    match operation {
+        "restart" => "redfish_restart_error",
+        "lockdown" => "redfish_lockdown_error",
+        _ => "redfish_other_error",
     }
 }

@@ -15,11 +15,11 @@
  * limitations under the License.
  */
 
-use ::rpc::admin_cli::{CarbideCliResult, OutputFormat};
+use ::rpc::admin_cli::OutputFormat;
 use prettytable::row;
-use rpc::admin_cli::CarbideCliError;
 
 use crate::dpf::common::DpfQuery;
+use crate::errors::{CarbideCliError, CarbideCliResult};
 use crate::rpc::ApiClient;
 
 pub async fn show(

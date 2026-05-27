@@ -413,28 +413,28 @@ kubectl run -i --rm --restart=Never --image=curlimages/curl curl-test \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-### Set up carbidecli and Create your First Site
+### Set up nicocli and Create your First Site
 
 NICo has two CLIs that serve different purposes:
 
 | CLI | Communicates with | Used for |
 |---|---|---|
-| `carbidecli` | NICo REST (REST API) | Site management, org bootstrap, instance operations |
+| `nicocli` | NICo REST (REST API) | Site management, org bootstrap, instance operations |
 | `carbide-admin-cli` | NICo Core (gRPC API) | Host ingestion, credentials, expected machines, TPM approval |
 
-`carbidecli` is built from the NCX REST repo. `carbide-admin-cli` is built from the NCX Core repo (`crates/admin-cli`).
+`nicocli` is built from the NCX REST repo. `carbide-admin-cli` is built from the NCX Core repo (`crates/admin-cli`).
 
 #### 1. Build and Install the CLI
 
 ```bash
 cd "$NCX_REPO"
-make carbide-cli        # installs to $(go env GOPATH)/bin/carbidecli
+make nico-cli           # installs to $(go env GOPATH)/bin/nicocli
 ```
 
 #### 2. Generate the Default Config File
 
 ```bash
-carbidecli init          # writes ~/.carbide/config.yaml
+nicocli init             # writes ~/.nico/config.yaml
 ```
 
 #### 3. Port-forward `carbide-rest-api` to localhost
@@ -443,7 +443,7 @@ carbidecli init          # writes ~/.carbide/config.yaml
 kubectl port-forward -n carbide-rest svc/carbide-rest-api 8388:8388
 ```
 
-#### 4. Edit `~/.carbide/config.yaml`
+#### 4. Edit `~/.nico/config.yaml`
 
 ```yaml
 api:
@@ -476,8 +476,8 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
 #### 6. Create your First Site
 
 ```bash
-carbidecli site create --name mysite --description 'first site'
-carbidecli site list
+nicocli site create --name mysite --description 'first site'
+nicocli site list
 ```
 
 ### Overall Health Check
@@ -571,7 +571,7 @@ carbide-admin-cli -c <api-url> em replace-all --filename expected_machines.json
 NICo uses Measured Boot with TPM v2.0 to enforce cryptographic identity:
 
 ```bash
-carbide-admin-cli -c <api-url> mb site trusted-machine approve \* persist --pcr-registers="0,3,5,6"
+carbide-admin-cli -c <api-url> att mb site trusted-machine approve \* persist --pcr-registers="0,3,5,6"
 ```
 
 NICo will now discover the host via Redfish, pair it with its DPU(s), provision the DPU, and bring the host to a ready state. For more details, refer to the [Ingesting Hosts](../provisioning/ingesting-hosts.md) guide.

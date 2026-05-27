@@ -168,19 +168,15 @@ impl MachineUpdateModule for DpuNicFirmwareUpdate {
         txn: &mut PgConnection,
         snapshots: &HashMap<MachineId, ManagedHostStateSnapshot>,
     ) {
-        match DpuMachineUpdate::find_available_outdated_dpus(
+        let outdated_dpus = DpuMachineUpdate::find_available_outdated_dpus(
             None,
             &self.config.dpu_config.dpu_nic_firmware_update_versions,
             snapshots,
-        ) {
-            Ok(outdated_dpus) => {
-                if let Some(metrics) = &self.metrics {
-                    metrics
-                        .pending_firmware_updates
-                        .store(outdated_dpus.len() as u64, Ordering::Relaxed);
-                }
-            }
-            Err(e) => tracing::warn!(error=%e, "Error geting outdated dpus for metrics"),
+        );
+        if let Some(metrics) = &self.metrics {
+            metrics
+                .pending_firmware_updates
+                .store(outdated_dpus.len() as u64, Ordering::Relaxed);
         }
 
         let outdated_dpus = DpuMachineUpdate::find_unavailable_outdated_dpus(
@@ -231,17 +227,11 @@ impl DpuNicFirmwareUpdate {
         snapshots: &HashMap<MachineId, ManagedHostStateSnapshot>,
         available_updates: i32,
     ) -> Vec<DpuMachineUpdate> {
-        match DpuMachineUpdate::find_available_outdated_dpus(
+        DpuMachineUpdate::find_available_outdated_dpus(
             Some(available_updates),
             &self.config.dpu_config.dpu_nic_firmware_update_versions,
             snapshots,
-        ) {
-            Ok(machine_updates) => machine_updates,
-            Err(e) => {
-                tracing::warn!("Failed to find machines needing updates: {}", e);
-                vec![]
-            }
-        }
+        )
     }
 }
 

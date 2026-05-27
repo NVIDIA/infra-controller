@@ -1,8 +1,8 @@
 [nico-system]
-api-server = "https://nico-api.nico"
-root-ca = "/opt/nico/nico_root.pem"
-client-cert = "/etc/ssl/certs/nico-dpu-otel-agent.pem"
-client-key = "/etc/ssl/private/nico-dpu-otel-agent.key"
+api-server = "https://carbide-api.forge"
+root-ca = "/opt/forge/forge_root.pem"
+client-cert = "/etc/ssl/certs/forge-dpu-otel-agent.pem"
+client-key = "/etc/ssl/private/forge-dpu-otel-agent.key"
 
 [machine]
 is_fake_dpu = false

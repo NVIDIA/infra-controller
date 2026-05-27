@@ -31,7 +31,7 @@ use ::rpc::protos::dns::{
 };
 use ::rpc::protos::{measured_boot as measured_boot_pb, mlx_device as mlx_device_pb};
 use carbide_ib_fabric::ib::IBFabricManager;
-use carbide_nvlink_manager::nvlink::NmxmClientPool;
+use carbide_rack::bms_client::BmsDsxExchangeHandle;
 use carbide_redfish::libredfish::RedfishClientPool;
 use carbide_site_explorer::EndpointExplorer;
 use carbide_uuid::machine::{MachineId, MachineInterfaceId};
@@ -40,6 +40,7 @@ use db::work_lock_manager::WorkLockManagerHandle;
 use db::{DatabaseError, DatabaseResult, WithTransaction};
 use forge_secrets::certificates::CertificateProvider;
 use forge_secrets::credentials::CredentialManager;
+use libnmxc::NmxcPool;
 use librms::RmsApi;
 use model::machine::Machine;
 use model::machine::machine_search_config::MachineSearchConfig;
@@ -55,7 +56,6 @@ use crate::dpf::DpfOperations;
 use crate::dynamic_settings::DynamicSettings;
 use crate::ethernet_virtualization::EthVirtData;
 use crate::logging::log_limiter::LogLimiter;
-use crate::rack::bms_client::BmsDsxExchangeHandle;
 use crate::scout_stream::ConnectionRegistry;
 use crate::state_controller::controller::Enqueuer;
 use crate::state_controller::machine::io::MachineStateControllerIO;
@@ -76,7 +76,7 @@ pub struct Api {
     pub(crate) scout_stream_registry: ConnectionRegistry,
     #[allow(unused)]
     pub(crate) rms_client: Option<Arc<dyn RmsApi>>,
-    pub(crate) nmxm_pool: Arc<dyn NmxmClientPool>,
+    pub(crate) nmxc_client_pool: Arc<dyn NmxcPool>,
     pub(crate) work_lock_manager_handle: WorkLockManagerHandle,
     pub(crate) dpf_sdk: Option<Arc<dyn DpfOperations>>,
     pub(crate) machine_state_handler_enqueuer: Enqueuer<MachineStateControllerIO>,
@@ -420,6 +420,13 @@ impl Forge for Api {
         request: Request<rpc::VpcSearchQuery>,
     ) -> Result<Response<rpc::NetworkSegmentList>, Status> {
         crate::handlers::network_segment::for_vpc(self, request).await
+    }
+
+    async fn find_network_segment_state_histories(
+        &self,
+        request: Request<rpc::NetworkSegmentStateHistoriesRequest>,
+    ) -> Result<Response<rpc::StateHistories>, Status> {
+        crate::handlers::network_segment::find_state_histories(self, request).await
     }
 
     async fn allocate_instance(
@@ -892,6 +899,13 @@ impl Forge for Api {
         crate::handlers::credential::get_bmc_credentals(self, request).await
     }
 
+    async fn get_switch_nvos_credentials(
+        &self,
+        request: Request<rpc::GetSwitchNvosCredentialsRequest>,
+    ) -> Result<Response<rpc::GetBmcCredentialsResponse>, Status> {
+        crate::handlers::credential::get_switch_nvos_credentials(self, request).await
+    }
+
     /// Network status of each managed host, as reported by forge-dpu-agent.
     /// For use by forge-admin-cli
     ///
@@ -958,6 +972,13 @@ impl Forge for Api {
         request: Request<rpc::ReExploreEndpointRequest>,
     ) -> Result<Response<()>, Status> {
         crate::handlers::site_explorer::re_explore_endpoint(self, request).await
+    }
+
+    async fn refresh_endpoint_report(
+        &self,
+        request: Request<rpc::RefreshEndpointReportRequest>,
+    ) -> Result<Response<::rpc::site_explorer::ExploredEndpoint>, Status> {
+        crate::handlers::site_explorer::refresh_endpoint_report(self, request).await
     }
 
     async fn delete_explored_endpoint(
@@ -1494,62 +1515,6 @@ impl Forge for Api {
         request: Request<rpc::BatchExpectedMachineOperationRequest>,
     ) -> Result<Response<rpc::BatchExpectedMachineOperationResponse>, Status> {
         crate::handlers::expected_machine::update_expected_machines(self, request).await
-    }
-
-    async fn create_rack_firmware(
-        &self,
-        request: tonic::Request<rpc::RackFirmwareCreateRequest>,
-    ) -> Result<Response<rpc::RackFirmware>, tonic::Status> {
-        crate::handlers::rack_firmware::create(self, request).await
-    }
-
-    async fn get_rack_firmware(
-        &self,
-        request: tonic::Request<rpc::RackFirmwareGetRequest>,
-    ) -> Result<Response<rpc::RackFirmware>, tonic::Status> {
-        crate::handlers::rack_firmware::get(self, request).await
-    }
-
-    async fn list_rack_firmware(
-        &self,
-        request: tonic::Request<rpc::RackFirmwareSearchFilter>,
-    ) -> Result<Response<rpc::RackFirmwareList>, tonic::Status> {
-        crate::handlers::rack_firmware::list(self, request).await
-    }
-
-    async fn delete_rack_firmware(
-        &self,
-        request: tonic::Request<rpc::RackFirmwareDeleteRequest>,
-    ) -> Result<Response<()>, tonic::Status> {
-        crate::handlers::rack_firmware::delete(self, request).await
-    }
-
-    async fn apply_rack_firmware(
-        &self,
-        request: tonic::Request<rpc::RackFirmwareApplyRequest>,
-    ) -> Result<Response<rpc::RackFirmwareApplyResponse>, tonic::Status> {
-        crate::handlers::rack_firmware::apply(self, request).await
-    }
-
-    async fn get_rack_firmware_job_status(
-        &self,
-        request: tonic::Request<rpc::RackFirmwareJobStatusRequest>,
-    ) -> Result<Response<rpc::RackFirmwareJobStatusResponse>, tonic::Status> {
-        crate::handlers::rack_firmware::get_job_status(self, request).await
-    }
-
-    async fn get_rack_firmware_history(
-        &self,
-        request: tonic::Request<rpc::RackFirmwareHistoryRequest>,
-    ) -> Result<Response<rpc::RackFirmwareHistoryResponse>, tonic::Status> {
-        crate::handlers::rack_firmware::get_history(self, request).await
-    }
-
-    async fn rack_firmware_set_default(
-        &self,
-        request: tonic::Request<rpc::RackFirmwareSetDefaultRequest>,
-    ) -> Result<Response<()>, tonic::Status> {
-        crate::handlers::rack_firmware::set_default(self, request).await
     }
 
     async fn get_expected_power_shelf(
@@ -2677,11 +2642,11 @@ impl Forge for Api {
         crate::handlers::logical_partition::update(self, request).await
     }
 
-    async fn nmxm_browse(
+    async fn nmxc_browse(
         &self,
-        request: Request<rpc::NmxmBrowseRequest>,
-    ) -> Result<Response<rpc::NmxmBrowseResponse>, Status> {
-        crate::handlers::nvl_partition::nmxm_browse(self, request).await
+        request: Request<rpc::NmxcBrowseRequest>,
+    ) -> Result<Response<rpc::NmxcBrowseResponse>, Status> {
+        crate::handlers::nmxc_browse::nmxc_browse(self, request).await
     }
 
     // Return a Vector of all the DPA interface IDs
@@ -2786,6 +2751,34 @@ impl Forge for Api {
         request: Request<rpc::TrimTableRequest>,
     ) -> Result<Response<rpc::TrimTableResponse>, Status> {
         crate::handlers::db::trim_table(self, request).await
+    }
+
+    async fn list_nvlink_nmxc_endpoints(
+        &self,
+        request: Request<()>,
+    ) -> Result<Response<rpc::NvlinkNmxcEndpointList>, Status> {
+        crate::handlers::nvlink_nmxc_endpoints::list_nvlink_nmxc_endpoints(self, request).await
+    }
+
+    async fn create_nvlink_nmxc_endpoint(
+        &self,
+        request: Request<rpc::NvlinkNmxcEndpoint>,
+    ) -> Result<Response<rpc::NvlinkNmxcEndpoint>, Status> {
+        crate::handlers::nvlink_nmxc_endpoints::create_nvlink_nmxc_endpoint(self, request).await
+    }
+
+    async fn update_nvlink_nmxc_endpoint(
+        &self,
+        request: Request<rpc::NvlinkNmxcEndpoint>,
+    ) -> Result<Response<rpc::NvlinkNmxcEndpoint>, Status> {
+        crate::handlers::nvlink_nmxc_endpoints::update_nvlink_nmxc_endpoint(self, request).await
+    }
+
+    async fn delete_nvlink_nmxc_endpoint(
+        &self,
+        request: Request<rpc::DeleteNvlinkNmxcEndpointRequest>,
+    ) -> Result<Response<()>, Status> {
+        crate::handlers::nvlink_nmxc_endpoints::delete_nvlink_nmxc_endpoint(self, request).await
     }
 
     async fn create_remediation(
@@ -3322,6 +3315,13 @@ impl Forge for Api {
         Ok(tonic::Response::new(::rpc::forge::IpxeTemplateList {
             templates,
         }))
+    }
+
+    async fn find_bmc_ips(
+        &self,
+        request: Request<::rpc::forge::FindBmcIpsRequest>,
+    ) -> Result<Response<::rpc::forge::BmcIpList>, Status> {
+        crate::handlers::machine_interface::find_bmc_ips(self, request).await
     }
 }
 
