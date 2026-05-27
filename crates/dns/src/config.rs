@@ -53,6 +53,12 @@ pub struct Config {
     /// Default: `/var/run/secrets/spiffe.io/tls.key`.
     #[serde(default = "Defaults::client_key_path")]
     pub client_key_path: PathBuf,
+    /// Upstream resolver consulted when carbide-api answers NXDOMAIN, so we
+    /// can still resolve public hostnames (e.g. sslip.io) without giving up
+    /// at NICo's own zone. When unset, NXDOMAIN/Refused responses are
+    /// returned to the client as-is.
+    #[serde(default)]
+    pub upstream_resolver: Option<SocketAddr>,
     /// OTLP gRPC endpoint that traces are exported to.
     /// Default: the in-cluster OpenTelemetry collector.
     #[serde(
@@ -143,6 +149,7 @@ impl Default for Config {
             client_cert_path: Defaults::client_cert_path(),
             client_key_path: Defaults::client_key_path(),
             otlp_endpoint: Defaults::otlp_endpoint(),
+            upstream_resolver: None,
             negative_cache_ttl_secs: Defaults::negative_cache_ttl_secs(),
             negative_cache_entries_max_count: Defaults::negative_cache_entries_max_count(),
             metrics_listen_address: Defaults::metrics_listen_addr(),
