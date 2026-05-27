@@ -24,8 +24,7 @@ use model::machine::{
     InstanceNextStateResolver, InstanceState, Machine, MachineNextStateResolver, MachineState,
     ManagedHostState, ManagedHostStateSnapshot, ReprovisionState,
 };
-
-use crate::state_controller::state_handler::StateHandlerError;
+use state_controller::state_handler::StateHandlerError;
 
 pub trait NextState {
     fn next_bfb_install_state(

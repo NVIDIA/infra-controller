@@ -1186,11 +1186,15 @@ dependencies = [
  "carbide-macros",
  "carbide-measured-boot",
  "carbide-metrics-utils",
+ "carbide-mqtt-common",
  "carbide-network",
  "carbide-network-segment-controller",
  "carbide-nvlink-manager",
+ "carbide-power-shelf-controller",
  "carbide-preingestion-manager",
  "carbide-prost-builder",
+ "carbide-rack",
+ "carbide-rack-controller",
  "carbide-redfish",
  "carbide-rpc",
  "carbide-rpc-utils",
@@ -1199,6 +1203,7 @@ dependencies = [
  "carbide-spdm-controller",
  "carbide-sqlx-testing",
  "carbide-ssh",
+ "carbide-state-controller-common",
  "carbide-switch-controller",
  "carbide-tls",
  "carbide-utils",
@@ -2265,6 +2270,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "carbide-mqtt-common"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "mqttea",
+ "opentelemetry",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "carbide-network"
 version = "0.0.0"
 dependencies = [
@@ -2324,6 +2341,28 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "carbide-power-shelf-controller"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "carbide-api-db",
+ "carbide-api-model",
+ "carbide-health-metrics",
+ "carbide-rack",
+ "carbide-secrets",
+ "carbide-utils",
+ "carbide-uuid",
+ "config-version",
+ "eyre",
+ "librms",
+ "mac_address",
+ "opentelemetry",
+ "sqlx",
+ "state-controller",
+ "tracing",
 ]
 
 [[package]]
@@ -2392,6 +2431,60 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "uuid",
+]
+
+[[package]]
+name = "carbide-rack"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "bms-dsx-exchange",
+ "carbide-api-db",
+ "carbide-api-model",
+ "carbide-health-report",
+ "carbide-mqtt-common",
+ "carbide-secrets",
+ "carbide-uuid",
+ "chrono",
+ "eyre",
+ "librms",
+ "mac_address",
+ "mqttea",
+ "opentelemetry",
+ "serde_json",
+ "sqlx",
+ "state-controller",
+ "tokio",
+ "tokio-util",
+ "tonic",
+ "tracing",
+]
+
+[[package]]
+name = "carbide-rack-controller"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "carbide-api-db",
+ "carbide-api-model",
+ "carbide-health-metrics",
+ "carbide-rack",
+ "carbide-secrets",
+ "carbide-utils",
+ "carbide-uuid",
+ "chrono",
+ "config-version",
+ "duration-str",
+ "eyre",
+ "librms",
+ "mac_address",
+ "opentelemetry",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "state-controller",
+ "tonic",
+ "tracing",
 ]
 
 [[package]]
@@ -2748,6 +2841,16 @@ dependencies = [
  "tonic-prost-build",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "carbide-state-controller-common"
+version = "0.0.0"
+dependencies = [
+ "carbide-utils",
+ "duration-str",
+ "serde",
+ "state-controller",
 ]
 
 [[package]]
@@ -9205,12 +9308,8 @@ dependencies = [
  "flume",
  "futures-util",
  "log",
- "rustls-native-certs",
- "rustls-pemfile",
- "rustls-webpki 0.102.8",
  "thiserror 2.0.18",
  "tokio",
- "tokio-rustls",
  "tokio-stream",
  "tokio-util",
 ]
@@ -9447,7 +9546,7 @@ dependencies = [
  "once_cell",
  "ring",
  "rustls-pki-types",
- "rustls-webpki 0.103.13",
+ "rustls-webpki",
  "subtle",
  "zeroize",
 ]
@@ -9497,7 +9596,7 @@ dependencies = [
  "rustls",
  "rustls-native-certs",
  "rustls-platform-verifier-android",
- "rustls-webpki 0.103.13",
+ "rustls-webpki",
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
@@ -9509,17 +9608,6 @@ name = "rustls-platform-verifier-android"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f87165f0995f63a9fbeea62b64d10b4d9d8e78ec6d7d51fb2125fda7bb36788f"
-
-[[package]]
-name = "rustls-webpki"
-version = "0.102.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64ca1bc8749bd4cf37b5ce386cc146580777b4e8572c7b97baf22c83f444bee9"
-dependencies = [
- "ring",
- "rustls-pki-types",
- "untrusted 0.9.0",
-]
 
 [[package]]
 name = "rustls-webpki"

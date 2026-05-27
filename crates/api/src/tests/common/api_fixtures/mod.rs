@@ -39,12 +39,21 @@ use carbide_network_segment_controller::io::NetworkSegmentStateControllerIO;
 use carbide_nvlink_manager::NvlPartitionMonitor;
 use carbide_nvlink_manager::config::NvLinkConfig;
 use carbide_nvlink_manager::nvlink::test_support::NmxcSimClient;
+use carbide_power_shelf_controller::context::PowerShelfStateHandlerServices;
+use carbide_power_shelf_controller::handler::PowerShelfStateHandler;
+use carbide_power_shelf_controller::io::PowerShelfStateControllerIO;
+use carbide_rack::rms_client::test_support::RmsSim;
+use carbide_rack_controller::config::{RackConfig, RackValidationConfig, RmsConfig};
+use carbide_rack_controller::context::RackStateHandlerServices;
+use carbide_rack_controller::handler::RackStateHandler;
+use carbide_rack_controller::io::RackStateControllerIO;
 use carbide_redfish::libredfish::test_support::{RedfishSim, RedfishSimTestOverrides};
 use carbide_site_explorer::SiteExplorer;
 use carbide_site_explorer::config::{SiteExplorerConfig, SiteExplorerExploreMode};
 use carbide_spdm_controller::context::SpdmStateHandlerServices;
 use carbide_spdm_controller::handler::SpdmAttestationStateHandler;
 use carbide_spdm_controller::io::SpdmStateControllerIO;
+use carbide_state_controller_common::config::StateControllerConfig;
 use carbide_switch_controller::context::SwitchStateHandlerServices;
 use carbide_switch_controller::handler::SwitchStateHandler;
 use carbide_switch_controller::io::SwitchStateControllerIO;
@@ -109,35 +118,30 @@ use tracing_subscriber::EnvFilter;
 use crate::api::Api;
 use crate::api::metrics::ApiMetricsEmitter;
 use crate::cfg::file::{
-    BomValidationConfig, CarbideConfig, ComputeAllocationEnforcement, DpaConfig,
-    DpaInterfaceStateControllerConfig, DpuConfig as InitialDpuConfig, FirmwareGlobal, FnnConfig,
-    IbPartitionStateControllerConfig, ListenMode, MachineStateControllerConfig, MachineUpdater,
-    MachineValidationConfig, MeasuredBootMetricsCollectorConfig, MqttAuthConfig,
-    NetworkSecurityGroupConfig, NetworkSegmentStateControllerConfig, PowerManagerOptions,
+    CarbideConfig, ComputeAllocationEnforcement, DpaConfig, DpaInterfaceStateControllerConfig,
+    DpuConfig as InitialDpuConfig, FnnConfig, IbPartitionStateControllerConfig, ListenMode,
+    MachineUpdater, MachineValidationConfig, MeasuredBootMetricsCollectorConfig, MqttAuthConfig,
+    NetworkSecurityGroupConfig, NetworkSegmentStateControllerConfig,
     PowerShelfStateControllerConfig, RackStateControllerConfig, SpdmConfig,
-    SpdmStateControllerConfig, StateControllerConfig, SwitchStateControllerConfig, VmaasConfig,
-    VpcPeeringPolicy, default_bmc_session_lockout_threshold, default_max_find_by_ids,
+    SpdmStateControllerConfig, SwitchStateControllerConfig, VmaasConfig, VpcPeeringPolicy,
+    default_max_find_by_ids, default_bmc_session_lockout_threshold
 };
 use crate::dpf::DpfOperations;
 use crate::ethernet_virtualization::{EthVirtData, SiteFabricPrefixList};
 use crate::logging::level_filter::ActiveLevel;
 use crate::logging::log_limiter::LogLimiter;
 use crate::measured_boot::convert_vec;
-use crate::rack::rms_client::test_support::RmsSim;
 use crate::scout_stream;
 use crate::state_controller::common_services::CommonStateHandlerServices;
 use crate::state_controller::controller::{Enqueuer, StateController};
+use crate::state_controller::machine::config::{
+    BomValidationConfig, FirmwareGlobal, MachineStateControllerConfig, PowerManagerOptions,
+};
+use crate::state_controller::machine::context::MachineStateHandlerServices;
 use crate::state_controller::machine::handler::{
     MachineStateHandler, MachineStateHandlerBuilder, PowerOptionConfig, ReachabilityParams,
 };
 use crate::state_controller::machine::io::MachineStateControllerIO;
-use crate::state_controller::power_shelf::context::PowerShelfStateHandlerServices;
-use crate::state_controller::power_shelf::handler::PowerShelfStateHandler;
-use crate::state_controller::power_shelf::io::PowerShelfStateControllerIO;
-use crate::state_controller::rack::config::{RackConfig, RackValidationConfig, RmsConfig};
-use crate::state_controller::rack::context::RackStateHandlerServices;
-use crate::state_controller::rack::handler::RackStateHandler;
-use crate::state_controller::rack::io::RackStateControllerIO;
 use crate::state_controller::state_handler::{
     StateHandler, StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
@@ -424,7 +428,19 @@ impl TestEnv {
         }
     }
 
-    /// Creates an instance of CommonStateHandlerServices that are suitable for this
+    /// Creates an instance of MachineStateHandlerServices that are suitable for this
+    /// test environment
+    pub fn machine_state_handler_services(&self) -> MachineStateHandlerServices {
+        MachineStateHandlerServices {
+            db_pool: self.pool.clone(),
+            db_reader: self.pool.clone().into(),
+            redfish_client_pool: self.redfish_sim.clone(),
+            ipmi_tool: self.ipmi_tool.clone(),
+            site_config: self.config.machine_state_handler_site_config().into(),
+        }
+    }
+
+    /// Creates an instance of RackStateHandlerServices that are suitable for this
     /// test environment
     pub fn rack_state_handler_services(&self) -> RackStateHandlerServices {
         RackStateHandlerServices {
@@ -1309,12 +1325,7 @@ pub fn get_config() -> CarbideConfig {
         }),
         mlxconfig_profiles: None,
         rack_management_enabled: false,
-        rms: RmsConfig {
-            api_url: Some(
-                SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080).to_string(),
-            ),
-            ..Default::default()
-        },
+        rms: RmsConfig::default(),
         rack_profiles: Default::default(),
         spdm_state_controller: SpdmStateControllerConfig {
             controller: StateControllerConfig::default(),
@@ -1731,7 +1742,19 @@ pub async fn create_test_env_with_overrides(
         .database(db_pool.clone(), work_lock_manager_handle.clone())
         .meter("carbide_machines", test_meter.meter())
         .processor_id(state_controller_id.clone())
-        .services(handler_services.clone())
+        .services(
+            MachineStateHandlerServices {
+                db_pool: handler_services.db_pool.clone(),
+                db_reader: handler_services.db_reader.clone(),
+                redfish_client_pool: handler_services.redfish_client_pool.clone(),
+                ipmi_tool: handler_services.ipmi_tool.clone(),
+                site_config: handler_services
+                    .site_config
+                    .machine_state_handler_site_config()
+                    .into(),
+            }
+            .into(),
+        )
         .state_handler(Arc::new(machine_swap.clone()))
         .io(Arc::new(MachineStateControllerIO {
             host_health: config.host_health,
