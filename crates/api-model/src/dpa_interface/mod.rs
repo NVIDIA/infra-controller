@@ -269,11 +269,12 @@ impl DpaInterface {
         instance: &Option<InstanceSnapshot>,
         spx_status_observation: &Option<MachineSpxStatusObservation>,
     ) -> bool {
-        let mut dpa_expected_version = self.network_config.version;
-
-        if let Some(instance) = instance {
-            dpa_expected_version = instance.spx_config_version;
-        }
+        let dpa_expected_version = match instance {
+            Some(instance) if !instance.config.spxconfig.spx_attachments.is_empty() => {
+                instance.spx_config_version
+            }
+            _ => self.network_config.version,
+        };
 
         let Some(spx_status_observation) = spx_status_observation else {
             return false;

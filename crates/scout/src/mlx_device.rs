@@ -30,7 +30,6 @@ use libmlx::lockdown::lockdown::{LockdownManager, StatusReport};
 use libmlx::profile::error::MlxProfileError;
 use libmlx::profile::serialization::SerializableProfile;
 use libmlx::registry::registries;
-#[cfg(not(feature = "mockdpa"))]
 use libmlx::runner::applier::MlxConfigApplier;
 use libmlx::runner::result_types::{ComparisonResult, SyncResult};
 use libmlx::runner::runner::MlxConfigRunner;
@@ -1121,7 +1120,6 @@ pub async fn apply_firmware(
 //
 // Returns the profile name (if any) and whether the operation
 // succeeded, for reporting back via MlxObservation.
-#[cfg(not(feature = "mockdpa"))]
 pub(crate) fn apply_profile(
     device: &str,
     profile: Option<SerializableProfile>,
@@ -1165,21 +1163,6 @@ pub(crate) fn apply_profile(
             (Some(name), Some(false))
         }
     }
-}
-
-#[cfg(feature = "mockdpa")]
-pub(crate) fn apply_profile(
-    _device: &str,
-    profile: Option<SerializableProfile>,
-) -> (Option<String>, Option<bool>) {
-    // If a profile was provided, sync it after the reset.
-    let Some(profile) = profile else {
-        return (None, Some(true));
-    };
-
-    let name = profile.name;
-
-    (Some(name), Some(true))
 }
 
 // load_and_sync_profile loads a profile from data and syncs it to the device.

@@ -6771,6 +6771,8 @@ message DpaInterface {
   string controller_state_version = 8;
   string controller_state_outcome = 9;
 
+  reserved 10;
+
   string network_config = 11;
   string network_config_version = 12;
 

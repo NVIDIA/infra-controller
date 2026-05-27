@@ -26,9 +26,6 @@ use tracing::{debug, warn};
 
 use crate::device::filters::DeviceFilter;
 
-#[cfg(feature = "mockdpa")]
-const XML_CONTENT: &str = include_str!("mlxconfig.out");
-
 // DevicesXml represents the root XML structure
 // from mlxfwmanager output.
 #[derive(Debug, Deserialize)]
@@ -117,24 +114,16 @@ pub fn discover_devices() -> Result<Vec<MlxDeviceInfo>, String> {
         ));
     }
 
-    #[cfg(not(feature = "mockdpa"))]
     {
         let xml_content = String::from_utf8_lossy(&output.stdout);
         warn!("mlxfwmanager XML output: {}", xml_content);
         parse_mlxfwmanager_xml(&xml_content)
-    }
-    #[cfg(feature = "mockdpa")]
-    {
-        let xml_content = XML_CONTENT;
-        warn!("mlxfwmanager XML output: {}", xml_content);
-        parse_mlxfwmanager_xml(xml_content)
     }
 }
 
 // discover_device loads a specific device using mlxfwmanager.
 // The actual XML returned is still "devices", but will only
 // contain the target device.
-#[cfg(not(feature = "mockdpa"))]
 pub fn discover_device(device: &str) -> Result<MlxDeviceInfo, String> {
     debug!("Running mlxfwmanager to discover device: {device}");
 
@@ -171,27 +160,6 @@ pub fn discover_device(device: &str) -> Result<MlxDeviceInfo, String> {
         return Err(format!("no devices returned for device: {device}"));
     }
     Ok(devices.into_iter().next().unwrap())
-}
-
-#[cfg(feature = "mockdpa")]
-pub fn discover_device(device: &str) -> Result<MlxDeviceInfo, String> {
-    debug!("Running mlxfwmanager to discover device: {device}");
-
-    let xml_content = XML_CONTENT;
-    debug!("mlxfwmanager XML output: {}", xml_content);
-
-    let devices = parse_mlxfwmanager_xml(xml_content)?;
-    if devices.is_empty() {
-        return Err(format!("no devices returned for device: {device}"));
-    }
-
-    for dev in devices {
-        if dev.pci_name == device {
-            return Ok(dev);
-        }
-    }
-
-    Err(format!("no devices found in loop for device: {device}"))
 }
 
 // discover_devices_with_filters finds devices that match
