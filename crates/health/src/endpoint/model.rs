@@ -16,10 +16,8 @@
  */
 
 use std::borrow::Cow;
-use std::future::Future;
 use std::net::IpAddr;
-use std::pin::Pin;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use carbide_uuid::machine::MachineId;
 use carbide_uuid::nvlink::NvLinkDomainId;
@@ -27,44 +25,17 @@ use carbide_uuid::power_shelf::PowerShelfId;
 use carbide_uuid::rack::RackId;
 use carbide_uuid::switch::SwitchId;
 use mac_address::MacAddress;
-use tokio::sync::Mutex as AsyncMutex;
 use url::Url;
 
 use crate::HealthError;
-
-pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
-
-pub trait CredentialProvider: Send + Sync {
-    fn fetch_credentials<'a>(
-        &'a self,
-        endpoint: &'a BmcAddr,
-    ) -> BoxFuture<'a, Result<BmcCredentials, HealthError>>;
-}
-
-#[derive(Clone)]
-pub struct FixedCredentialProvider {
-    credentials: BmcCredentials,
-}
-
-impl CredentialProvider for FixedCredentialProvider {
-    fn fetch_credentials<'a>(
-        &'a self,
-        _endpoint: &'a BmcAddr,
-    ) -> BoxFuture<'a, Result<BmcCredentials, HealthError>> {
-        let credentials = self.credentials.clone();
-        Box::pin(async move { Ok(credentials) })
-    }
-}
+use crate::bmc::{BmcClient, BoxFuture};
 
 #[derive(Clone)]
 pub struct BmcEndpoint {
     pub addr: BmcAddr,
     pub metadata: Option<EndpointMetadata>,
     pub rack_id: Option<RackId>,
-    pub(crate) credentials: Arc<RwLock<Option<BmcCredentials>>>,
-    pub(crate) provider: Arc<dyn CredentialProvider>,
-    // Neded to ensure only one collector fetches endpoint
-    pub(crate) fetch_lock: Arc<AsyncMutex<()>>,
+    pub bmc: Arc<BmcClient>,
 }
 
 impl BmcEndpoint {
@@ -81,26 +52,6 @@ impl BmcEndpoint {
         )
     }
 
-    pub fn with_fixed_credentials(
-        addr: BmcAddr,
-        credentials: BmcCredentials,
-        metadata: Option<EndpointMetadata>,
-        rack_id: Option<RackId>,
-    ) -> Self {
-        let provider = Arc::new(FixedCredentialProvider {
-            credentials: credentials.clone(),
-        });
-
-        Self {
-            addr,
-            metadata,
-            rack_id,
-            credentials: Arc::new(RwLock::new(Some(credentials))),
-            provider,
-            fetch_lock: Arc::new(AsyncMutex::new(())),
-        }
-    }
-
     pub fn log_identity(&self) -> Cow<'_, str> {
         match &self.metadata {
             Some(EndpointMetadata::Machine(machine)) => Cow::Owned(machine.machine_id.to_string()),
@@ -110,36 +61,12 @@ impl BmcEndpoint {
         }
     }
 
-    pub fn credentials(&self) -> Option<BmcCredentials> {
-        self.credentials.read().expect("lock poisoned").clone()
+    pub fn bmc(&self) -> &Arc<BmcClient> {
+        &self.bmc
     }
 
-    pub async fn ensure_credentials(&self) -> Result<BmcCredentials, HealthError> {
-        if let Some(creds) = self.credentials() {
-            return Ok(creds);
-        }
-        let _guard = self.fetch_lock.lock().await;
-        // Maybe another task has already fetched credentials while we were waiting for the lock?
-        if let Some(creds) = self.credentials() {
-            return Ok(creds);
-        }
-        let fresh = self.provider.fetch_credentials(&self.addr).await?;
-        *self.credentials.write().expect("lock poisoned") = Some(fresh.clone());
-        Ok(fresh)
-    }
-    
     pub fn switch_data(&self) -> Option<&SwitchData> {
         self.metadata.as_ref().and_then(EndpointMetadata::as_switch)
-    }
-
-    pub fn credentials(&self) -> BmcCredentials {
-        self.credentials.read().expect("lock poisoned").to_owned()
-    }
-
-    pub async fn refresh(&self) -> Result<BmcCredentials, HealthError> {
-        let credentials = self.provider.fetch_credentials(&self.addr).await?;
-        *self.credentials.write().expect("lock poisoned") = Some(credentials.clone());
-        Ok(credentials)
     }
 }
 

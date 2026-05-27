@@ -1871,6 +1871,7 @@ dependencies = [
 name = "carbide-health"
 version = "0.0.1"
 dependencies = [
+ "arc-swap",
  "async-trait",
  "base64",
  "carbide-health-report",

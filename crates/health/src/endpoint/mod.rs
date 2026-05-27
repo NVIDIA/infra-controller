@@ -19,84 +19,52 @@ mod model;
 mod sources;
 
 pub use model::{
-    BmcAddr, BmcCredentials, BmcEndpoint, BoxFuture, CredentialProvider, EndpointMetadata,
-    EndpointSource, MachineData, PowerShelfData, SwitchData, SwitchEndpointRole,
+    BmcAddr, BmcCredentials, BmcEndpoint, EndpointMetadata, EndpointSource, MachineData,
+    PowerShelfData, SwitchData, SwitchEndpointRole,
 };
 pub use sources::{CompositeEndpointSource, StaticEndpointSource};
 
+pub use crate::bmc::{BoxFuture, CredentialProvider};
+
 #[cfg(test)]
-mod tests {
+pub(crate) mod test_support {
     use std::str::FromStr;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, Mutex, RwLock as StdRwLock};
-    use std::time::Duration;
+    use std::sync::Arc;
 
-    use carbide_uuid::power_shelf::{PowerShelfIdSource, PowerShelfType};
-    use carbide_uuid::switch::{SwitchIdSource, SwitchType};
     use mac_address::MacAddress;
-    use tokio::sync::Mutex as AsyncMutex;
-
-    use super::*;
-    use crate::HealthError;
-    use crate::config::{
-        StaticBmcEndpoint, StaticMachineEndpoint, StaticPowerShelfEndpoint, StaticSwitchEndpoint,
+    use nv_redfish::bmc_http::reqwest::{
+        Client as ReqwestClient, ClientParams as ReqwestClientParams,
     };
 
-    struct CountingProvider {
-        calls: Arc<AtomicUsize>,
-        delay: Option<Duration>,
-        credentials: BmcCredentials,
+    use super::*;
+    use crate::bmc::{BmcClient, FixedCredentialProvider};
+
+    pub fn reqwest() -> ReqwestClient {
+        ReqwestClient::with_params(ReqwestClientParams::new().accept_invalid_certs(true))
+            .expect("reqwest client builds")
     }
 
-    impl CountingProvider {
-        fn new(
-            credentials: BmcCredentials,
-            delay: Option<Duration>,
-        ) -> (Arc<Self>, Arc<AtomicUsize>) {
-            let calls = Arc::new(AtomicUsize::new(0));
-            let provider = Arc::new(Self {
-                calls: calls.clone(),
-                delay,
-                credentials,
-            });
-            (provider, calls)
+    pub fn endpoint_with_creds(
+        addr: BmcAddr,
+        creds: BmcCredentials,
+        metadata: Option<EndpointMetadata>,
+        rack_id: Option<carbide_uuid::rack::RackId>,
+    ) -> BmcEndpoint {
+        let provider = Arc::new(FixedCredentialProvider::new(creds));
+        let bmc = Arc::new(
+            BmcClient::new(reqwest(), addr.clone(), provider, None, 10)
+                .expect("fixed-credential BmcClient construction is infallible"),
+        );
+        BmcEndpoint {
+            addr,
+            metadata,
+            rack_id,
+            bmc,
         }
     }
 
-    impl CredentialProvider for CountingProvider {
-        fn fetch_credentials<'a>(
-            &'a self,
-            _endpoint: &'a BmcAddr,
-        ) -> BoxFuture<'a, Result<BmcCredentials, HealthError>> {
-            let delay = self.delay;
-            let credentials = self.credentials.clone();
-            self.calls.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async move {
-                if let Some(d) = delay {
-                    tokio::time::sleep(d).await;
-                }
-                Ok(credentials)
-            })
-        }
-    }
-
-    fn make_lazy_endpoint(provider: Arc<dyn CredentialProvider>) -> Arc<BmcEndpoint> {
-        Arc::new(BmcEndpoint {
-            addr: BmcAddr {
-                ip: "10.0.0.1".parse().unwrap(),
-                port: Some(443),
-                mac: MacAddress::from_str("00:11:22:33:44:55").unwrap(),
-            },
-            metadata: None,
-            rack_id: None,
-            credentials: Arc::new(StdRwLock::new(None)),
-            provider,
-            fetch_lock: Arc::new(AsyncMutex::new(())),
-        })
-    }
-
-    fn make_test_endpoint(mac: MacAddress) -> BmcEndpoint {
-        BmcEndpoint::with_fixed_credentials(
+    pub fn test_endpoint(mac: MacAddress) -> BmcEndpoint {
+        endpoint_with_creds(
             BmcAddr {
                 ip: "10.0.0.1".parse().unwrap(),
                 port: Some(443),
@@ -111,29 +79,23 @@ mod tests {
         )
     }
 
-    fn test_switch_id(label: &str) -> carbide_uuid::switch::SwitchId {
-        let mut hash = [0u8; 32];
-        let bytes = label.as_bytes();
-        hash[..bytes.len().min(32)].copy_from_slice(&bytes[..bytes.len().min(32)]);
-        carbide_uuid::switch::SwitchId::new(SwitchIdSource::Tpm, hash, SwitchType::NvLink)
+    pub fn mac(s: &str) -> MacAddress {
+        MacAddress::from_str(s).unwrap()
     }
+}
 
-    fn test_power_shelf_id(label: &str) -> carbide_uuid::power_shelf::PowerShelfId {
-        let mut hash = [0u8; 32];
-        let bytes = label.as_bytes();
-        hash[..bytes.len().min(32)].copy_from_slice(&bytes[..bytes.len().min(32)]);
-        carbide_uuid::power_shelf::PowerShelfId::new(
-            PowerShelfIdSource::ProductBoardChassisSerial,
-            hash,
-            PowerShelfType::Rack,
-        )
-    }
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::test_support::{mac, test_endpoint};
+    use super::*;
 
     #[tokio::test]
     async fn test_static_endpoint_source_shares_arc_data() {
         let endpoints = vec![
-            make_test_endpoint(MacAddress::from_str("00:11:22:33:44:55").unwrap()),
-            make_test_endpoint(MacAddress::from_str("aa:bb:cc:dd:ee:ff").unwrap()),
+            test_endpoint(mac("00:11:22:33:44:55")),
+            test_endpoint(mac("aa:bb:cc:dd:ee:ff")),
         ];
         let source = StaticEndpointSource::new(endpoints);
 
@@ -148,12 +110,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_composite_endpoint_source_preserves_arc_sharing() {
-        let endpoints1 = vec![make_test_endpoint(
-            MacAddress::from_str("00:11:22:33:44:55").unwrap(),
-        )];
-        let endpoints2 = vec![make_test_endpoint(
-            MacAddress::from_str("aa:bb:cc:dd:ee:ff").unwrap(),
-        )];
+        let endpoints1 = vec![test_endpoint(mac("00:11:22:33:44:55"))];
+        let endpoints2 = vec![test_endpoint(mac("aa:bb:cc:dd:ee:ff"))];
 
         let source1 = Arc::new(StaticEndpointSource::new(endpoints1));
         let source2 = Arc::new(StaticEndpointSource::new(endpoints2));
@@ -174,12 +132,12 @@ mod tests {
         let addr_http = BmcAddr {
             ip: "10.0.0.1".parse().expect("valid ip"),
             port: Some(80),
-            mac: MacAddress::from_str("00:11:22:33:44:55").unwrap(),
+            mac: mac("00:11:22:33:44:55"),
         };
         let addr_https = BmcAddr {
             ip: "10.0.0.2".parse().expect("valid ip"),
             port: Some(443),
-            mac: MacAddress::from_str("aa:bb:cc:dd:ee:ff").unwrap(),
+            mac: mac("aa:bb:cc:dd:ee:ff"),
         };
 
         let url_http = addr_http.to_url().expect("url should build");
@@ -187,333 +145,5 @@ mod tests {
 
         assert_eq!(url_http.scheme(), "http");
         assert_eq!(url_https.scheme(), "https");
-    }
-
-    #[tokio::test]
-    async fn test_static_endpoint_source_filters_invalid_ip() {
-        let configs = vec![
-            StaticBmcEndpoint {
-                ip: "10.0.0.1".to_string(),
-                port: Some(443),
-                mac: "00:11:22:33:44:55".to_string(),
-                username: "admin".to_string(),
-                password: Some("pass".to_string()),
-                machine: None,
-                power_shelf: None,
-                switch: None,
-                rack_id: None,
-            },
-            StaticBmcEndpoint {
-                ip: "not-an-ip".to_string(),
-                port: Some(443),
-                mac: "aa:bb:cc:dd:ee:ff".to_string(),
-                username: "admin".to_string(),
-                password: Some("pass".to_string()),
-                machine: None,
-                power_shelf: None,
-                switch: None,
-                rack_id: None,
-            },
-        ];
-
-        let source = StaticEndpointSource::from_config(&configs);
-        let endpoints = source.fetch_bmc_hosts().await.expect("fetch should work");
-
-        assert_eq!(endpoints.len(), 1);
-        assert_eq!(
-            endpoints[0].addr.mac,
-            MacAddress::from_str("00:11:22:33:44:55").unwrap()
-        );
-    }
-
-    #[tokio::test]
-    async fn test_static_endpoint_with_switch_serial_sets_metadata() {
-        let switch_id = test_switch_id("switch-a");
-        let configs = vec![StaticBmcEndpoint {
-            ip: "10.0.1.1".to_string(),
-            port: Some(443),
-            mac: "11:22:33:44:55:66".to_string(),
-            username: "cumulus".to_string(),
-            password: Some("pass".to_string()),
-            machine: None,
-            power_shelf: None,
-            switch: Some(StaticSwitchEndpoint {
-                id: Some(switch_id.to_string()),
-                serial: Some("SN-001".to_string()),
-                slot_number: Some(7),
-                tray_index: Some(3),
-                endpoint_role: crate::config::StaticSwitchEndpointRole::Host,
-                is_primary: true,
-                nmxt_enabled: None,
-            }),
-            rack_id: None,
-        }];
-
-        let source = StaticEndpointSource::from_config(&configs);
-        let endpoints = source.fetch_bmc_hosts().await.unwrap();
-
-        assert_eq!(endpoints.len(), 1);
-        match &endpoints[0].metadata {
-            Some(EndpointMetadata::Switch(s)) => {
-                assert_eq!(s.id, Some(switch_id));
-                assert_eq!(s.serial, "SN-001");
-                assert_eq!(s.slot_number, Some(7));
-                assert_eq!(s.tray_index, Some(3));
-                assert_eq!(s.endpoint_role, SwitchEndpointRole::Host);
-                assert!(s.is_primary);
-                assert!(s.nmxt_enabled);
-            }
-            other => panic!("expected Switch metadata, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_static_endpoint_with_power_shelf_metadata() {
-        let power_shelf_id = test_power_shelf_id("power-shelf-a");
-        let configs = vec![StaticBmcEndpoint {
-            ip: "10.0.2.1".to_string(),
-            port: Some(443),
-            mac: "22:33:44:55:66:77".to_string(),
-            username: "admin".to_string(),
-            password: Some("pass".to_string()),
-            machine: None,
-            power_shelf: Some(StaticPowerShelfEndpoint {
-                id: Some(power_shelf_id.to_string()),
-                serial: Some("PS-001".to_string()),
-            }),
-            switch: None,
-            rack_id: None,
-        }];
-
-        let source = StaticEndpointSource::from_config(&configs);
-        let endpoints = source.fetch_bmc_hosts().await.unwrap();
-
-        assert_eq!(endpoints.len(), 1);
-        match &endpoints[0].metadata {
-            Some(EndpointMetadata::PowerShelf(power_shelf)) => {
-                assert_eq!(power_shelf.id, Some(power_shelf_id));
-                assert_eq!(power_shelf.serial, "PS-001");
-            }
-            other => panic!("expected PowerShelf metadata, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_static_machine_endpoint_sets_placement_and_nvlink_metadata() {
-        let machine_id = "fm100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0"
-            .parse()
-            .expect("valid machine id");
-        let domain_uuid = "00000000-0000-0000-0000-000000000000"
-            .parse()
-            .expect("valid NVLink domain UUID");
-        let configs = vec![StaticBmcEndpoint {
-            ip: "10.0.1.2".to_string(),
-            port: Some(443),
-            mac: "11:22:33:44:55:11".to_string(),
-            username: "admin".to_string(),
-            password: Some("pass".to_string()),
-            machine: Some(StaticMachineEndpoint {
-                id: "fm100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0".to_string(),
-                serial: Some("MN-001".to_string()),
-                slot_number: Some(15),
-                tray_index: Some(5),
-                nvlink_domain_uuid: Some("00000000-0000-0000-0000-000000000000".to_string()),
-            }),
-            power_shelf: None,
-            switch: None,
-            rack_id: Some("RACK_1".to_string()),
-        }];
-
-        let source = StaticEndpointSource::from_config(&configs);
-        let endpoints = source.fetch_bmc_hosts().await.unwrap();
-
-        assert_eq!(endpoints.len(), 1);
-        assert_eq!(
-            endpoints[0]
-                .rack_id
-                .as_ref()
-                .map(|rack_id| rack_id.as_str()),
-            Some("RACK_1")
-        );
-        match &endpoints[0].metadata {
-            Some(EndpointMetadata::Machine(machine)) => {
-                assert_eq!(machine.machine_id, machine_id);
-                assert_eq!(machine.machine_serial.as_deref(), Some("MN-001"));
-                assert_eq!(machine.slot_number, Some(15));
-                assert_eq!(machine.tray_index, Some(5));
-                assert_eq!(machine.nvlink_domain_uuid, Some(domain_uuid));
-            }
-            other => panic!("expected Machine metadata, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_static_endpoint_without_switch_serial_has_no_metadata() {
-        let configs = vec![StaticBmcEndpoint {
-            ip: "10.0.0.1".to_string(),
-            port: Some(443),
-            mac: "aa:bb:cc:dd:ee:ff".to_string(),
-            username: "admin".to_string(),
-            password: Some("pass".to_string()),
-            machine: None,
-            power_shelf: None,
-            switch: None,
-            rack_id: None,
-        }];
-
-        let source = StaticEndpointSource::from_config(&configs);
-        let endpoints = source.fetch_bmc_hosts().await.unwrap();
-
-        assert_eq!(endpoints.len(), 1);
-        assert!(endpoints[0].metadata.is_none());
-    }
-
-    struct FailingSource;
-
-    impl EndpointSource for FailingSource {
-        fn fetch_bmc_hosts<'a>(
-            &'a self,
-        ) -> BoxFuture<'a, Result<Vec<Arc<BmcEndpoint>>, HealthError>> {
-            Box::pin(async {
-                Err(HealthError::GenericError(
-                    "simulated endpoint source failure".to_string(),
-                ))
-            })
-        }
-    }
-
-    #[tokio::test]
-    async fn test_composite_endpoint_source_propagates_errors() {
-        let source_ok = Arc::new(StaticEndpointSource::new(vec![make_test_endpoint(
-            MacAddress::from_str("00:11:22:33:44:55").unwrap(),
-        )]));
-        let source_fail = Arc::new(FailingSource);
-        let composite = CompositeEndpointSource::new(vec![source_ok, source_fail]);
-
-        let result = composite.fetch_bmc_hosts().await;
-
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn lazy_endpoint_does_not_fetch_until_ensure_credentials_called() {
-        let (provider, calls) = CountingProvider::new(
-            BmcCredentials::UsernamePassword {
-                username: "u".to_string(),
-                password: Some("p".to_string()),
-            },
-            None,
-        );
-        let endpoint = make_lazy_endpoint(provider);
-
-        assert!(endpoint.credentials().is_none());
-        assert_eq!(calls.load(Ordering::SeqCst), 0);
-
-        endpoint
-            .ensure_credentials()
-            .await
-            .expect("provider succeeds");
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
-    }
-
-    #[tokio::test]
-    async fn ensure_credentials_returns_cached_value_on_second_call() {
-        let (provider, calls) = CountingProvider::new(
-            BmcCredentials::SessionToken {
-                token: "tok".to_string(),
-            },
-            None,
-        );
-        let endpoint = make_lazy_endpoint(provider);
-
-        endpoint.ensure_credentials().await.unwrap();
-        endpoint.ensure_credentials().await.unwrap();
-        endpoint.ensure_credentials().await.unwrap();
-
-        assert_eq!(
-            calls.load(Ordering::SeqCst),
-            1,
-            "second/third call must reuse the cache"
-        );
-        assert!(endpoint.credentials().is_some());
-    }
-
-    #[tokio::test]
-    async fn ensure_credentials_fetches_once_under_concurrency() {
-        let (provider, calls) = CountingProvider::new(
-            BmcCredentials::SessionToken {
-                token: "tok".to_string(),
-            },
-            Some(Duration::from_millis(50)),
-        );
-        let endpoint = make_lazy_endpoint(provider);
-
-        let mut handles = Vec::with_capacity(8);
-        for _ in 0..8 {
-            let endpoint = endpoint.clone();
-            handles.push(tokio::spawn(async move {
-                endpoint.ensure_credentials().await.unwrap();
-            }));
-        }
-        for h in handles {
-            h.await.unwrap();
-        }
-
-        assert_eq!(
-            calls.load(Ordering::SeqCst),
-            1,
-            "fetch_lock must collapse concurrent first-touch callers into one fetch"
-        );
-    }
-
-    #[tokio::test]
-    async fn refresh_replaces_cached_credentials() {
-        struct SequenceProvider {
-            tokens: Mutex<Vec<String>>,
-            calls: Arc<AtomicUsize>,
-        }
-
-        impl CredentialProvider for SequenceProvider {
-            fn fetch_credentials<'a>(
-                &'a self,
-                _endpoint: &'a BmcAddr,
-            ) -> BoxFuture<'a, Result<BmcCredentials, HealthError>> {
-                self.calls.fetch_add(1, Ordering::SeqCst);
-                let token = self
-                    .tokens
-                    .lock()
-                    .unwrap()
-                    .pop()
-                    .expect("token sequence exhausted");
-                Box::pin(async move { Ok(BmcCredentials::SessionToken { token }) })
-            }
-        }
-
-        let calls = Arc::new(AtomicUsize::new(0));
-        let provider = Arc::new(SequenceProvider {
-            tokens: Mutex::new(vec!["second".to_string(), "first".to_string()]),
-            calls: calls.clone(),
-        });
-        let endpoint = make_lazy_endpoint(provider);
-
-        let first = endpoint.ensure_credentials().await.unwrap();
-        match first {
-            BmcCredentials::SessionToken { ref token } => assert_eq!(token, "first"),
-            _ => panic!("expected session token"),
-        }
-
-        let refreshed = endpoint.refresh().await.unwrap();
-        match refreshed {
-            BmcCredentials::SessionToken { ref token } => assert_eq!(token, "second"),
-            _ => panic!("expected session token"),
-        }
-
-        let cached_after_refresh = endpoint.credentials().expect("cache populated");
-        match cached_after_refresh {
-            BmcCredentials::SessionToken { ref token } => assert_eq!(token, "second"),
-            _ => panic!("expected session token"),
-        }
-
-        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 }
