@@ -15,12 +15,21 @@
  * limitations under the License.
  */
 
-//! MQTT state change hook for publishing ManagedHostState transitions.
-//!
-//! This module implements the AsyncAPI specification defined in `carbide.yaml`,
-//! publishing state changes to `{topic_prefix}/{machineId}/state` over MQTT
-//! 3.1.1. The prefix is supplied via `DsxExchangeEventBusConfig::topic_prefix`
-//! and defaults to `NICO/v1/machine`.
+use librms::RackManagerError;
+use state_controller::state_handler::{ExternalServiceError, StateHandlerError};
 
-pub mod hook;
-pub mod message;
+pub mod bms_client;
+pub mod firmware_object;
+pub mod firmware_update;
+pub mod rms_client;
+
+pub fn rack_manager_error(operation: &'static str, error: RackManagerError) -> StateHandlerError {
+    ExternalServiceError::with_source(
+        "rack_manager",
+        operation,
+        error.to_string(),
+        "rack_manager_error",
+        error,
+    )
+    .into()
+}

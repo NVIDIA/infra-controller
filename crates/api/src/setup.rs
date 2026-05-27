@@ -38,6 +38,7 @@ use carbide_network_segment_controller::handler::NetworkSegmentStateHandler;
 use carbide_network_segment_controller::io::NetworkSegmentStateControllerIO;
 use carbide_nvlink_manager::NvlPartitionMonitor;
 use carbide_preingestion_manager::PreingestionManager;
+use carbide_rack::bms_client::BmsDsxExchangeHandle;
 use carbide_redfish::libredfish::RedfishClientPool;
 use carbide_redfish::nv_redfish::NvRedfishClientPool;
 use carbide_site_explorer::SiteExplorer;
@@ -90,7 +91,6 @@ use crate::logging::service_health_metrics::{
 use crate::machine_update_manager::MachineUpdateManager;
 use crate::measured_boot::metrics_collector::MeasuredBootMetricsCollector;
 use crate::mqtt_state_change_hook::hook::MqttStateChangeHook;
-use crate::rack::bms_client::BmsDsxExchangeHandle;
 use crate::scout_stream::ConnectionRegistry;
 use crate::state_controller::common_services::CommonStateHandlerServices;
 use crate::state_controller::controller::{Enqueuer, StateController};
@@ -1043,7 +1043,7 @@ pub async fn initialize_and_start_controllers<'a>(
                 );
                 let rms_api_config = librms::client::RmsApiConfig::new(url, &rms_client_config);
                 Arc::new(librms::RackManagerApi::new(&rms_api_config))
-                    as Arc<dyn crate::rack::rms_client::SwitchSystemImageRmsClient>
+                    as Arc<dyn carbide_rack::rms_client::SwitchSystemImageRmsClient>
             }),
         credential_manager: credential_manager.clone(),
     });

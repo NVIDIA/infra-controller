@@ -20,6 +20,7 @@ use std::sync::Arc;
 use carbide_dpa_interface_controller::DpaInfo;
 use carbide_ib_fabric::ib::IBFabricManager;
 use carbide_ipmi::IPMITool;
+use carbide_rack::rms_client::SwitchSystemImageRmsClient;
 use carbide_redfish::libredfish::RedfishClientPool;
 use db::db_read::PgPoolReader;
 use forge_secrets::credentials::CredentialManager;
@@ -30,7 +31,6 @@ use model::resource_pool::common::IbPools;
 use sqlx::PgPool;
 
 use crate::cfg::file::CarbideConfig;
-use crate::rack::rms_client::SwitchSystemImageRmsClient;
 use crate::state_controller::state_handler::StateHandlerError;
 
 /// Services that are accessible to all statehandlers within carbide-core
