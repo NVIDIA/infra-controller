@@ -884,6 +884,7 @@ pub(crate) async fn invoke_power(
 
     let run_provisioning_instructions_on_every_boot = snapshot
         .instance
+        .as_ref()
         .map(|instance| {
             instance
                 .config
@@ -917,6 +918,13 @@ pub(crate) async fn invoke_power(
 
     if use_state_machine_for_reboot {
         db::instance::set_custom_pxe_reboot_requested(&machine_id, true, &mut txn).await?;
+    }
+
+    if request.boot_with_custom_ipxe
+        && let Some(instance) = snapshot.instance.as_ref()
+        && instance.config.os.phone_home_enabled
+    {
+        db::instance::clear_phone_home_last_contact(&mut txn, instance.id).await?;
     }
 
     // For non-always-PXE instances, set use_custom_pxe_on_boot based on the request.
