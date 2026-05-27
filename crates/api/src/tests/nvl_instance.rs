@@ -1936,6 +1936,116 @@ async fn test_create_instance_gpu_in_unknown_partition(pool: sqlx::PgPool) {
     assert_eq!(gpu_uid_count, 4);
 }
 
+#[crate::sqlx_test]
+async fn test_nmx_c_monitor_deletes_legacy_nmx_m_partition_row(pool: sqlx::PgPool) {
+    let mut config = common::api_fixtures::get_config();
+    if let Some(nvlink_config) = config.nvlink_config.as_mut() {
+        nvlink_config.enabled = true;
+    }
+
+    let mut test_overrides = TestEnvOverrides::with_config(config);
+    test_overrides.nmxc_unknown_partition = Some(true);
+    let env =
+        common::api_fixtures::create_test_env_with_overrides(pool.clone(), test_overrides).await;
+    let segment_id = env.create_vpc_and_tenant_segment().await;
+
+    let NvlLogicalPartitionFixture {
+        id: logical_partition_id,
+        logical_partition: _logical_partition,
+    } = create_nvl_logical_partition(&env, "test_partition".to_string()).await;
+
+    let mh1 = create_managed_host_with_hardware_info_template(
+        &env,
+        HardwareInfoTemplate::Custom(
+            crate::tests::common::api_fixtures::host::GB200_COMPUTE_TRAY_1_INFO_JSON,
+        ),
+    )
+    .await;
+    let machine1 = mh1.host().rpc_machine().await;
+    assert_eq!(&machine1.state, "Ready");
+    let domain_uuid = machine1
+        .nvlink_info
+        .as_ref()
+        .and_then(|info| info.domain_uuid)
+        .unwrap();
+
+    let legacy_partition_id = carbide_uuid::nvlink::NvLinkPartitionId::new();
+    let legacy_nmx_m_id = "699c4bdb83acac93e9c1476f";
+    sqlx::query(
+        r#"
+        INSERT INTO nvlink_partitions
+            (id, nmx_m_id, name, domain_uuid, logical_partition_id)
+        VALUES
+            ($1, $2, $3, $4, $5)
+        "#,
+    )
+    .bind(legacy_partition_id)
+    .bind(legacy_nmx_m_id)
+    .bind("legacy-nmxm-partition")
+    .bind(domain_uuid)
+    .bind(logical_partition_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let discovery_info1 = machine1.discovery_info.as_ref().unwrap();
+    assert_eq!(discovery_info1.gpus.len(), 4);
+
+    let nvl_config = rpc::forge::InstanceNvLinkConfig {
+        gpu_configs: discovery_info1
+            .gpus
+            .iter()
+            .filter_map(|gpu| {
+                gpu.platform_info.as_ref().map(|platform_info| {
+                    rpc::forge::InstanceNvLinkGpuConfig {
+                        device_instance: platform_info.module_id - 1,
+                        logical_partition_id: Some(logical_partition_id),
+                    }
+                })
+            })
+            .collect(),
+    };
+
+    let (_tinstance, _instance) =
+        create_instance_with_nvlink_config(&env, &mh1, nvl_config, segment_id).await;
+    env.run_nvl_partition_monitor_iteration().await;
+
+    let legacy_row_count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM nvlink_partitions
+        WHERE id = $1
+            AND nmx_m_id = $2
+            AND nmx_c_partition_id IS NULL
+        "#,
+    )
+    .bind(legacy_partition_id)
+    .bind(legacy_nmx_m_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(legacy_row_count, 0);
+
+    let replacement_rows: Vec<(Option<String>, Option<i32>)> = sqlx::query_as(
+        r#"
+        SELECT nmx_m_id, nmx_c_partition_id
+        FROM nvlink_partitions
+        WHERE logical_partition_id = $1
+            AND domain_uuid = $2
+        "#,
+    )
+    .bind(logical_partition_id)
+    .bind(domain_uuid)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(replacement_rows.len(), 1);
+    let (nmx_m_id, nmx_c_partition_id) = &replacement_rows[0];
+    assert!(nmx_m_id.is_none());
+    assert!(nmx_c_partition_id.is_some());
+}
+
 // `*_use_nmxc_simulator` integration tests only run when environment variable RUN_NMXC_SIMULATOR_TESTS is set (any value).
 // Before running these tests, need to have nmx_simulator running on port 9601.
 // Ex: "sudo ./install_simulators.sh -p 9601 -n 1 -g nmx-c-nvlink_2.0.0_2025-04-23_01-10_internal.tar.gz  -i 127.0.0.0 -m enabled -t gb200_nvl36r1_c2g4_topology -d true"

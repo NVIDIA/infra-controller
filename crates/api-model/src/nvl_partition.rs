@@ -35,7 +35,8 @@ pub struct NewNvlPartition {
     pub name: NvlPartitionName,
     pub logical_partition_id: NvLinkLogicalPartitionId,
     pub domain_uuid: NvLinkDomainId,
-    pub nmx_m_id: String,
+    pub nmx_m_id: Option<String>,
+    pub nmx_c_partition_id: Option<i32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,7 +69,8 @@ impl From<NvlPartitionName> for String {
 #[derive(Debug, Clone)]
 pub struct NvlPartition {
     pub id: NvLinkPartitionId,
-    pub nmx_m_id: String,
+    pub nmx_m_id: Option<String>,
+    pub nmx_c_partition_id: Option<i32>,
     pub domain_uuid: NvLinkDomainId,
     pub name: NvlPartitionName,
     pub created: DateTime<Utc>,
@@ -85,7 +87,9 @@ pub fn is_marked_as_deleted(partition: &NvlPartition) -> bool {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NvlPartitionSnapshotPgJson {
     pub id: NvLinkPartitionId,
-    pub nmx_m_id: String,
+    pub nmx_m_id: Option<String>,
+    #[serde(default)]
+    pub nmx_c_partition_id: Option<i32>,
     pub name: NvlPartitionName,
     pub domain_uuid: NvLinkDomainId,
     pub created: DateTime<Utc>,
@@ -100,6 +104,7 @@ impl TryFrom<NvlPartitionSnapshotPgJson> for NvlPartition {
         Ok(Self {
             id: value.id,
             nmx_m_id: value.nmx_m_id,
+            nmx_c_partition_id: value.nmx_c_partition_id,
             domain_uuid: value.domain_uuid,
             name: value.name,
             created: value.created,

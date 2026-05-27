@@ -35,7 +35,7 @@ impl TryFrom<NvlPartition> for rpc_forge::NvLinkPartition {
         Ok(rpc_forge::NvLinkPartition {
             id: Some(src.id),
             name: src.name.clone().into(),
-            nmx_m_id: src.nmx_m_id,
+            nmx_m_id: src.nmx_m_id.unwrap_or_default(),
             domain_uuid: Some(src.domain_uuid),
             logical_partition_id: src.logical_partition_id,
         })

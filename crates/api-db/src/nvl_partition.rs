@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-use carbide_uuid::nvlink::NvLinkPartitionId;
+use carbide_uuid::nvlink::{NvLinkDomainId, NvLinkLogicalPartitionId, NvLinkPartitionId};
 use model::nvl_partition::{NewNvlPartition, NvlPartition, NvlPartitionSnapshotPgJson};
 use sqlx::PgConnection;
 
@@ -42,15 +42,17 @@ pub async fn create(
     let query = "INSERT INTO nvlink_partitions (
                 id,
                 nmx_m_id,
+                nmx_c_partition_id,
                 name,
                 domain_uuid,
                 logical_partition_id)
-            VALUES ($1, $2, $3, $4, $5)
+            VALUES ($1, $2, $3, $4, $5, $6)
             RETURNING row_to_json(nvlink_partitions.*)";
 
     let partition: NvlPartitionSnapshotPgJson = sqlx::query_as(query)
         .bind(value.id)
         .bind(&value.nmx_m_id)
+        .bind(value.nmx_c_partition_id)
         .bind(value.name.as_str())
         .bind(value.domain_uuid)
         .bind(value.logical_partition_id)
@@ -168,4 +170,25 @@ pub async fn final_delete(
         .map_err(|e| DatabaseError::new(query, e))?;
 
     Ok(partition)
+}
+
+pub async fn final_delete_nmx_m_only_for_logical_partition_and_domain(
+    logical_partition_id: NvLinkLogicalPartitionId,
+    domain_uuid: NvLinkDomainId,
+    txn: &mut PgConnection,
+) -> Result<Vec<NvLinkPartitionId>, DatabaseError> {
+    let query = "DELETE FROM nvlink_partitions
+        WHERE logical_partition_id = $1
+            AND domain_uuid = $2
+            AND nmx_m_id IS NOT NULL
+            AND nmx_c_partition_id IS NULL
+        RETURNING id";
+    let partition_ids: Vec<NvLinkPartitionId> = sqlx::query_as(query)
+        .bind(logical_partition_id)
+        .bind(domain_uuid)
+        .fetch_all(txn)
+        .await
+        .map_err(|e| DatabaseError::new(query, e))?;
+
+    Ok(partition_ids)
 }

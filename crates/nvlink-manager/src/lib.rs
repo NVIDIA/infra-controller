@@ -150,7 +150,11 @@ impl PartitionProcessingContext {
             .collect();
         let db_nvl_partitions = db_nvl_partitions
             .into_iter()
-            .filter_map(|p| p.nmx_m_id.parse::<u32>().ok().map(|id| (id, p)))
+            .filter_map(|p| {
+                p.nmx_c_partition_id
+                    .and_then(|id| u32::try_from(id).ok())
+                    .map(|id| (id, p))
+            })
             .collect();
         Self {
             nmx_c_partitions,
@@ -546,7 +550,15 @@ impl PartitionProcessingContext {
         };
 
         // Get the GPU IDs that are already in the partition, plus the GPU being added.
-        let nmx_c_partition_id = partition.nmx_m_id.parse::<u32>().unwrap();
+        let Some(nmx_c_partition_id) = partition
+            .nmx_c_partition_id
+            .and_then(|id| u32::try_from(id).ok())
+        else {
+            return Err(NvLinkManagerError::internal(format!(
+                "NMX-C partition ID is required for DB partition {}",
+                partition.id
+            )));
+        };
         let gpu_uids: Vec<u64> = if let Some(nmx_c_partition) =
             self.nmx_c_partitions
                 .get(&libnmxc::nmxc_model::PartitionId {
@@ -1656,29 +1668,56 @@ impl NvlPartitionMonitor {
             for operation in operations {
                 match operation.operation_type {
                     NmxcPartitionOperationType::Create => {
+                        let matching_partition = match nmx_c_partitions.values().find(|p| {
+                            let p_uids: HashSet<u64> = p.gpu_uid_list.iter().copied().collect();
+                            let op_uids: HashSet<u64> =
+                                operation.gpu_uids.iter().copied().collect();
+                            p_uids == op_uids
+                        }) {
+                            Some(p) => p,
+                            None => {
+                                tracing::error!(
+                                    "NMX-C partition not found for name {}",
+                                    operation.name
+                                );
+                                continue;
+                            }
+                        };
+                        let Some(nmx_c_partition_id) = matching_partition
+                            .partition_id
+                            .as_ref()
+                            .map(|id| id.partition_id)
+                        else {
+                            tracing::error!(
+                                "NMX-C partition ID not found for name {}",
+                                operation.name
+                            );
+                            continue;
+                        };
+                        let Ok(nmx_c_partition_id) = i32::try_from(nmx_c_partition_id) else {
+                            tracing::error!(
+                                "NMX-C partition ID does not fit in database column for name {}",
+                                operation.name
+                            );
+                            continue;
+                        };
+
                         // Create the nvl partition in the database
                         let new_partition = model::nvl_partition::NewNvlPartition {
                             id: NvLinkPartitionId::new(),
                             logical_partition_id,
                             name: NvlPartitionName::try_from(operation.name.clone())?,
                             domain_uuid: operation.domain_uuid.unwrap_or_default(),
-                            nmx_m_id: match nmx_c_partitions.values().find(|p| {
-                                let p_uids: HashSet<u64> = p.gpu_uid_list.iter().copied().collect();
-                                let op_uids: HashSet<u64> =
-                                    operation.gpu_uids.iter().copied().collect();
-                                p_uids == op_uids
-                            }) {
-                                Some(p) => nmx_c_partition_id_string(p),
-                                None => {
-                                    tracing::error!(
-                                        "NMX-C partition not found for name {}",
-                                        operation.name
-                                    );
-                                    continue;
-                                }
-                            },
+                            nmx_m_id: None,
+                            nmx_c_partition_id: Some(nmx_c_partition_id),
                         };
                         let _partition = db::nvl_partition::create(&new_partition, txn).await?;
+                        self.delete_legacy_nmx_m_partition_rows(
+                            txn,
+                            logical_partition_id,
+                            operation.domain_uuid,
+                        )
+                        .await?;
                     }
                     NmxcPartitionOperationType::Remove(_) => {
                         db::nvl_partition::final_delete(
@@ -1688,8 +1727,14 @@ impl NvlPartitionMonitor {
                         .await?;
                     }
                     NmxcPartitionOperationType::Update(_) => {
-                        // No-op, since partition membership is not tracked in the partitions table. The status observation of the
+                        // Partition membership is not tracked in the partitions table. The status observation of the
                         // added/removed GPUs will be updated.
+                        self.delete_legacy_nmx_m_partition_rows(
+                            txn,
+                            logical_partition_id,
+                            operation.domain_uuid,
+                        )
+                        .await?;
                     }
                     NmxcPartitionOperationType::RemoveUnknownPartition(_) => {
                         // No-op, since default partition membership is not tracked in the partitions table. The status observation of the
@@ -1705,6 +1750,36 @@ impl NvlPartitionMonitor {
                 tracing::info!(logical_partition_id = %lp.id, "Deleting logical partition");
                 db::nvl_logical_partition::final_delete(lp.id, txn).await?;
             }
+        }
+
+        Ok(())
+    }
+
+    async fn delete_legacy_nmx_m_partition_rows(
+        &self,
+        txn: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        logical_partition_id: NvLinkLogicalPartitionId,
+        domain_uuid: Option<NvLinkDomainId>,
+    ) -> NvLinkManagerResult<()> {
+        let Some(domain_uuid) = domain_uuid else {
+            return Ok(());
+        };
+
+        let deleted_ids =
+            db::nvl_partition::final_delete_nmx_m_only_for_logical_partition_and_domain(
+                logical_partition_id,
+                domain_uuid,
+                txn,
+            )
+            .await?;
+
+        if !deleted_ids.is_empty() {
+            tracing::info!(
+                logical_partition_id = %logical_partition_id,
+                domain_uuid = %domain_uuid,
+                deleted_count = deleted_ids.len(),
+                "Deleted legacy NMX-M physical partition rows after NMX-C reconciliation"
+            );
         }
 
         Ok(())
