@@ -1442,8 +1442,7 @@ impl MachineStateHandler {
                                 }),
                             },
                         };
-                        handle_bios_setup_failed_recovery(ctx, mh_snapshot, machine_id, recovered)
-                            .await
+                        handle_bios_setup_failed_recovery(ctx, mh_snapshot, recovered).await
                     }
                     _ => {
                         // Do nothing.
@@ -6250,8 +6249,7 @@ impl StateHandler for InstanceStateHandler {
                                     },
                             },
                         };
-                        handle_bios_setup_failed_recovery(ctx, mh_snapshot, machine_id, recovered)
-                            .await
+                        handle_bios_setup_failed_recovery(ctx, mh_snapshot, recovered).await
                     }
                     _ => {
                         // Only way to proceed for other causes is to

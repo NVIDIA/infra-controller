@@ -17,7 +17,6 @@
 
 //! BIOS configuration: machine_setup, Dell job wait/recovery, and PollingBiosSetup escalation.
 
-use carbide_uuid::machine::MachineId;
 use chrono::Utc;
 use eyre::eyre;
 use libredfish::{Redfish, SystemPowerControl};
@@ -65,6 +64,21 @@ pub(super) enum PollingBiosSetupOutcome {
     Wait(String),
     EnterRecovery(BiosConfigInfo),
     Failed { failure: String },
+}
+
+/// Outcome of entering HandleBiosJobFailure recovery, or failing once the budget is exhausted.
+enum BiosRecoveryAttemptOutcome {
+    Continue(BiosConfigInfo),
+    Failed { failure: String },
+}
+
+impl From<BiosRecoveryAttemptOutcome> for BiosConfigJobAdvanceOutcome {
+    fn from(outcome: BiosRecoveryAttemptOutcome) -> Self {
+        match outcome {
+            BiosRecoveryAttemptOutcome::Continue(info) => Self::Continue(info),
+            BiosRecoveryAttemptOutcome::Failed { failure } => Self::Failed { failure },
+        }
+    }
 }
 
 /// Max configure_host_bios retry cycles through HandleBiosJobFailure recovery (matches boot-order retry budget).
@@ -134,9 +148,9 @@ pub(super) async fn configure_host_bios(
         Ok(jid) => jid,
     };
 
-    if let Some(job_id) = &bios_job_id {
+    if let Some(job_id) = bios_job_id {
         return Ok(BiosConfigOutcome::WaitingForBiosJob(BiosConfigInfo {
-            bios_job_id: Some(job_id.clone()),
+            bios_job_id: Some(job_id),
             bios_config_state: BiosConfigState::WaitForBiosJobScheduled,
             retry_count,
         }));
@@ -173,15 +187,11 @@ pub(super) async fn advance_bios_config_job(
             ) {
                 let failure = format!("BIOS job {} failed with state {job_state:#?}", job_id);
                 tracing::warn!(
-                    "{} for {}, transitioning to HandleBiosJobFailure (power cycle + BMC reset)",
-                    failure,
-                    mh_snapshot.host_snapshot.id
+                    %failure,
+                    "transitioning to HandleBiosJobFailure (power cycle + BMC reset)"
                 );
-                return try_bios_recovery_attempt(
-                    info.retry_count,
-                    info.bios_job_id.clone(),
-                    failure,
-                    &mh_snapshot.host_snapshot.id,
+                return Ok(
+                    try_bios_recovery_attempt(info.retry_count, info.bios_job_id, failure)?.into(),
                 );
             }
             if !matches!(job_state, libredfish::JobState::Scheduled) {
@@ -191,7 +201,7 @@ pub(super) async fn advance_bios_config_job(
                 )));
             }
             Ok(BiosConfigJobAdvanceOutcome::Continue(BiosConfigInfo {
-                bios_job_id: info.bios_job_id.clone(),
+                bios_job_id: info.bios_job_id,
                 bios_config_state: BiosConfigState::RebootHost,
                 retry_count: info.retry_count,
             }))
@@ -199,7 +209,7 @@ pub(super) async fn advance_bios_config_job(
         BiosConfigState::RebootHost => {
             handler_host_power_control(mh_snapshot, ctx, SystemPowerControl::ForceRestart).await?;
             Ok(BiosConfigJobAdvanceOutcome::Continue(BiosConfigInfo {
-                bios_job_id: info.bios_job_id.clone(),
+                bios_job_id: info.bios_job_id,
                 bios_config_state: BiosConfigState::WaitForBiosJobCompletion,
                 retry_count: info.retry_count,
             }))
@@ -229,16 +239,15 @@ pub(super) async fn advance_bios_config_job(
                         job_id, minutes_since_state_change, e
                     );
                     tracing::warn!(
-                        "{} for {}, transitioning to HandleBiosJobFailure (power cycle + BMC reset)",
-                        failure,
-                        mh_snapshot.host_snapshot.id
+                        %failure,
+                        "transitioning to HandleBiosJobFailure (power cycle + BMC reset)"
                     );
-                    return try_bios_recovery_attempt(
+                    return Ok(try_bios_recovery_attempt(
                         info.retry_count,
-                        info.bios_job_id.clone(),
+                        info.bios_job_id,
                         failure,
-                        &mh_snapshot.host_snapshot.id,
-                    );
+                    )?
+                    .into());
                 }
             };
             match job_state {
@@ -250,15 +259,12 @@ pub(super) async fn advance_bios_config_job(
                         job_id
                     );
                     tracing::warn!(
-                        "{} for {}, transitioning to HandleBiosJobFailure (power cycle + BMC reset)",
-                        failure,
-                        mh_snapshot.host_snapshot.id,
+                        %failure,
+                        "transitioning to HandleBiosJobFailure (power cycle + BMC reset)"
                     );
-                    try_bios_recovery_attempt(
-                        info.retry_count,
-                        info.bios_job_id.clone(),
-                        failure,
-                        &mh_snapshot.host_snapshot.id,
+                    Ok(
+                        try_bios_recovery_attempt(info.retry_count, info.bios_job_id, failure)?
+                            .into(),
                     )
                 }
                 _ => Err(StateHandlerError::GenericError(eyre!(
@@ -282,23 +288,21 @@ pub(super) async fn advance_bios_config_job(
                         handler_host_power_control(mh_snapshot, ctx, SystemPowerControl::ForceOff)
                             .await?;
                         return Ok(BiosConfigJobAdvanceOutcome::Wait(format!(
-                            "HandleBiosJobFailure: waiting for {} to power down; current power state: {current_power_state}; failure: {}",
-                            mh_snapshot.host_snapshot.id, failure
+                            "HandleBiosJobFailure: waiting for power down; current power state: {current_power_state}; failure: {failure}"
                         )));
                     }
                     tracing::info!(
-                        "HandleBiosJobFailure: Resetting BMC for {} after BIOS job failure: {}",
-                        mh_snapshot.host_snapshot.id,
-                        failure
+                        %failure,
+                        "HandleBiosJobFailure: resetting BMC after BIOS job failure"
                     );
                     redfish_client
                         .bmc_reset()
                         .await
                         .map_err(|e| redfish_error("bmc_reset", e))?;
                     Ok(BiosConfigJobAdvanceOutcome::Continue(BiosConfigInfo {
-                        bios_job_id: info.bios_job_id.clone(),
+                        bios_job_id: info.bios_job_id,
                         bios_config_state: BiosConfigState::HandleBiosJobFailure {
-                            failure: failure.clone(),
+                            failure,
                             power_state: PowerState::On,
                         },
                         retry_count: info.retry_count,
@@ -319,19 +323,16 @@ pub(super) async fn advance_bios_config_job(
                             .power_down_wait;
                         if Utc::now().signed_duration_since(basetime) < power_down_wait {
                             return Ok(BiosConfigJobAdvanceOutcome::Wait(format!(
-                                "HandleBiosJobFailure: waiting for BMC to come back online for {}; failure: {}",
-                                mh_snapshot.host_snapshot.id, failure
+                                "HandleBiosJobFailure: waiting for BMC to come back online; failure: {failure}"
                             )));
                         }
                         handler_host_power_control(mh_snapshot, ctx, SystemPowerControl::On)
                             .await?;
                         return Ok(BiosConfigJobAdvanceOutcome::Wait(format!(
-                            "HandleBiosJobFailure: powering on {} after BMC reset; failure: {}",
-                            mh_snapshot.host_snapshot.id, failure
+                            "HandleBiosJobFailure: powering on after BMC reset; failure: {failure}"
                         )));
                     }
                     tracing::info!(
-                        machine_id = %mh_snapshot.host_snapshot.id,
                         retry_count = info.retry_count,
                         "HandleBiosJobFailure: BMC reset complete; re-running platform configuration (machine_setup) — power cycle does not apply BIOS attributes",
                     );
@@ -353,23 +354,21 @@ fn try_bios_recovery_attempt(
     retry_count: u32,
     bios_job_id: Option<String>,
     failure: String,
-    host_id: &MachineId,
-) -> Result<BiosConfigJobAdvanceOutcome, StateHandlerError> {
+) -> Result<BiosRecoveryAttemptOutcome, StateHandlerError> {
     if retry_count >= MAX_BIOS_CONFIG_RETRIES {
         tracing::warn!(
-            machine_id = %host_id,
             retry_count,
             max_retries = MAX_BIOS_CONFIG_RETRIES,
             %failure,
             "BIOS recovery budget exhausted; moving host to Failed for manual remediation"
         );
-        return Ok(BiosConfigJobAdvanceOutcome::Failed {
+        return Ok(BiosRecoveryAttemptOutcome::Failed {
             failure: format!(
                 "{failure} (automated BIOS recovery exhausted after {MAX_BIOS_CONFIG_RETRIES} attempts)"
             ),
         });
     }
-    Ok(BiosConfigJobAdvanceOutcome::Continue(BiosConfigInfo {
+    Ok(BiosRecoveryAttemptOutcome::Continue(BiosConfigInfo {
         bios_job_id,
         bios_config_state: BiosConfigState::HandleBiosJobFailure {
             failure,
@@ -386,23 +385,17 @@ pub(super) async fn advance_polling_bios_setup(
 ) -> Result<PollingBiosSetupOutcome, StateHandlerError> {
     let boot_interface_mac = mh_snapshot.boot_interface_mac().map(|m| m.to_string());
     let stuck_for = mh_snapshot.host_snapshot.state.version.since_state_change();
-    let host_id = &mh_snapshot.host_snapshot.id;
 
     match redfish_client
         .is_bios_setup(boot_interface_mac.as_deref())
         .await
     {
         Ok(true) => {
-            tracing::info!(
-                machine_id = %host_id,
-                "BIOS setup verified successfully"
-            );
+            tracing::info!("BIOS setup verified successfully");
             Ok(PollingBiosSetupOutcome::Verified)
         }
         Ok(false) => {
-            if let Some(outcome) =
-                escalate_stuck_polling_bios_setup(retry_count, stuck_for, host_id)?
-            {
+            if let Some(outcome) = escalate_stuck_polling_bios_setup(retry_count, stuck_for)? {
                 return Ok(outcome);
             }
             Ok(PollingBiosSetupOutcome::Wait(format!(
@@ -411,7 +404,6 @@ pub(super) async fn advance_polling_bios_setup(
         }
         Err(e) => {
             tracing::warn!(
-                machine_id = %host_id,
                 error = %e,
                 "Failed to check BIOS setup status, will retry"
             );
@@ -425,14 +417,12 @@ pub(super) async fn advance_polling_bios_setup(
 fn escalate_stuck_polling_bios_setup(
     retry_count: u32,
     stuck_for: chrono::Duration,
-    host_id: &MachineId,
 ) -> Result<Option<PollingBiosSetupOutcome>, StateHandlerError> {
     if stuck_for <= POLLING_BIOS_SETUP_STUCK_THRESHOLD {
         return Ok(None);
     }
 
     tracing::warn!(
-        machine_id = %host_id,
         ?stuck_for,
         retry_count,
         "PollingBiosSetup stuck; attempting HandleBiosJobFailure recovery (power-off + BMC reset + power-on + re-run machine_setup)"
@@ -444,14 +434,13 @@ fn escalate_stuck_polling_bios_setup(
     );
 
     Ok(Some(
-        match try_bios_recovery_attempt(retry_count, None, failure, host_id)? {
-            BiosConfigJobAdvanceOutcome::Continue(info) => {
+        match try_bios_recovery_attempt(retry_count, None, failure)? {
+            BiosRecoveryAttemptOutcome::Continue(info) => {
                 PollingBiosSetupOutcome::EnterRecovery(info)
             }
-            BiosConfigJobAdvanceOutcome::Failed { failure } => {
+            BiosRecoveryAttemptOutcome::Failed { failure } => {
                 PollingBiosSetupOutcome::Failed { failure }
             }
-            _ => unreachable!("recovery attempt only returns Continue or Failed"),
         },
     ))
 }
@@ -459,7 +448,6 @@ fn escalate_stuck_polling_bios_setup(
 pub(super) async fn handle_bios_setup_failed_recovery(
     ctx: &mut StateHandlerContext<'_, MachineStateHandlerContextObjects>,
     mh_snapshot: &ManagedHostStateSnapshot,
-    machine_id: &MachineId,
     recovered_state: ManagedHostState,
 ) -> Result<StateHandlerOutcome<ManagedHostState>, StateHandlerError> {
     let boot_interface_mac = mh_snapshot.boot_interface_mac().map(|m| m.to_string());
@@ -472,16 +460,12 @@ pub(super) async fn handle_bios_setup_failed_recovery(
         .await
     {
         Ok(true) => {
-            tracing::info!(
-                machine_id = %machine_id,
-                "BIOS setup verified after manual remediation; resuming state machine"
-            );
+            tracing::info!("BIOS setup verified after manual remediation; resuming state machine");
             Ok(StateHandlerOutcome::transition(recovered_state))
         }
         Ok(false) => Ok(StateHandlerOutcome::do_nothing()),
         Err(e) => {
             tracing::warn!(
-                machine_id = %machine_id,
                 error = %e,
                 "Failed to check BIOS setup status, will retry"
             );
@@ -492,29 +476,18 @@ pub(super) async fn handle_bios_setup_failed_recovery(
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
     use super::*;
 
     #[test]
     fn escalate_stuck_polling_bios_setup_not_triggered_before_threshold() {
-        let host_id =
-            MachineId::from_str("fm100ht7blqjsadm2uuh3qqbf1h7k8pmf47um6v9uckrg7l03po8mhqgvng")
-                .unwrap();
-
-        let result =
-            escalate_stuck_polling_bios_setup(0, chrono::Duration::minutes(10), &host_id).unwrap();
+        let result = escalate_stuck_polling_bios_setup(0, chrono::Duration::minutes(10)).unwrap();
 
         assert!(result.is_none());
     }
 
     #[test]
     fn escalate_stuck_polling_bios_setup_enters_handle_bios_job_failure_when_stuck() {
-        let host_id =
-            MachineId::from_str("fm100ht7blqjsadm2uuh3qqbf1h7k8pmf47um6v9uckrg7l03po8mhqgvng")
-                .unwrap();
-
-        let info = escalate_stuck_polling_bios_setup(0, chrono::Duration::minutes(16), &host_id)
+        let info = escalate_stuck_polling_bios_setup(0, chrono::Duration::minutes(16))
             .unwrap()
             .expect("recovery should be triggered");
         let PollingBiosSetupOutcome::EnterRecovery(info) = info else {
@@ -533,14 +506,9 @@ mod tests {
 
     #[test]
     fn escalate_stuck_polling_bios_setup_respects_shared_retry_budget() {
-        let host_id =
-            MachineId::from_str("fm100ht7blqjsadm2uuh3qqbf1h7k8pmf47um6v9uckrg7l03po8mhqgvng")
-                .unwrap();
-
         let result = escalate_stuck_polling_bios_setup(
             MAX_BIOS_CONFIG_RETRIES,
             chrono::Duration::minutes(20),
-            &host_id,
         )
         .unwrap()
         .expect("expected Failed outcome");
@@ -550,31 +518,21 @@ mod tests {
 
     #[test]
     fn try_bios_recovery_attempt_fails_when_budget_exhausted() {
-        let host_id =
-            MachineId::from_str("fm100ht7blqjsadm2uuh3qqbf1h7k8pmf47um6v9uckrg7l03po8mhqgvng")
-                .unwrap();
-
         let result = try_bios_recovery_attempt(
             MAX_BIOS_CONFIG_RETRIES,
             Some("job-1".to_string()),
             "job failed".to_string(),
-            &host_id,
         )
         .unwrap();
 
-        assert!(matches!(result, BiosConfigJobAdvanceOutcome::Failed { .. }));
+        assert!(matches!(result, BiosRecoveryAttemptOutcome::Failed { .. }));
     }
 
     #[test]
     fn escalate_stuck_polling_bios_setup_allows_last_budgeted_attempt() {
-        let host_id =
-            MachineId::from_str("fm100ht7blqjsadm2uuh3qqbf1h7k8pmf47um6v9uckrg7l03po8mhqgvng")
-                .unwrap();
-
         let outcome = escalate_stuck_polling_bios_setup(
             MAX_BIOS_CONFIG_RETRIES - 1,
             chrono::Duration::minutes(20),
-            &host_id,
         )
         .unwrap()
         .expect("last budgeted recovery should be allowed");
