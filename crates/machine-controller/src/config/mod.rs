@@ -16,15 +16,18 @@
  */
 
 use model::machine::HostHealthConfig;
+use serde::{Deserialize, Serialize};
 
 pub mod bom_validation;
 pub mod controller;
 pub mod firmware_global;
+pub mod machine_validation;
 pub mod power_manager;
 
 pub use bom_validation::BomValidationConfig;
 pub use controller::MachineStateControllerConfig;
 pub use firmware_global::FirmwareGlobal;
+pub use machine_validation::MachineValidationConfig;
 pub use power_manager::PowerManagerOptions;
 
 pub struct MachineStateHandlerSiteConfig {
@@ -42,4 +45,13 @@ pub struct MachineStateHandlerSiteConfig {
 
     pub dpu_enable_secure_boot: bool,
     pub allow_zero_dpu_hosts: bool,
+}
+
+/// A UTC time window defined by a start and end timestamp.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct TimePeriod {
+    /// Start of the time window (UTC).
+    pub start: chrono::DateTime<chrono::Utc>,
+    /// End of the time window (UTC).
+    pub end: chrono::DateTime<chrono::Utc>,
 }

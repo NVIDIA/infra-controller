@@ -32,8 +32,8 @@ use super::{
     ReachabilityParams, RebootStatus, call_machine_setup_and_handle_no_dpu_error,
     handler_host_power_control, trigger_reboot_if_needed,
 };
-use crate::state_controller::machine::config::MachineStateControllerConfig;
-use crate::state_controller::machine::context::MachineStateHandlerContextObjects;
+use crate::config::MachineStateControllerConfig;
+use crate::context::MachineStateHandlerContextObjects;
 
 /// Outcome of configure_host_bios function.
 pub(super) enum BiosConfigOutcome {

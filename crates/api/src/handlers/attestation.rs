@@ -16,6 +16,7 @@
  */
 use ::rpc::common::MachineIdList;
 use ::rpc::forge::{self as rpc};
+use carbide_machine_controller::handler::attestation::trigger_attestation;
 use carbide_uuid::machine::MachineId;
 use db::ObjectFilter;
 use model::machine::machine_search_config::MachineSearchConfig;
@@ -24,7 +25,6 @@ use tonic::{Request, Response, Status};
 
 use crate::CarbideError;
 use crate::api::{Api, log_machine_id, log_request_data};
-use crate::state_controller::machine::handler::attestation::trigger_attestation;
 
 pub(crate) async fn trigger_machine_attestation(
     api: &Api,

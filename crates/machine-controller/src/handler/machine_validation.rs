@@ -25,12 +25,8 @@ use state_controller::state_handler::{
 };
 
 use super::{HostHandlerParams, is_machine_validation_requested, machine_validation_completed};
-use crate::state_controller::machine::context::{
-    MachineStateHandlerContextObjects, MachineStateHandlerServices,
-};
-use crate::state_controller::machine::handler::{
-    handler_host_power_control, rebooted, trigger_reboot_if_needed,
-};
+use crate::context::{MachineStateHandlerContextObjects, MachineStateHandlerServices};
+use crate::handler::{handler_host_power_control, rebooted, trigger_reboot_if_needed};
 
 pub(crate) async fn handle_machine_validation_state(
     ctx: &mut StateHandlerContext<'_, MachineStateHandlerContextObjects>,

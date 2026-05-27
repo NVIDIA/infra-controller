@@ -19,11 +19,11 @@
 
 use std::collections::{HashMap, HashSet};
 
-use ::carbide_utils::metrics::SharedMetricsHolder;
 use carbide_health_metrics::{
     HealthIterationMetrics, HealthMetricDimension, HealthObjectMetrics,
     register_alerts_suppressed_gauge, register_health_gauges,
 };
+use carbide_utils::metrics::SharedMetricsHolder;
 use model::hardware_info::MachineInventorySoftwareComponent;
 use model::tenant::TenantOrganizationId;
 use opentelemetry::KeyValue;

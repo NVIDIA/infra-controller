@@ -32,8 +32,8 @@ use model::machine::{
 use sqlx::PgConnection;
 use state_controller::io::StateControllerIO;
 
-use crate::state_controller::machine::context::MachineStateHandlerContextObjects;
-use crate::state_controller::machine::metrics::MachineMetricsEmitter;
+use crate::context::MachineStateHandlerContextObjects;
+use crate::metrics::MachineMetricsEmitter;
 
 /// State Controller IO implementation for Machines
 #[derive(Default, Debug)]

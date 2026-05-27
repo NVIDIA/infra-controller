@@ -38,7 +38,7 @@ use state_controller::state_handler::{
     StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
 
-use crate::state_controller::machine::context::MachineStateHandlerContextObjects;
+use crate::context::MachineStateHandlerContextObjects;
 
 pub async fn trigger_attestation(
     db_pool: &PgPool,

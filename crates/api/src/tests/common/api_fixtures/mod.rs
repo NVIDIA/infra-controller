@@ -33,6 +33,16 @@ use carbide_ib_partition_controller::context::IBPartitionStateHandlerServices;
 use carbide_ib_partition_controller::handler::IBPartitionStateHandler;
 use carbide_ib_partition_controller::io::IBPartitionStateControllerIO;
 use carbide_ipmi::IPMITool;
+use carbide_machine_controller::config::{
+    BomValidationConfig, FirmwareGlobal, MachineStateControllerConfig, MachineValidationConfig,
+    PowerManagerOptions,
+};
+use carbide_machine_controller::context::MachineStateHandlerServices;
+use carbide_machine_controller::dpf::DpfOperations;
+use carbide_machine_controller::handler::{
+    MachineStateHandler, MachineStateHandlerBuilder, PowerOptionConfig, ReachabilityParams,
+};
+use carbide_machine_controller::io::MachineStateControllerIO;
 use carbide_network_segment_controller::context::NetworkSegmentStateHandlerServices;
 use carbide_network_segment_controller::handler::NetworkSegmentStateHandler;
 use carbide_network_segment_controller::io::NetworkSegmentStateControllerIO;
@@ -124,11 +134,10 @@ use crate::api::metrics::ApiMetricsEmitter;
 use crate::cfg::file::{
     CarbideConfig, ComputeAllocationEnforcement, DpaConfig, DpaInterfaceStateControllerConfig,
     DpuConfig as InitialDpuConfig, FnnConfig, IbPartitionStateControllerConfig, ListenMode,
-    MachineUpdater, MachineValidationConfig, MeasuredBootMetricsCollectorConfig, MqttAuthConfig,
-    NetworkSecurityGroupConfig, NetworkSegmentStateControllerConfig,
-    PowerShelfStateControllerConfig, RackStateControllerConfig, SpdmConfig,
-    SpdmStateControllerConfig, SwitchStateControllerConfig, VmaasConfig, VpcPeeringPolicy,
-    default_max_find_by_ids,
+    MachineUpdater, MeasuredBootMetricsCollectorConfig, MqttAuthConfig, NetworkSecurityGroupConfig,
+    NetworkSegmentStateControllerConfig, PowerShelfStateControllerConfig,
+    RackStateControllerConfig, SpdmConfig, SpdmStateControllerConfig, SwitchStateControllerConfig,
+    VmaasConfig, VpcPeeringPolicy, default_max_find_by_ids,
 };
 use crate::ethernet_virtualization::{EthVirtData, SiteFabricPrefixList};
 use crate::logging::level_filter::ActiveLevel;
@@ -136,15 +145,6 @@ use crate::logging::log_limiter::LogLimiter;
 use crate::measured_boot::convert_vec;
 use crate::scout_stream;
 use crate::state_controller::common_services::CommonStateHandlerServices;
-use crate::state_controller::machine::config::{
-    BomValidationConfig, FirmwareGlobal, MachineStateControllerConfig, PowerManagerOptions,
-};
-use crate::state_controller::machine::context::MachineStateHandlerServices;
-use crate::state_controller::machine::dpf::DpfOperations;
-use crate::state_controller::machine::handler::{
-    MachineStateHandler, MachineStateHandlerBuilder, PowerOptionConfig, ReachabilityParams,
-};
-use crate::state_controller::machine::io::MachineStateControllerIO;
 use crate::tests::common::api_fixtures::endpoint_explorer::MockEndpointExplorer;
 use crate::tests::common::api_fixtures::managed_host::ManagedHostConfig;
 use crate::tests::common::api_fixtures::network_segment::{

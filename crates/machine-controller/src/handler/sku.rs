@@ -27,10 +27,8 @@ use state_controller::state_handler::{
     StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
 
-use crate::state_controller::machine::context::{
-    MachineStateHandlerContextObjects, MachineStateHandlerServices,
-};
-use crate::state_controller::machine::handler::{
+use crate::context::{MachineStateHandlerContextObjects, MachineStateHandlerServices};
+use crate::handler::{
     HostHandlerParams, discovered_after_state_transition, trigger_reboot_if_needed,
 };
 

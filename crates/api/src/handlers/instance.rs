@@ -1637,7 +1637,7 @@ pub async fn force_delete_instance(
         id: instance.machine_id.to_string(),
     })?;
 
-    crate::state_controller::machine::handler::release_vpc_dpu_loopback(
+    carbide_machine_controller::handler::release_vpc_dpu_loopback(
         &snapshot,
         Some(api.common_pools.as_ref()),
         &mut txn,

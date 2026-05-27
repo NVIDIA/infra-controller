@@ -139,7 +139,7 @@ where
     Ok((machine_state, ek_cert_verification_status))
 }
 
-pub(crate) async fn handle_measuring_state<DB>(
+pub async fn handle_measuring_state<DB>(
     measuring_state: &MeasuringState,
     machine_id: &MachineId,
     db: &mut DB,

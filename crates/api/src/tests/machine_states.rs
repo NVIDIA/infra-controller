@@ -20,6 +20,9 @@ use std::sync::atomic::AtomicBool;
 
 use ::rpc::measured_boot::FromGrpc;
 use base64::prelude::*;
+use carbide_machine_controller::context::MachineStateHandlerContextObjects;
+use carbide_machine_controller::handler::{MachineStateHandlerBuilder, handler_host_power_control};
+use carbide_machine_controller::metrics::MachineMetrics;
 use carbide_redfish::libredfish::test_support::RedfishSimAction;
 use carbide_uuid::machine::MachineId;
 use carbide_uuid::machine_validation::MachineValidationId;
@@ -65,11 +68,6 @@ use tonic::{Code, Request};
 
 use crate::handlers::measured_boot::rpc_forge::MachineDiscoveryInfo;
 use crate::measured_boot::convert_vec;
-use crate::state_controller::machine::context::MachineStateHandlerContextObjects;
-use crate::state_controller::machine::handler::{
-    MachineStateHandlerBuilder, handler_host_power_control,
-};
-use crate::state_controller::machine::metrics::MachineMetrics;
 use crate::tests::common;
 use crate::tests::common::api_fixtures::dpu::{
     TEST_DOCA_HBN_VERSION, TEST_DOCA_TELEMETRY_VERSION, TEST_DPU_AGENT_VERSION,

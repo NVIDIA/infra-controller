@@ -94,21 +94,18 @@ use tokio::sync::Semaphore;
 use tracing::instrument;
 use version_compare::Cmp;
 
-use crate::cfg::file::{MachineValidationConfig, TimePeriod};
-use crate::state_controller::machine::config::{FirmwareGlobal, MachineStateHandlerSiteConfig};
-use crate::state_controller::machine::context::{
-    MachineStateHandlerContextObjects, MachineStateHandlerServices,
+use crate::config::{
+    FirmwareGlobal, MachineStateHandlerSiteConfig, MachineValidationConfig, TimePeriod,
 };
-use crate::state_controller::machine::dpf::DpfOperations;
-use crate::state_controller::machine::health_report::{
+use crate::context::{MachineStateHandlerContextObjects, MachineStateHandlerServices};
+use crate::dpf::DpfOperations;
+use crate::health_report::{
     create_host_update_health_report_dpufw, create_host_update_health_report_hostfw,
 };
-use crate::state_controller::machine::redfish::{
+use crate::redfish::{
     did_dpu_finish_booting, host_power_control, host_power_control_with_location,
 };
-use crate::state_controller::machine::{
-    MeasuringOutcome, get_measuring_prerequisites, handle_measuring_state,
-};
+use crate::{MeasuringOutcome, get_measuring_prerequisites, handle_measuring_state};
 
 pub mod attestation;
 mod bios_config;
@@ -129,8 +126,8 @@ use helpers::{
 use rpc::forge_agent_control_response::FileArtifact;
 use state_controller::db_write_batch::DbWriteBatch;
 
-use crate::state_controller::machine::config::{BomValidationConfig, PowerManagerOptions};
-use crate::state_controller::machine::write_ops::MachineWriteOp;
+use crate::config::{BomValidationConfig, PowerManagerOptions};
+use crate::write_ops::MachineWriteOp;
 
 // We can't use http::StatusCode because libredfish has a newer version
 const NOT_FOUND: u16 = 404;
@@ -295,7 +292,7 @@ impl MachineStateHandlerBuilder {
         self
     }
 
-    #[cfg(test)] // currently only used in tests
+    #[cfg(feature = "test-support")]
     pub fn dpu_nic_firmware_initial_update_enabled(
         mut self,
         dpu_nic_firmware_initial_update_enabled: bool,
@@ -313,7 +310,7 @@ impl MachineStateHandlerBuilder {
         self
     }
 
-    #[cfg(test)] // currently only used in tests
+    #[cfg(feature = "test-support")]
     pub fn reachability_params(mut self, reachability_params: ReachabilityParams) -> Self {
         self.reachability_params = reachability_params;
         self
@@ -9531,7 +9528,7 @@ fn can_restart_reprovision(dpu_snapshots: &[Machine], version: ConfigVersion) ->
 /// TODO(ken): This is a temporary workaround for work-in-progress on zero-DPU support (August 2024)
 /// The way we should do this going forward is to plumb the actual non-DPU MAC address we want to
 /// boot from, instead of special-casing NoDpu errors.
-pub(super) async fn call_machine_setup_and_handle_no_dpu_error(
+pub async fn call_machine_setup_and_handle_no_dpu_error(
     redfish_client: &dyn Redfish,
     boot_interface_mac: Option<&str>,
     expected_dpu_count: usize,
@@ -10654,70 +10651,6 @@ mod tests {
             .expect("stale CX7 inventory should require upgrade");
 
         assert_eq!(to_install.version, target_version);
-    }
-
-    /// Verify that `oem_manager_profiles` from the site config is forwarded to `machine_setup`.
-    ///
-    /// This test catches regressions where the argument gets dropped or replaced with an empty map.
-    #[tokio::test]
-    async fn test_oem_manager_profiles_passed_to_machine_setup() {
-        use carbide_redfish::libredfish::RedfishClientPool;
-        use carbide_redfish::libredfish::test_support::{RedfishSim, RedfishSimAction};
-        use libredfish::BiosProfileType;
-        use libredfish::model::service_root::RedfishVendor;
-
-        let mut config = crate::tests::common::api_fixtures::get_config();
-        // Build an oem_manager_profiles map with a Dell R760 PSU Hot Spare setting.
-        // This mirrors the fix for the Dell R760 PSU fan issue (nvbugs-5834644).
-        config.oem_manager_profiles = HashMap::from([(
-            RedfishVendor::Dell,
-            HashMap::from([(
-                "r760".to_string(),
-                HashMap::from([(
-                    BiosProfileType::Performance,
-                    HashMap::from([(
-                        "ServerPwr.1.PSRapidOn".to_string(),
-                        serde_json::Value::String("Disabled".to_string()),
-                    )]),
-                )]),
-            )]),
-        )]);
-
-        use carbide_redfish::libredfish::RedfishAuth;
-        use forge_secrets::credentials::{CredentialKey, CredentialType};
-
-        let sim = RedfishSim::default();
-        let timepoint = sim.timepoint();
-        let client = sim
-            .create_client(
-                "test-host",
-                None,
-                RedfishAuth::Key(CredentialKey::HostRedfish {
-                    credential_type: CredentialType::SiteDefault,
-                }),
-                None,
-            )
-            .await
-            .unwrap();
-
-        let result = call_machine_setup_and_handle_no_dpu_error(
-            client.as_ref(),
-            None,
-            1,
-            &config.machine_state_handler_site_config(),
-        )
-        .await;
-
-        assert!(result.is_ok());
-
-        let actions = sim.actions_since(&timepoint).all_hosts();
-        assert_eq!(actions.len(), 1);
-        assert_eq!(
-            actions[0],
-            RedfishSimAction::MachineSetup {
-                oem_manager_profiles: config.oem_manager_profiles,
-            }
-        );
     }
 
     #[test]
