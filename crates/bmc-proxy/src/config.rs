@@ -1,3 +1,20 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::str::FromStr;
@@ -7,6 +24,7 @@ use carbide_utils::HostPortPair;
 use figment::Figment;
 use figment::providers::{Env, Format, Toml};
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 use crate::acl::AclConfig;
 
@@ -16,8 +34,6 @@ pub enum ConfigError {
     Read(String),
     #[error(transparent)]
     Figment(Box<figment::Error>),
-    #[error("Invalid database url: {0}")]
-    DatabaseUrl(String),
 }
 
 impl From<figment::Error> for ConfigError {
@@ -30,15 +46,14 @@ impl From<figment::Error> for ConfigError {
 pub struct Config {
     #[serde(default = "Defaults::listen")]
     pub listen: SocketAddr,
-    pub database_url: String,
-    #[serde(default = "Defaults::max_database_connections")]
-    pub max_database_connections: u32,
     #[serde(default = "Defaults::metrics_endpoint")]
     pub metrics_endpoint: SocketAddr,
     #[serde(default)]
     pub allowed_principals: HashSet<String>,
     pub tls: TlsConfig,
     pub auth: AuthConfig,
+    #[serde(default)]
+    pub carbide_api: CarbideApiConfig,
     pub bmc_proxy: Option<HostPortPair>,
 }
 
@@ -47,10 +62,6 @@ struct Defaults;
 impl Defaults {
     fn listen() -> SocketAddr {
         SocketAddr::from_str("[::]:1079").expect("BUG: default listen endpoint doesn't parse")
-    }
-
-    fn max_database_connections() -> u32 {
-        16
     }
 
     fn metrics_endpoint() -> SocketAddr {
@@ -86,6 +97,25 @@ impl Default for TlsConfig {
             root_cafile_path: "/var/run/secrets/spiffe.io/ca.crt".to_string(),
             admin_root_cafile_path: "/etc/forge/carbide-bmc-proxy/site/admin_root_cert_pem"
                 .to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct CarbideApiConfig {
+    pub root_ca: String,
+    pub client_cert: String,
+    pub client_key: String,
+    pub api_url: Url,
+}
+
+impl Default for CarbideApiConfig {
+    fn default() -> Self {
+        Self {
+            root_ca: "/var/run/secrets/spiffe.io/ca.crt".to_string(),
+            client_cert: "/var/run/secrets/spiffe.io/tls.crt".to_string(),
+            client_key: "/var/run/secrets/spiffe.io/tls.key".to_string(),
+            api_url: Url::parse("https://carbide-api.forge-system.svc.cluster.local:1079").unwrap(),
         }
     }
 }

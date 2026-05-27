@@ -18,9 +18,9 @@
 use ::db::{ObjectColumnFilter, vpc_prefix as db};
 use ::rpc::forge as rpc;
 use ::rpc::forge::PrefixMatchType;
-use carbide_network::virtualization::VpcVirtualizationType;
 use ipnetwork::IpNetwork;
 use model::network_prefix::NetworkPrefix;
+use model::vpc::VpcVirtualizationTypeCapabilities;
 use model::vpc_prefix;
 use tonic::{Request, Response, Status};
 
@@ -63,23 +63,22 @@ pub async fn create(
 
     let mut txn = api.txn_begin().await?;
 
-    // IPv6 VPC prefixes are only supported for FNN VPCs.
+    let vpcs = ::db::vpc::find_by(
+        &mut txn,
+        ObjectColumnFilter::One(::db::vpc::IdColumn, &new_prefix.vpc_id),
+    )
+    .await?;
+    let vpc = vpcs.first().ok_or_else(|| CarbideError::NotFoundError {
+        kind: "vpc",
+        id: new_prefix.vpc_id.to_string(),
+    })?;
+
     if new_prefix.config.prefix.is_ipv6() {
-        let vpcs = ::db::vpc::find_by(
-            &mut txn,
-            ObjectColumnFilter::One(::db::vpc::IdColumn, &new_prefix.vpc_id),
-        )
-        .await?;
-        let vpc = vpcs.first().ok_or_else(|| {
-            CarbideError::internal(format!("VPC ID: {} not found", new_prefix.vpc_id))
-        })?;
-        if vpc.network_virtualization_type != VpcVirtualizationType::Fnn {
-            return Err(CarbideError::InvalidArgument(
-                "IPv6 VPC prefixes are only supported for FNN VPCs".to_string(),
-            )
-            .into());
-        }
+        vpc.network_virtualization_type
+            .ensure_supports_ipv6_prefix()
+            .map_err(CarbideError::from)?;
     }
+    let expected_vpc_version = vpc.version;
 
     let conflicting_vpc_prefixes = db::probe(new_prefix.config.prefix, &mut txn).await?;
     if !conflicting_vpc_prefixes.is_empty() {
@@ -164,7 +163,7 @@ pub async fn create(
         .validate(true)
         .map_err(CarbideError::from)?;
 
-    let vpc_prefix = db::persist(new_prefix, &mut txn).await?;
+    let vpc_prefix = db::persist(new_prefix, expected_vpc_version, &mut txn).await?;
 
     // Associate all of the network segment prefixes with the new VPC prefix.
     for mut segment_prefix in segment_prefixes {
@@ -305,7 +304,29 @@ pub async fn delete(
     // whatever else might be pointing at them. For now we're just relying on
     // the DB constraints and returning whatever error that results in.
 
-    db::delete(&delete_prefix, &mut txn).await?;
+    let vpc_prefixes = db::get_by_id(
+        &mut txn,
+        ObjectColumnFilter::One(db::IdColumn, &delete_prefix.id),
+    )
+    .await?;
+    let vpc_prefix = vpc_prefixes
+        .first()
+        .ok_or_else(|| CarbideError::NotFoundError {
+            kind: "vpc_prefix",
+            id: delete_prefix.id.to_string(),
+        })?;
+
+    let vpcs = ::db::vpc::find_by(
+        &mut txn,
+        ObjectColumnFilter::One(::db::vpc::IdColumn, &vpc_prefix.vpc_id),
+    )
+    .await?;
+    let vpc = vpcs.first().ok_or_else(|| CarbideError::NotFoundError {
+        kind: "vpc",
+        id: vpc_prefix.vpc_id.to_string(),
+    })?;
+
+    db::delete(&delete_prefix, vpc.version, &mut txn).await?;
 
     txn.commit().await?;
 

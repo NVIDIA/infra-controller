@@ -24,7 +24,8 @@ use db::{self, expected_machine, machine_interface};
 use mac_address::MacAddress;
 use model::dpa_interface::DpaInterface;
 use model::expected_machine::ExpectedHostNic;
-use model::network_segment::AllocationStrategy;
+use model::machine_interface::InterfaceType;
+use model::network_segment::{AllocationStrategy, NetworkSegmentSearchConfig, NetworkSegmentType};
 use sqlx::PgConnection;
 use tonic::{Request, Response};
 
@@ -164,7 +165,6 @@ async fn handle_dhcp_from_dpa(
 pub async fn discover_dhcp(
     api: &Api,
     request: Request<rpc::DhcpDiscovery>,
-    rack_level_service: Option<bool>,
 ) -> Result<Response<rpc::DhcpRecord>, CarbideError> {
     let mut txn = api.txn_begin().await?;
 
@@ -230,34 +230,87 @@ pub async fn discover_dhcp(
                         return Ok(resp);
                     }
 
-                    if let Some(x) = rack_level_service {
-                        // check expected machines. all mac addresses we should respond to should be
-                        // added in there for unknown machines that have not been discovered yet.
-                        // TODO: fix for dpu with VF nics, they will currently not get IPs
-                        if x {
-                            let expected_machine =
-                                expected_machine::find_by_host_mac_address(&mut txn, parsed_mac)
-                                    .await
-                                    .map_err(CarbideError::from)?;
-                            if let Some(m) = expected_machine {
-                                // select ip segment from Underlay for BMC, Admin for BF3/Onboard
-                                for nic in &m.data.host_nics {
-                                    if nic.mac_address == parsed_mac {
-                                        host_nic = Some(nic.clone());
-                                    }
-                                }
-                                // If any NIC on this host declares primary=true,
-                                // then this NIC is primary iff it's that one.
-                                // Handler-side validation keeps at most one
-                                // primary=true per ExpectedMachine.
-                                if let Some(declared_primary) =
-                                    m.data.host_nics.iter().find(|n| n.primary == Some(true))
-                                {
-                                    is_primary_nic =
-                                        Some(declared_primary.mac_address == parsed_mac);
-                                }
+                    // Now lets check expected machine data to see if there's any
+                    // useful configuration we need to address, such as primary NIC
+                    // assignment and/or static DHCP reservation allocations.
+                    //
+                    // For static DHCP reservations, we do this here for the simple
+                    // reason that it's a good place to put it. If an operator force
+                    // deletes a machine and its interfaces, how would we put them
+                    // back? The answer is the same way they would be put back in a
+                    // dynamic allocation -- during DHCPDISCOVER/DHCPREQUEST. We see
+                    // that a static DHCP reservation is configured per expected
+                    // machine data, so we make an idempotent call to ensure that
+                    // allocation exists, and if not, is created.
+                    if let Some(m) =
+                        expected_machine::find_by_host_mac_address(&mut txn, parsed_mac)
+                            .await
+                            .map_err(CarbideError::from)?
+                    {
+                        // Walk the host_nics list to see if there's a matching NIC (because it
+                        // may have a static reservation need or a primary-interface need)
+                        let mut declared_primary_mac: Option<MacAddress> = None;
+                        for nic in &m.data.host_nics {
+                            if nic.primary == Some(true) {
+                                declared_primary_mac = Some(nic.mac_address);
+                            }
+                            if nic.mac_address == parsed_mac {
+                                host_nic = Some(nic.clone());
                             }
                         }
+                        if let Some(pmac) = declared_primary_mac {
+                            is_primary_nic = Some(pmac == parsed_mac);
+                        }
+                        if let Some(ref nic) = host_nic
+                            && let Some(fixed_ip_str) = &nic.fixed_ip
+                        {
+                            let fixed_ip: IpAddr = fixed_ip_str.parse().map_err(|_| {
+                            CarbideError::InvalidArgument(format!(
+                                "invalid fixed_ip on ExpectedHostNic {parsed_mac}: {fixed_ip_str}"
+                            ))
+                        })?;
+                            // It looks like there's a DHCP reservation for this address,
+                            // so make an idempotent call to ensure we have a preallocated
+                            // machine interface (and machine interface address) for it,
+                            // creating one if needed.
+                            db::machine_interface::preallocate_machine_interface(
+                                &mut txn, parsed_mac, fixed_ip,
+                            )
+                            .await?;
+                        }
+                    } else if let Some(m) =
+                        expected_machine::find_by_bmc_mac_address(&mut txn, parsed_mac)
+                            .await
+                            .map_err(CarbideError::from)?
+                        && let Some(bmc_ip) = m.data.bmc_ip_address
+                    {
+                        // In this case it looks like our parsed MAC address is for the BMC
+                        // of an expected machine, and it has a static DHCP reservation per
+                        // its bmc_ip_address, so again, ensure the machine interface is
+                        // allocated before continuing. BMC variant so the row carries
+                        // InterfaceType::Bmc (and primary=false). Races against
+                        // site-explorer's reconciliation pass are handled inside preallocate.
+                        db::machine_interface::preallocate_bmc_machine_interface(
+                            &mut txn, parsed_mac, bmc_ip,
+                        )
+                        .await?;
+                    } else if let Some(s) =
+                        db::expected_switch::find_by_nvos_mac_address(&mut txn, parsed_mac)
+                            .await
+                            .map_err(CarbideError::from)?
+                        && let Some(nvos_ip) = s.nvos_ip_address
+                    {
+                        // The parsed MAC matches the single wired NVOS port of an expected
+                        // switch with a configured static IP. Mirrors the ExpectedHostNic
+                        // fixed_ip path: ensure the (mac, nvos_ip) row exists so the static
+                        // reservation gets served by the find_or_create_machine_interface
+                        // step below. Data variant (NVOS is a data interface, not a BMC).
+                        // Races against site-explorer's reconciliation pass are handled
+                        // inside preallocate.
+                        db::machine_interface::preallocate_machine_interface(
+                            &mut txn, parsed_mac, nvos_ip,
+                        )
+                        .await?;
                     }
                     None
                 }
@@ -268,11 +321,38 @@ pub async fn discover_dhcp(
         &mut txn,
         existing_machine_id,
         parsed_mac,
-        parsed_relay,
+        std::slice::from_ref(&parsed_relay),
         host_nic,
         is_primary_nic,
     )
     .await?;
+
+    // Use the interface's actual segment, not only relay context, so
+    // dormant admin interfaces cannot keep serving stale DHCP leases.
+    let segment = db::network_segment::find_by(
+        &mut txn,
+        db::ObjectColumnFilter::One(db::network_segment::IdColumn, &machine_interface.segment_id),
+        NetworkSegmentSearchConfig::default(),
+    )
+    .await?
+    .pop()
+    .ok_or_else(|| CarbideError::NotFoundError {
+        kind: "network_segment",
+        id: machine_interface.segment_id.to_string(),
+    })?;
+    // Only DPU-backed host admin links are dormant when non-primary. Other non-primary admin
+    // interfaces can be valid operator-declared host NICs and must still be allowed to DHCP.
+    let is_dpu_backed_host_admin_interface = machine_interface.attached_dpu_machine_id.is_some()
+        && machine_interface.attached_dpu_machine_id != machine_interface.machine_id;
+    if is_dpu_backed_host_admin_interface
+        && !machine_interface.primary_interface
+        && segment.config.segment_type == NetworkSegmentType::Admin
+    {
+        return Err(CarbideError::FailedPrecondition(format!(
+            "DHCP request received on dormant non-primary admin interface {}. Ignoring.",
+            machine_interface.id
+        )));
+    }
 
     // If the interface has no address for the requested address family
     // (e.g., after a lease expiration cleaned up the DHCP allocation,
@@ -291,20 +371,12 @@ pub async fn discover_dhcp(
             ?address_family,
             "Interface missing address for family, re-allocating from segment"
         );
-        let segment = db::network_segment::for_relay(&mut txn, parsed_relay)
-            .await?
-            .ok_or_else(|| {
-                CarbideError::internal(format!(
-                    "No network segment defined for relay address: {parsed_relay}"
-                ))
-            })?;
-
         // If the segment only allows static reservations, don't
         // dynamically allocate. The device has no reservation.
-        if segment.allocation_strategy == AllocationStrategy::Reserved {
+        if segment.config.allocation_strategy == AllocationStrategy::Reserved {
             return Err(CarbideError::internal(format!(
                 "segment {} configured for static DHCP leases only; no static reservation for MAC {parsed_mac}",
-                segment.name,
+                segment.config.name,
             )));
         }
 
@@ -317,7 +389,8 @@ pub async fn discover_dhcp(
         .await?;
     }
 
-    if let Some(machine_id) = machine_interface.machine_id
+    if machine_interface.interface_type != InterfaceType::Bmc
+        && let Some(machine_id) = machine_interface.machine_id
         && machine_id.machine_type().is_host()
         && let Some(instance_id) =
             db::instance::find_id_by_machine_id(&mut txn, &machine_id).await?

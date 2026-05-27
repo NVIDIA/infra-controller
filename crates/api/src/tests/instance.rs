@@ -14,17 +14,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr};
+use std::collections::{HashMap, HashSet};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::ops::DerefMut;
 use std::str::FromStr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
 
 use ::rpc::forge::forge_server::Forge;
 use carbide_uuid::instance::InstanceId;
 use carbide_uuid::machine::MachineId;
+use carbide_uuid::machine_validation::MachineValidationId;
 use carbide_uuid::network::NetworkSegmentId;
-use carbide_uuid::vpc::VpcPrefixId;
+use carbide_uuid::vpc::{VpcId, VpcPrefixId};
 use chrono::Utc;
 use common::api_fixtures::instance::{
     advance_created_instance_into_ready_state, default_os_config, default_tenant_config,
@@ -44,7 +47,7 @@ use db::instance_address::UsedOverlayNetworkIpResolver;
 use db::ip_allocator::UsedIpResolver;
 use db::network_segment::IdColumn;
 use db::{self, ObjectColumnFilter};
-use ipnetwork::{IpNetwork, Ipv4Network};
+use ipnetwork::{IpNetwork, Ipv4Network, Ipv6Network};
 use itertools::Itertools;
 use mac_address::MacAddress;
 use model::dpu_machine_update::DpuMachineUpdate;
@@ -58,8 +61,9 @@ use model::instance::status::network::{
     InstanceInterfaceStatusObservation, InstanceNetworkStatusObservation,
 };
 use model::machine::{
-    CleanupState, FailureDetails, InstanceState, MachineState, MachineValidatingState,
-    ManagedHostState, MeasuringState, NetworkConfigUpdateState, ValidationState,
+    AttestationMode, CleanupContext, CleanupState, FailureDetails, InstanceState, MachineState,
+    MachineValidatingState, ManagedHostState, MeasuringState, NetworkConfigUpdateState,
+    SpdmMeasuringState, ValidationState,
 };
 use model::metadata::Metadata;
 use model::network_security_group::NetworkSecurityGroupStatusObservation;
@@ -81,9 +85,12 @@ use crate::tests::common;
 use crate::tests::common::api_fixtures::instance::{
     advance_created_instance_into_state, single_interface_network_config_with_vfs,
 };
+use crate::tests::common::api_fixtures::rpc_instance::RpcInstance;
 use crate::tests::common::api_fixtures::{
-    TestEnv, create_managed_host_multi_dpu, create_managed_host_with_ek, update_time_params,
+    TestEnv, create_managed_host_multi_dpu, create_managed_host_with_ek,
+    remove_health_report_entry, send_health_report_entry, update_time_params,
 };
+use crate::tests::common::attestation::spdm_attestation_run_to_failed_then_to_success;
 use crate::tests::common::rpc_builder::{
     InstanceAllocationRequest, InstanceConfig, VpcCreationRequest,
 };
@@ -316,7 +323,16 @@ async fn test_measurement_assigned_ready_to_waiting_for_measurements_to_ca_faile
 
     let mut config = get_config();
     config.attestation_enabled = true;
-    let env = create_test_env_with_overrides(pool, TestEnvOverrides::with_config(config)).await;
+    config.spdm.enabled = true;
+
+    // set the NRAS Verifier Mock Verifier to satisfy requests, but we'll later
+    // flip it to fail them
+    let mut overrides = TestEnvOverrides::with_config(config);
+    let nras_should_fail_parsing_flag = Arc::new(AtomicBool::new(false));
+
+    overrides.nras_should_fail_parsing = Some(nras_should_fail_parsing_flag.clone());
+
+    let env = create_test_env_with_overrides(pool, overrides).await;
     let segment_id = env.create_vpc_and_tenant_segment().await;
     // add CA cert to pass attestation process
     let add_ca_request = tonic::Request::new(TpmCaCert {
@@ -351,16 +367,70 @@ async fn test_measurement_assigned_ready_to_waiting_for_measurements_to_ca_faile
     let device_locator = host_machine
         .get_device_locator_for_dpu_id(&mh.dpu().id)
         .unwrap();
-    let tinstance = mh
-        .instance_builer(&env)
-        .network(interface_network_config_with_devices(
+
+    // send the request to create the instance
+    let instance_config = rpc::InstanceConfig {
+        tenant: Some(default_tenant_config()),
+        os: Some(default_os_config()),
+        network: Some(interface_network_config_with_devices(
             &[segment_id],
             std::slice::from_ref(&device_locator),
-        ))
-        .build()
-        .await;
+        )),
+        infiniband: None,
+        network_security_group_id: None,
+        dpu_extension_services: None,
+        nvlink: None,
+    };
+    let instance_id = env
+        .api
+        .allocate_instance(tonic::Request::new(rpc::InstanceAllocationRequest {
+            instance_id: None,
+            machine_id: Some(mh.host().id),
+            instance_type_id: None,
+            config: Some(instance_config),
+            metadata: None,
+            allow_unhealthy_machine: false,
+        }))
+        .await
+        .expect("Create instance failed.")
+        .into_inner()
+        .id
+        .expect("Missing instance ID");
 
-    let instance = tinstance.rpc_instance().await;
+    // Do SPDM attestation: first to failed, then to success
+    let mut txn = env.db_txn().await;
+    nras_should_fail_parsing_flag.store(true, Ordering::Relaxed);
+
+    spdm_attestation_run_to_failed_then_to_success(
+        &env,
+        nras_should_fail_parsing_flag.clone(),
+        &mh,
+        &mut txn,
+        ManagedHostState::PreAssignedMeasuring {
+            spdm_measuring_state: SpdmMeasuringState::PollResult,
+        },
+    )
+    .await;
+
+    advance_created_instance_into_ready_state(&env, &mh).await;
+
+    // fetch the rpc instance from the db
+    let get_rpc_instance = async || {
+        let mut result = env
+            .api
+            .find_instances_by_ids(tonic::Request::new(rpc::forge::InstancesByIdsRequest {
+                instance_ids: vec![instance_id],
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(result.instances.len(), 1);
+        RpcInstance::new(result.instances.remove(0))
+    };
+
+    let instance = get_rpc_instance().await;
+
+    // ------
 
     assert_eq!(instance.status().tenant(), rpc::forge::TenantState::Ready);
 
@@ -460,7 +530,7 @@ async fn test_measurement_assigned_ready_to_waiting_for_measurements_to_ca_faile
     // from delete_instance()
     env.api
         .release_instance(tonic::Request::new(InstanceReleaseRequest {
-            id: Some(tinstance.id),
+            id: Some(instance_id),
             issue: None,
             is_repair_tenant: None,
         }))
@@ -468,7 +538,7 @@ async fn test_measurement_assigned_ready_to_waiting_for_measurements_to_ca_faile
         .expect("Delete instance failed.");
 
     // The instance should show up immediatly as terminating - even if the state handler didn't yet run
-    let instance = tinstance.rpc_instance().await;
+    let instance = get_rpc_instance().await;
     assert_eq!(instance.status().tenant(), rpc::TenantState::Terminating);
 
     env.run_machine_state_controller_iteration_until_state_matches(
@@ -536,7 +606,9 @@ async fn test_measurement_assigned_ready_to_waiting_for_measurements_to_ca_faile
         &mh.host().id,
         2,
         ManagedHostState::PostAssignedMeasuring {
-            measuring_state: MeasuringState::WaitingForMeasurements,
+            attestation_mode: AttestationMode::MeasuredBoot {
+                measuring_state: MeasuringState::WaitingForMeasurements,
+            },
         },
     )
     .await;
@@ -582,13 +654,32 @@ async fn test_measurement_assigned_ready_to_waiting_for_measurements_to_ca_faile
         .await
         .expect("Failed to add CA cert");
 
+    // perform SPDM attestation, set up the NRAS Verifier Mock
+    // to fail
+    let mut txn = env.db_txn().await;
+    nras_should_fail_parsing_flag.store(true, Ordering::Relaxed);
+
+    spdm_attestation_run_to_failed_then_to_success(
+        &env,
+        nras_should_fail_parsing_flag,
+        &mh,
+        &mut txn,
+        ManagedHostState::PostAssignedMeasuring {
+            attestation_mode: AttestationMode::SpdmAttestation {
+                spdm_measuring_state: SpdmMeasuringState::PollResult,
+            },
+        },
+    )
+    .await;
+
     env.run_machine_state_controller_iteration_until_state_matches(
         &mh.host().id,
-        3,
+        5,
         ManagedHostState::WaitingForCleanup {
             cleanup_state: CleanupState::HostCleanup {
                 boss_controller_id: None,
             },
+            cleanup_context: CleanupContext::Deprovision,
         },
     )
     .await;
@@ -610,7 +701,7 @@ async fn test_measurement_assigned_ready_to_waiting_for_measurements_to_ca_faile
             validation_state: ValidationState::MachineValidation {
                 machine_validation: MachineValidatingState::MachineValidating {
                     context: "Cleanup".to_string(),
-                    id: uuid::Uuid::default(),
+                    id: MachineValidationId::new(),
                     completed: 1,
                     total: 1,
                     is_enabled: true,
@@ -637,10 +728,9 @@ async fn test_measurement_assigned_ready_to_waiting_for_measurements_to_ca_faile
 
     let response = mh.host().forge_agent_control().await;
     let uuid = &response.data.unwrap().pair[1].value;
+    let validation_id: MachineValidationId = uuid.parse().unwrap();
 
-    machine_validation_result.validation_id = Some(rpc::Uuid {
-        value: uuid.to_owned(),
-    });
+    machine_validation_result.validation_id = Some(validation_id);
     persist_machine_validation_result(&env, machine_validation_result.clone()).await;
 
     let mut txn = env.db_txn().await;
@@ -677,7 +767,7 @@ async fn test_measurement_assigned_ready_to_waiting_for_measurements_to_ca_faile
     // end of handle_delete_post_bootingwithdiscoveryimage()
 
     assert!(
-        env.find_instances(vec![tinstance.id])
+        env.find_instances(vec![instance_id])
             .await
             .instances
             .is_empty()
@@ -914,6 +1004,7 @@ async fn test_instance_dns_resolution(_: PgPoolOptions, options: PgConnectOption
                 ipv6_interface_config: None,
             },
         ],
+        auto: false,
     };
 
     // Create instance with hostname
@@ -1709,6 +1800,7 @@ async fn test_instance_address_creation(_: PgPoolOptions, options: PgConnectOpti
                 ipv6_interface_config: None,
             },
         ],
+        auto: false,
     };
 
     let tinstance = mh.instance_builer(&env).network(network).build().await;
@@ -2290,6 +2382,7 @@ async fn test_allocate_network_vpc_prefix_id(_: PgPoolOptions, options: PgConnec
             ip_address: None,
             ipv6_interface_config: None,
         }],
+        auto: false,
     };
 
     let config = rpc::InstanceConfig {
@@ -2455,8 +2548,8 @@ async fn test_allocate_and_release_instance_vpc_prefix_id(
     .unwrap();
     let ns = ns.first().unwrap();
 
-    assert!(ns.vlan_id.is_none());
-    assert!(ns.vni.is_none());
+    assert!(ns.status.vlan_id.is_none());
+    assert!(ns.status.vni.is_none());
 
     let network_config = fetched_instance.config.network.clone();
     assert_eq!(fetched_instance.network_config_version.version_nr(), 1);
@@ -2615,7 +2708,11 @@ async fn test_vpc_prefix_handling(pool: PgPool) {
     let vpc = env
         .api
         .create_vpc(
-            VpcCreationRequest::builder("test vpc 1", "2829bbe3-c169-4cd9-8b2a-19a8b1618a93")
+            VpcCreationRequest::builder("2829bbe3-c169-4cd9-8b2a-19a8b1618a93")
+                .metadata(Metadata {
+                    name: "test vpc 1".to_string(),
+                    ..Default::default()
+                })
                 .tonic_request(),
         )
         .await
@@ -2775,26 +2872,47 @@ async fn test_vpc_prefix_handling(pool: PgPool) {
         .unwrap_err();
 }
 
-async fn create_tenant_overlay_prefix(
+async fn create_tenant_overlay_prefix(env: &TestEnv, vpc_id: VpcId) -> VpcPrefixId {
+    create_tenant_overlay_prefix_with_prefix(
+        env,
+        vpc_id,
+        "vpc prefix 1",
+        IpNetwork::V4(Ipv4Network::new(Ipv4Addr::new(10, 217, 5, 224), 27).unwrap()),
+    )
+    .await
+}
+
+/// Creates a tenant overlay VPC prefix with an explicit CIDR for allocation tests.
+async fn create_tenant_overlay_prefix_with_prefix(
     env: &TestEnv,
-    vpc_id: carbide_uuid::vpc::VpcId,
+    vpc_id: VpcId,
+    name: &str,
+    prefix: IpNetwork,
 ) -> VpcPrefixId {
     let mut txn = env.db_txn().await;
+
+    // Look up the current VPC version so the prefix insert can increment it.
+    let vpcs = db::vpc::find_by(
+        txn.as_mut(),
+        ObjectColumnFilter::One(db::vpc::IdColumn, &vpc_id),
+    )
+    .await
+    .unwrap();
+    let expected_vpc_version = vpcs[0].version;
+
+    // Persist the prefix directly so tests can focus on allocation behavior.
     let vpc_prefix_id = db::vpc_prefix::persist(
         model::vpc_prefix::NewVpcPrefix {
             id: uuid::Uuid::new_v4().into(),
             vpc_id,
-            config: VpcPrefixConfig {
-                prefix: IpNetwork::V4(
-                    Ipv4Network::new(Ipv4Addr::new(10, 217, 5, 224), 27).unwrap(),
-                ),
-            },
+            config: VpcPrefixConfig { prefix },
             metadata: Metadata {
-                name: "vpc prefix 1".to_string(),
+                name: name.to_string(),
                 description: "desc".to_string(),
                 labels: HashMap::new(),
             },
         },
+        expected_vpc_version,
         &mut txn,
     )
     .await
@@ -2802,6 +2920,40 @@ async fn create_tenant_overlay_prefix(
     .id;
     txn.commit().await.unwrap();
     vpc_prefix_id
+}
+
+/// Builds a two-interface physical network config backed by VPC prefixes.
+fn dual_physical_network_config_with_vpc_prefixes(
+    first_prefix_id: VpcPrefixId,
+    second_prefix_id: VpcPrefixId,
+) -> rpc::InstanceNetworkConfig {
+    // Put each PF on a distinct BlueField device instance so validation treats
+    // them as separate physical interfaces.
+    let interfaces = [first_prefix_id, second_prefix_id]
+        .into_iter()
+        .enumerate()
+        .map(
+            |(device_instance, vpc_prefix_id)| rpc::InstanceInterfaceConfig {
+                function_type: rpc::InterfaceFunctionType::Physical as i32,
+                network_segment_id: None,
+                network_details: Some(
+                    rpc::forge::instance_interface_config::NetworkDetails::VpcPrefixId(
+                        vpc_prefix_id,
+                    ),
+                ),
+                device: Some("BlueField SoC".to_string()),
+                device_instance: device_instance as u32,
+                virtual_function_id: None,
+                ip_address: None,
+                ipv6_interface_config: None,
+            },
+        )
+        .collect();
+
+    rpc::InstanceNetworkConfig {
+        interfaces,
+        auto: false,
+    }
 }
 
 #[crate::sqlx_test]
@@ -3183,6 +3335,7 @@ async fn test_network_details_migration(
                                 ip_address: None,
                                 ipv6_interface_config: None,
                             }],
+                            auto: false,
                         })
                         .rpc(),
                 )
@@ -3269,6 +3422,7 @@ async fn test_network_details_migration(
                         device_instance: 0,
                         virtual_function_id: None,
                     }],
+                    auto: false,
                 }),
                 infiniband: None,
                 nvlink: None,
@@ -3309,7 +3463,6 @@ async fn test_network_details_migration(
         .create_vpc_prefix(tonic::Request::new(rpc::forge::VpcPrefixCreationRequest {
             id: None,
             prefix: String::new(),
-            name: String::new(),
             vpc_id: Some(vpc_id),
             config: Some(rpc::forge::VpcPrefixConfig {
                 prefix: ip_prefix.into(),
@@ -3352,6 +3505,7 @@ async fn test_network_details_migration(
                         device_instance: 0,
                         virtual_function_id: None,
                     }],
+                    auto: false,
                 }),
                 infiniband: None,
                 nvlink: None,
@@ -3484,7 +3638,6 @@ async fn test_instance_cannot_allocate_requested_ip_with_network_segment(
                         variant: Some(rpc::forge::instance_operating_system_config::Variant::Ipxe(
                             rpc::forge::InlineIpxe {
                                 ipxe_script: "SomeRandomiPxe1".to_string(),
-                                user_data: Some("SomeRandomData1".to_string()),
                             },
                         )),
                     }),
@@ -3504,6 +3657,7 @@ async fn test_instance_cannot_allocate_requested_ip_with_network_segment(
                             device_instance: 0,
                             virtual_function_id: None,
                         }],
+                        auto: false,
                     }),
                     infiniband: None,
                     network_security_group_id: None,
@@ -3577,6 +3731,7 @@ async fn test_allocate_and_update_network_config_instance(
             device_instance: 0,
             virtual_function_id: None,
         }],
+        auto: false,
     };
 
     // Now update to change network config.
@@ -3709,6 +3864,7 @@ async fn test_allocate_and_update_network_config_instance_add_vf(
                 ipv6_interface_config: None,
             },
         ],
+        auto: false,
     };
 
     // Now update to change network config.
@@ -3799,7 +3955,6 @@ async fn test_update_instance_config_vpc_prefix_network_update_delete_vf(
         variant: Some(rpc::forge::instance_operating_system_config::Variant::Ipxe(
             rpc::forge::InlineIpxe {
                 ipxe_script: "SomeRandomiPxe1".to_string(),
-                user_data: Some("SomeRandomData1".to_string()),
             },
         )),
     };
@@ -3808,7 +3963,6 @@ async fn test_update_instance_config_vpc_prefix_network_update_delete_vf(
     let new_vpc_prefix = rpc::forge::VpcPrefixCreationRequest {
         id: None,
         prefix: String::new(),
-        name: String::new(),
         vpc_id: Some(vpc_id),
         config: Some(rpc::forge::VpcPrefixConfig {
             prefix: ip_prefix.into(),
@@ -3881,6 +4035,7 @@ async fn test_update_instance_config_vpc_prefix_network_update_delete_vf(
                 ipv6_interface_config: None,
             },
         ],
+        auto: false,
     };
 
     let initial_config = rpc::InstanceConfig {
@@ -3973,6 +4128,7 @@ async fn test_update_instance_config_vpc_prefix_network_update_delete_vf(
                 ipv6_interface_config: None,
             },
         ],
+        auto: false,
     };
     let mut updated_config_1 = initial_config.clone();
     updated_config_1.network = Some(network);
@@ -4111,6 +4267,7 @@ async fn test_allocate_and_update_network_config_instance_state_machine(
             ip_address: None,
             ipv6_interface_config: None,
         }],
+        auto: false,
     };
 
     // Now update to change network config.
@@ -4202,7 +4359,6 @@ async fn test_update_instance_config_vpc_prefix_network_update_state_machine(
         variant: Some(rpc::forge::instance_operating_system_config::Variant::Ipxe(
             rpc::forge::InlineIpxe {
                 ipxe_script: "SomeRandomiPxe1".to_string(),
-                user_data: Some("SomeRandomData1".to_string()),
             },
         )),
     };
@@ -4211,7 +4367,6 @@ async fn test_update_instance_config_vpc_prefix_network_update_state_machine(
     let new_vpc_prefix = rpc::forge::VpcPrefixCreationRequest {
         id: None,
         prefix: String::new(),
-        name: String::new(),
         vpc_id: Some(vpc_id),
         config: Some(rpc::forge::VpcPrefixConfig {
             prefix: ip_prefix.into(),
@@ -4246,6 +4401,7 @@ async fn test_update_instance_config_vpc_prefix_network_update_state_machine(
             ip_address: None,
             ipv6_interface_config: None,
         }],
+        auto: false,
     };
 
     let initial_config = rpc::InstanceConfig {
@@ -4307,6 +4463,7 @@ async fn test_update_instance_config_vpc_prefix_network_update_state_machine(
                 ipv6_interface_config: None,
             },
         ],
+        auto: false,
     };
     let mut updated_config_1 = initial_config.clone();
     updated_config_1.network = Some(network);
@@ -4458,6 +4615,7 @@ async fn test_allocate_network_multi_dpu_vpc_prefix_id(
                 ipv6_interface_config: None,
             },
         ],
+        auto: false,
     };
 
     let config = rpc::InstanceConfig {
@@ -4522,6 +4680,542 @@ async fn test_allocate_network_multi_dpu_vpc_prefix_id(
             IpNetwork::V6(_) => panic!("Can not be ipv6."),
         }
     }
+}
+
+#[crate::sqlx_test]
+async fn test_allocate_instance_with_multiple_fnn_vpc_prefixes(
+    _: PgPoolOptions,
+    options: PgConnectOptions,
+) {
+    let pool = PgPoolOptions::new().connect_with(options).await.unwrap();
+    let env = create_test_env(pool).await;
+    let mh = create_managed_host_multi_dpu(&env, 2).await;
+
+    // Create two FNN VPCs and prefixes to exercise cross-VPC allocation.
+    let first_vpc = env
+        .api
+        .create_vpc(
+            VpcCreationRequest::builder("2829bbe3-c169-4cd9-8b2a-19a8b1618a93")
+                .metadata(Metadata {
+                    name: "fnn vpc 1".to_string(),
+                    ..Default::default()
+                })
+                .network_virtualization_type(rpc::forge::VpcVirtualizationType::Fnn as i32)
+                .tonic_request(),
+        )
+        .await
+        .unwrap()
+        .into_inner()
+        .id
+        .unwrap();
+    let second_vpc = env
+        .api
+        .create_vpc(
+            VpcCreationRequest::builder("2829bbe3-c169-4cd9-8b2a-19a8b1618a93")
+                .metadata(Metadata {
+                    name: "fnn vpc 2".to_string(),
+                    ..Default::default()
+                })
+                .network_virtualization_type(rpc::forge::VpcVirtualizationType::Fnn as i32)
+                .tonic_request(),
+        )
+        .await
+        .unwrap()
+        .into_inner()
+        .id
+        .unwrap();
+    let first_prefix_id = create_tenant_overlay_prefix_with_prefix(
+        &env,
+        first_vpc,
+        "fnn vpc prefix 1",
+        IpNetwork::V4(Ipv4Network::new(Ipv4Addr::new(10, 217, 5, 224), 27).unwrap()),
+    )
+    .await;
+    let second_prefix_id = create_tenant_overlay_prefix_with_prefix(
+        &env,
+        second_vpc,
+        "fnn vpc prefix 2",
+        IpNetwork::V4(Ipv4Network::new(Ipv4Addr::new(10, 217, 6, 224), 27).unwrap()),
+    )
+    .await;
+
+    // Allocate an instance whose interfaces draw from both VPC prefixes.
+    let instance = env
+        .api
+        .allocate_instance(
+            InstanceAllocationRequest::builder(false)
+                .machine_id(mh.id)
+                .config(InstanceConfig::default_tenant_and_os().network(
+                    dual_physical_network_config_with_vpc_prefixes(
+                        first_prefix_id,
+                        second_prefix_id,
+                    ),
+                ))
+                .metadata(rpc::Metadata {
+                    name: "multi-fnn-vpc".to_string(),
+                    description: "tests/instance".to_string(),
+                    labels: Vec::new(),
+                })
+                .tonic_request(),
+        )
+        .await
+        .expect("FNN instance allocation across multiple VPCs should succeed")
+        .into_inner();
+
+    // Verify the response resolved both prefix-backed interfaces.
+    let interfaces = &instance
+        .config
+        .as_ref()
+        .unwrap()
+        .network
+        .as_ref()
+        .unwrap()
+        .interfaces;
+    assert_eq!(interfaces.len(), 2);
+    assert!(
+        interfaces
+            .iter()
+            .all(|iface| iface.network_segment_id.is_some())
+    );
+
+    // Fetch through the API to verify the persisted config, not just the create response.
+    let persisted = env.one_instance(instance.id.unwrap()).await;
+    let persisted_interfaces = &persisted.config().network().interfaces;
+    let segment_ids = persisted_interfaces
+        .iter()
+        .map(|iface| iface.network_segment_id.unwrap())
+        .collect_vec();
+    assert_eq!(segment_ids.iter().copied().collect::<HashSet<_>>().len(), 2);
+
+    // Verify the allocated segments are attached to both requested FNN VPCs.
+    let mut txn = env.db_txn().await;
+    let segments = db::network_segment::find_by(
+        txn.as_mut(),
+        ObjectColumnFilter::List(IdColumn, &segment_ids),
+        NetworkSegmentSearchConfig::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        segments
+            .iter()
+            .map(|segment| segment.config.vpc_id.unwrap())
+            .collect::<HashSet<_>>(),
+        HashSet::from([first_vpc, second_vpc])
+    );
+}
+
+#[crate::sqlx_test]
+async fn test_fnn_vrf_loopbacks_are_per_vpc_and_removed_on_network_update(pool: sqlx::PgPool) {
+    let mut overrides = TestEnvOverrides::default().with_fnn_config(None);
+    overrides.fnn_config.as_mut().unwrap().use_vpc_vrf_loopback = true;
+    let env = create_test_env_with_overrides(pool, overrides).await;
+
+    // Create FNN tenants matching the existing peer-VPC fixture organizations.
+    for (organization_id, name) in [
+        (
+            "2829bbe3-c169-4cd9-8b2a-19a8b1618a93",
+            "fnn loopback tenant 1",
+        ),
+        (
+            "e65a9d69-39d2-4872-a53e-e5cb87c84e75",
+            "fnn loopback tenant 2",
+        ),
+    ] {
+        env.api
+            .create_tenant(Request::new(rpc::forge::CreateTenantRequest {
+                organization_id: organization_id.to_string(),
+                routing_profile_type: Some("INTERNAL".to_string()),
+                metadata: Some(rpc::forge::Metadata {
+                    name: name.to_string(),
+                    ..Default::default()
+                }),
+            }))
+            .await
+            .unwrap();
+    }
+
+    // Create two FNN VPCs and allocate one interface on each VPC.
+    let (first_vpc, _, first_segment_id, second_vpc, _, second_segment_id) = env
+        .create_vpc_and_peer_vpc_with_tenant_segments(
+            rpc::forge::VpcVirtualizationType::Fnn,
+            rpc::forge::VpcVirtualizationType::Fnn,
+        )
+        .await;
+    let first_vpc = first_vpc.expect("first VPC should be present");
+    let second_vpc = second_vpc.expect("second VPC should be present");
+    let mh = create_managed_host_multi_dpu(&env, 2).await;
+    let first_dpu_id = mh.dpu_n(0).id;
+    let second_dpu_id = mh.dpu_n(1).id;
+
+    let mut txn = env.db_txn().await;
+    let host_machine = mh.host().db_machine(&mut txn).await;
+    let device_locators = [first_dpu_id, second_dpu_id]
+        .iter()
+        .map(|dpu_id| host_machine.get_device_locator_for_dpu_id(dpu_id).unwrap())
+        .collect_vec();
+    txn.commit().await.unwrap();
+
+    let instance = mh
+        .instance_builer(&env)
+        .network(interface_network_config_with_devices(
+            &[first_segment_id, second_segment_id],
+            &device_locators,
+        ))
+        .build()
+        .await;
+
+    // Fetch each DPU config so each interface resolves its own VPC loopback.
+    let first_config = env
+        .api
+        .get_managed_host_network_config(Request::new(
+            rpc::forge::ManagedHostNetworkConfigRequest {
+                dpu_machine_id: Some(first_dpu_id),
+            },
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    let second_config = env
+        .api
+        .get_managed_host_network_config(Request::new(
+            rpc::forge::ManagedHostNetworkConfigRequest {
+                dpu_machine_id: Some(second_dpu_id),
+            },
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+
+    // Verify each DPU received a loopback for its interface's VPC.
+    assert_eq!(first_config.tenant_interfaces.len(), 1);
+    assert_eq!(second_config.tenant_interfaces.len(), 1);
+    let first_loopback = first_config.tenant_interfaces[0]
+        .tenant_vrf_loopback_ip
+        .clone()
+        .expect("first VPC loopback should be present");
+    let second_loopback = second_config.tenant_interfaces[0]
+        .tenant_vrf_loopback_ip
+        .clone()
+        .expect("second VPC loopback should be present");
+    assert_ne!(first_loopback, second_loopback);
+
+    // Update the instance to keep only the first VPC interface.
+    env.api
+        .update_instance_config(Request::new(rpc::forge::InstanceConfigUpdateRequest {
+            if_version_match: None,
+            config: Some(rpc::InstanceConfig {
+                tenant: Some(default_tenant_config()),
+                os: Some(default_os_config()),
+                network: Some(interface_network_config_with_devices(
+                    &[first_segment_id],
+                    std::slice::from_ref(&device_locators[0]),
+                )),
+                infiniband: None,
+                nvlink: None,
+                network_security_group_id: None,
+                dpu_extension_services: None,
+            }),
+            instance_id: Some(instance.id),
+            metadata: Some(rpc::Metadata {
+                name: "single-fnn-vpc".to_string(),
+                description: "tests/instance".to_string(),
+                labels: vec![],
+            }),
+        }))
+        .await
+        .unwrap();
+
+    // Move the instance to ready state after the network config update.
+    env.run_machine_state_controller_iteration_network_config_return_to_ready(&mh, false)
+        .await;
+
+    // Verify only the removed VPC loopback was released.
+    let mut txn = env.db_txn().await;
+    let retained_loopback = db::vpc_dpu_loopback::find(txn.as_mut(), &first_dpu_id, &first_vpc)
+        .await
+        .unwrap()
+        .expect("retained VPC loopback should remain");
+    assert_eq!(retained_loopback.loopback_ip.to_string(), first_loopback);
+    assert!(
+        db::vpc_dpu_loopback::find(txn.as_mut(), &second_dpu_id, &second_vpc)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[crate::sqlx_test]
+async fn test_fnn_vrf_loopbacks_are_per_vpc_for_pf_and_vf_on_one_dpu(pool: sqlx::PgPool) {
+    let mut overrides = TestEnvOverrides::default().with_fnn_config(None);
+    overrides.fnn_config.as_mut().unwrap().use_vpc_vrf_loopback = true;
+    let env = create_test_env_with_overrides(pool, overrides).await;
+
+    // Create FNN tenants matching the existing peer-VPC fixture organizations.
+    for (organization_id, name) in [
+        (
+            "2829bbe3-c169-4cd9-8b2a-19a8b1618a93",
+            "fnn vf loopback tenant 1",
+        ),
+        (
+            "e65a9d69-39d2-4872-a53e-e5cb87c84e75",
+            "fnn vf loopback tenant 2",
+        ),
+    ] {
+        env.api
+            .create_tenant(Request::new(rpc::forge::CreateTenantRequest {
+                organization_id: organization_id.to_string(),
+                routing_profile_type: Some("INTERNAL".to_string()),
+                metadata: Some(rpc::forge::Metadata {
+                    name: name.to_string(),
+                    ..Default::default()
+                }),
+            }))
+            .await
+            .unwrap();
+    }
+
+    // Create two FNN VPCs and allocate PF/VF interfaces on one DPU.
+    let (first_vpc, _, first_segment_id, second_vpc, _, second_segment_id) = env
+        .create_vpc_and_peer_vpc_with_tenant_segments(
+            rpc::forge::VpcVirtualizationType::Fnn,
+            rpc::forge::VpcVirtualizationType::Fnn,
+        )
+        .await;
+    let first_vpc = first_vpc.expect("first VPC should be present");
+    let second_vpc = second_vpc.expect("second VPC should be present");
+    let mh = create_managed_host(&env).await;
+    let dpu_id = mh.dpu().id;
+    let instance = mh
+        .instance_builer(&env)
+        .network(single_interface_network_config_with_vfs(vec![
+            first_segment_id,
+            second_segment_id,
+        ]))
+        .build()
+        .await;
+
+    // Fetch the single DPU config and verify both PF and VF receive loopbacks.
+    let network_config = env
+        .api
+        .get_managed_host_network_config(Request::new(
+            rpc::forge::ManagedHostNetworkConfigRequest {
+                dpu_machine_id: Some(dpu_id),
+            },
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(network_config.tenant_interfaces.len(), 2);
+    assert_eq!(
+        network_config.tenant_interfaces[0].function_type,
+        rpc::InterfaceFunctionType::Physical as i32
+    );
+    assert_eq!(
+        network_config.tenant_interfaces[1].function_type,
+        rpc::InterfaceFunctionType::Virtual as i32
+    );
+    let first_loopback = network_config.tenant_interfaces[0]
+        .tenant_vrf_loopback_ip
+        .clone()
+        .expect("PF VPC loopback should be present");
+    let second_loopback = network_config.tenant_interfaces[1]
+        .tenant_vrf_loopback_ip
+        .clone()
+        .expect("VF VPC loopback should be present");
+    assert_ne!(first_loopback, second_loopback);
+
+    // Update the instance to keep only the PF-backed VPC interface.
+    env.api
+        .update_instance_config(Request::new(rpc::forge::InstanceConfigUpdateRequest {
+            if_version_match: None,
+            config: Some(rpc::InstanceConfig {
+                tenant: Some(default_tenant_config()),
+                os: Some(default_os_config()),
+                network: Some(single_interface_network_config(first_segment_id)),
+                infiniband: None,
+                nvlink: None,
+                network_security_group_id: None,
+                dpu_extension_services: None,
+            }),
+            instance_id: Some(instance.id),
+            metadata: Some(rpc::Metadata {
+                name: "single-fnn-vpc".to_string(),
+                description: "tests/instance".to_string(),
+                labels: vec![],
+            }),
+        }))
+        .await
+        .unwrap();
+
+    // Move the instance to ready state after the network config update.
+    env.run_machine_state_controller_iteration_network_config_return_to_ready(&mh, false)
+        .await;
+
+    // Verify the retained PF VPC loopback remains and the removed VF VPC loopback is gone.
+    let mut txn = env.db_txn().await;
+    let retained_loopback = db::vpc_dpu_loopback::find(txn.as_mut(), &dpu_id, &first_vpc)
+        .await
+        .unwrap()
+        .expect("retained PF VPC loopback should remain");
+    assert_eq!(retained_loopback.loopback_ip.to_string(), first_loopback);
+    assert!(
+        db::vpc_dpu_loopback::find(txn.as_mut(), &dpu_id, &second_vpc)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+/// Verifies that non-FNN interfaces cannot span direct segments from multiple VPCs.
+#[crate::sqlx_test]
+async fn test_allocate_instance_rejects_multiple_non_fnn_network_segments(
+    _: PgPoolOptions,
+    options: PgConnectOptions,
+) {
+    let pool = PgPoolOptions::new().connect_with(options).await.unwrap();
+    let env = create_test_env(pool).await;
+    let mh = create_managed_host_multi_dpu(&env, 2).await;
+
+    // Create two non-FNN tenant segments across two VPCs.
+    let (_, _, first_segment_id, _, _, second_segment_id) = env
+        .create_vpc_and_peer_vpc_with_tenant_segments(
+            rpc::forge::VpcVirtualizationType::EthernetVirtualizer,
+            rpc::forge::VpcVirtualizationType::EthernetVirtualizer,
+        )
+        .await;
+
+    // Non-FNN segments must still reject cross-VPC interface configs.
+    let err = env
+        .api
+        .allocate_instance(
+            InstanceAllocationRequest::builder(false)
+                .machine_id(mh.id)
+                .config(InstanceConfig::default_tenant_and_os().network(
+                    interface_network_config_with_devices(
+                        &[first_segment_id, second_segment_id],
+                        &[
+                            DeviceLocator {
+                                device: "BlueField SoC".to_string(),
+                                device_instance: 0,
+                            },
+                            DeviceLocator {
+                                device: "BlueField SoC".to_string(),
+                                device_instance: 1,
+                            },
+                        ],
+                    ),
+                ))
+                .tonic_request(),
+        )
+        .await
+        .expect_err("non-FNN cross-VPC segment allocation should fail");
+
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert!(
+        err.message()
+            .contains("Found segments attached to multiple VPCs")
+    );
+}
+
+/// Verifies that dual-stack prefixes on one interface cannot cross VPC boundaries.
+#[crate::sqlx_test]
+async fn test_allocate_instance_rejects_dual_stack_prefixes_from_different_vpcs(
+    _: PgPoolOptions,
+    options: PgConnectOptions,
+) {
+    let pool = PgPoolOptions::new().connect_with(options).await.unwrap();
+    let env = create_test_env(pool).await;
+    let mh = create_managed_host(&env).await;
+
+    // Create two FNN VPCs so the global multi-FNN check passes.
+    let first_vpc = env
+        .api
+        .create_vpc(
+            VpcCreationRequest::builder("2829bbe3-c169-4cd9-8b2a-19a8b1618a93")
+                .metadata(Metadata {
+                    name: "dual-stack fnn vpc 1".to_string(),
+                    ..Default::default()
+                })
+                .network_virtualization_type(rpc::forge::VpcVirtualizationType::Fnn as i32)
+                .tonic_request(),
+        )
+        .await
+        .unwrap()
+        .into_inner()
+        .id
+        .unwrap();
+    let second_vpc = env
+        .api
+        .create_vpc(
+            VpcCreationRequest::builder("2829bbe3-c169-4cd9-8b2a-19a8b1618a93")
+                .metadata(Metadata {
+                    name: "dual-stack fnn vpc 2".to_string(),
+                    ..Default::default()
+                })
+                .network_virtualization_type(rpc::forge::VpcVirtualizationType::Fnn as i32)
+                .tonic_request(),
+        )
+        .await
+        .unwrap()
+        .into_inner()
+        .id
+        .unwrap();
+
+    // Put the IPv4 and IPv6 prefixes in different VPCs on the same interface.
+    let primary_prefix_id = create_tenant_overlay_prefix_with_prefix(
+        &env,
+        first_vpc,
+        "dual-stack primary prefix",
+        IpNetwork::V4(Ipv4Network::new(Ipv4Addr::new(10, 217, 9, 224), 27).unwrap()),
+    )
+    .await;
+    let ipv6_prefix_id = create_tenant_overlay_prefix_with_prefix(
+        &env,
+        second_vpc,
+        "dual-stack ipv6 prefix",
+        IpNetwork::V6(Ipv6Network::new(Ipv6Addr::from_str("fd00:217:9::").unwrap(), 120).unwrap()),
+    )
+    .await;
+
+    // Reject creating a single dual-stack segment that crosses VPC boundaries.
+    let err = env
+        .api
+        .allocate_instance(
+            InstanceAllocationRequest::builder(false)
+                .machine_id(mh.id)
+                .config(InstanceConfig::default_tenant_and_os().network(
+                    rpc::InstanceNetworkConfig {
+                        interfaces: vec![rpc::InstanceInterfaceConfig {
+                            function_type: rpc::InterfaceFunctionType::Physical as i32,
+                            network_segment_id: None,
+                            network_details: Some(
+                                rpc::forge::instance_interface_config::NetworkDetails::VpcPrefixId(
+                                    primary_prefix_id,
+                                ),
+                            ),
+                            device: Some("BlueField SoC".to_string()),
+                            device_instance: 0,
+                            virtual_function_id: None,
+                            ip_address: None,
+                            ipv6_interface_config: Some(rpc::forge::InstanceInterfaceIpv6Config {
+                                vpc_prefix_id: Some(ipv6_prefix_id),
+                                ip_address: None,
+                            }),
+                        }],
+                        auto: false,
+                    },
+                ))
+                .tonic_request(),
+        )
+        .await
+        .expect_err("dual-stack prefixes from different VPCs should fail");
+
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert!(
+        err.message()
+            .contains("dual-stack VPC prefixes must belong to the same VPC")
+    );
 }
 
 // ================================================================================================
@@ -4621,7 +5315,7 @@ async fn test_instance_release_backward_compatibility(_: PgPoolOptions, options:
         !host_machine
             .health_reports
             .merges
-            .contains_key("repair-request"),
+            .contains_key(health_report::REPAIR_REQUEST_MERGE_SOURCE),
         "Backward compatibility: RequestRepair override should NOT be applied without issue field"
     );
 
@@ -4730,7 +5424,7 @@ async fn test_instance_release_repair_tenant(_: PgPoolOptions, options: PgConnec
             let has_repair_request_override = host_machine
                 .health_reports
                 .merges
-                .contains_key("repair-request");
+                .contains_key(health_report::REPAIR_REQUEST_MERGE_SOURCE);
 
             assert!(
                 !has_tenant_reported_override,
@@ -4828,7 +5522,7 @@ async fn test_instance_release_combined_enhancements(_: PgPoolOptions, options: 
     let has_repair_request_override = host_machine
         .health_reports
         .merges
-        .contains_key("repair-request");
+        .contains_key(health_report::REPAIR_REQUEST_MERGE_SOURCE);
 
     assert!(
         !has_repair_request_override,
@@ -4841,6 +5535,99 @@ async fn test_instance_release_combined_enhancements(_: PgPoolOptions, options: 
     );
 
     txn.commit().await.unwrap();
+}
+
+/// Release is rejected when aggregate health includes `PreventInstanceDeletion`; succeeds after the override is removed.
+#[crate::sqlx_test]
+async fn test_instance_release_rejected_when_aggregate_health_has_prevent_instance_deletion(
+    _: PgPoolOptions,
+    options: PgConnectOptions,
+) {
+    let pool = PgPoolOptions::new().connect_with(options).await.unwrap();
+    let env = create_test_env(pool).await;
+    let mh = create_managed_host(&env).await;
+    let segment_id = env.create_vpc_and_tenant_segment().await;
+
+    let config = InstanceConfig::default_tenant_and_os()
+        .network(single_interface_network_config(segment_id));
+
+    let instance_result = env
+        .api
+        .allocate_instance(
+            InstanceAllocationRequest::builder(false)
+                .machine_id(mh.id)
+                .config(config)
+                .metadata(rpc::Metadata {
+                    name: "test-prevent-instance-deletion".to_string(),
+                    description: "PreventInstanceDeletion blocks release".to_string(),
+                    labels: Vec::new(),
+                })
+                .tonic_request(),
+        )
+        .await
+        .expect("allocate instance");
+
+    let instance = instance_result.into_inner();
+    let instance_id = *instance.id.as_ref().expect("Instance ID should be present");
+
+    let block_release = health_report::HealthReport {
+        source: "test-prevent-instance-deletion-override".to_string(),
+        triggered_by: None,
+        observed_at: Some(chrono::Utc::now()),
+        successes: vec![],
+        alerts: vec![health_report::HealthProbeAlert {
+            id: health_report::HealthProbeId::from_str("TestPreventInstanceDeletion").unwrap(),
+            target: None,
+            in_alert_since: None,
+            message: "hold instance".to_string(),
+            tenant_message: None,
+            classifications: vec![
+                health_report::HealthAlertClassification::prevent_instance_deletion(),
+            ],
+        }],
+    };
+
+    send_health_report_entry(
+        &env,
+        &mh.host().id,
+        (block_release, health_report::HealthReportApplyMode::Merge),
+    )
+    .await;
+
+    let err = env
+        .api
+        .release_instance(tonic::Request::new(InstanceReleaseRequest {
+            id: Some(instance_id),
+            issue: None,
+            is_repair_tenant: None,
+        }))
+        .await
+        .expect_err(
+            "release should fail when PreventInstanceDeletion is present on aggregate health",
+        );
+
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert!(
+        err.message().contains("PreventInstanceDeletion"),
+        "unexpected message: {}",
+        err.message()
+    );
+
+    remove_health_report_entry(
+        &env,
+        &mh.host().id,
+        "test-prevent-instance-deletion-override".to_string(),
+    )
+    .await;
+
+    env.api
+        .release_instance(tonic::Request::new(InstanceReleaseRequest {
+            id: Some(instance_id),
+            issue: None,
+            is_repair_tenant: None,
+        }))
+        .await
+        .expect("release should succeed after removing PreventInstanceDeletion source");
 }
 
 #[crate::sqlx_test]
@@ -4929,14 +5716,18 @@ async fn test_instance_release_auto_repair_enabled(_: PgPoolOptions, options: Pg
         host_machine
             .health_reports
             .merges
-            .contains_key("repair-request"),
+            .contains_key(health_report::REPAIR_REQUEST_MERGE_SOURCE),
         "Should have RequestRepair override when auto-repair is enabled"
     );
 
     // 4. Verify the RequestRepair override content
-    let repair_override = &host_machine.health_reports.merges["repair-request"];
+    let repair_override =
+        &host_machine.health_reports.merges[health_report::REPAIR_REQUEST_MERGE_SOURCE];
     let repair_report: health_report::HealthReport = repair_override.clone();
-    assert_eq!(repair_report.source, "repair-request");
+    assert_eq!(
+        repair_report.source,
+        health_report::REPAIR_REQUEST_MERGE_SOURCE
+    );
     assert_eq!(repair_report.alerts.len(), 1);
     assert_eq!(repair_report.alerts[0].id.to_string(), "RequestRepair");
     assert!(
@@ -5167,7 +5958,6 @@ async fn test_can_not_update_instance_config_after_deletion(
         variant: Some(rpc::forge::instance_operating_system_config::Variant::Ipxe(
             rpc::forge::InlineIpxe {
                 ipxe_script: "SomeRandomiPxe1".to_string(),
-                user_data: Some("SomeRandomData1".to_string()),
             },
         )),
     };
@@ -5262,6 +6052,7 @@ async fn test_instance_with_vf_when_vf_disabled(_: PgPoolOptions, options: PgCon
         hbn_sfs: None,
         bridging: None,
         public_prefixes: vec![],
+        secondary_vtep_aggregate_prefixes: vec![],
         secondary_overlay_support: false,
     });
 
@@ -5302,6 +6093,7 @@ async fn test_instance_without_vf_when_vf_disabled(_: PgPoolOptions, options: Pg
         hbn_sfs: None,
         bridging: None,
         public_prefixes: vec![],
+        secondary_vtep_aggregate_prefixes: vec![],
         secondary_overlay_support: false,
     });
 

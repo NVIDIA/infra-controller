@@ -41,6 +41,18 @@ pub fn template_for(vtype: VpcVirtualizationType) -> eyre::Result<&'static str> 
         VpcVirtualizationType::EthernetVirtualizer
         | VpcVirtualizationType::EthernetVirtualizerWithNvue => Ok(TMPL_ETV_WITH_NVUE),
         VpcVirtualizationType::Fnn => Ok(TMPL_FNN),
+        // Flat VPCs attach instances via a plain NIC (the host's
+        // primary fabric interface is not a DPU), so there's no NVUE
+        // template to render for them -- this function is the DPU
+        // agent's template selector, and Flat instances don't run
+        // through a DPU agent at all.
+        //
+        // (NICo today doesn't model mixed-mode hosts that have a NIC
+        // primary plus secondary DPUs used for VFs; if that ever
+        // becomes a target, the dispatch here would need rethinking.)
+        VpcVirtualizationType::Flat => {
+            Err(eyre::eyre!("Flat VPC virtualization type not supported",))
+        }
     }
 }
 
@@ -71,6 +83,9 @@ const NETWORK_SECURITY_GROUP_RULE_COUNT_MAX: usize = 10000;
 /// into IPv4 and IPv6 buckets. Each bucket gets sequential indices
 /// starting at `start_index`. Unparseable prefixes are warned and
 /// dropped (because NVUE would fail on invalid addresses anyway).
+///
+/// start_index should usually be set to 1 to avoid nvue config complaints when
+/// using the output as part of policy generation.
 fn split_prefixes_by_family(prefixes: &[String], start_index: usize) -> (Vec<Prefix>, Vec<Prefix>) {
     let valid: Vec<_> = prefixes
         .iter()
@@ -116,36 +131,10 @@ pub fn build(conf: NvueConfig) -> eyre::Result<String> {
         })
         .collect();
 
-    // This assumes that the routing profile is expected to be same for
-    // all VPCs of a tenant _and_ for all VPCs that an instance might span.
-    // That should be ok for now, and a smaller MR later that moves
-    // profiles into FlatInterfaceConfig could change that.
-    // For now, we clone later so that we can put this into each TmplVpc
-    // and make a later transition easier.
-    let routing_profile = conf
-        .ct_routing_profile
+    let deprecated_routing_profile = conf.ct_routing_profile.clone();
+    let deprecated_tenant_routing_profile = deprecated_routing_profile
         .as_ref()
-        .map(|rt| TmplRoutingProfile {
-            TenantLeakCommunitiesAccepted: rt.tenant_leak_communities_accepted,
-            LeakDefaultRouteFromUnderlay: rt.leak_default_route_from_underlay,
-            LeakTenantHostRoutesToUnderlay: rt.leak_tenant_host_routes_to_underlay,
-            RouteTargetImports: rt
-                .route_target_imports
-                .iter()
-                .map(|rt| TmplRouteTargetConfig {
-                    ASN: rt.asn,
-                    VNI: rt.vni,
-                })
-                .collect(),
-            RouteTargetsOnExports: rt
-                .route_targets_on_exports
-                .iter()
-                .map(|rt| TmplRouteTargetConfig {
-                    ASN: rt.asn,
-                    VNI: rt.vni,
-                })
-                .collect(),
-        });
+        .map(TmplRoutingProfile::from);
 
     // There are two assumptions about pre-FNN...
     // 1 - ManagedHostNetworkConfigResponse only has rules inherited either from VPC or Instance,
@@ -234,10 +223,16 @@ pub fn build(conf: NvueConfig) -> eyre::Result<String> {
         );
     }
 
-    let mut has_any_vpc_tenant_host_leak_to_underlay = false;
+    let mut has_any_vpc_vrf_loopback = false;
     let mut fmds_gateway_matched = false;
 
     for (base_i, network) in conf.ct_port_configs.into_iter().enumerate() {
+        let l3_vni = network.l3_vni.unwrap_or_default();
+        let routing_profile = network
+            .routing_profile
+            .as_ref()
+            .or(deprecated_routing_profile.as_ref())
+            .map(TmplRoutingProfile::from);
         let svi_mac = vni_to_svi_mac(network.vni.unwrap_or(0))?.to_string();
         let (vpc_ipv4, vpc_ipv6) =
             split_prefixes_by_family(&network.vpc_prefixes, (base_i + 1) * 10);
@@ -267,7 +262,7 @@ pub fn build(conf: NvueConfig) -> eyre::Result<String> {
                 .flatten()
                 .collect(),
             SviMAC: svi_mac,
-            VrfName: format!("vpc_{}", network.l3_vni.unwrap_or_default()),
+            VrfName: format!("vpc_{l3_vni}"),
             HasVpcPeerPrefixes: !network.vpc_peer_prefixes.is_empty(),
             HasVpcPeerPrefixesIpv6: network
                 .vpc_peer_prefixes
@@ -300,24 +295,35 @@ pub fn build(conf: NvueConfig) -> eyre::Result<String> {
             fmds_gateway_matched = true;
         }
 
-        has_any_vpc_tenant_host_leak_to_underlay = has_any_vpc_tenant_host_leak_to_underlay
-            || routing_profile
-                .as_ref()
-                .map(|p| p.LeakTenantHostRoutesToUnderlay)
-                .unwrap_or_default();
         let (vpc_peer_ipv4, vpc_peer_ipv6) =
             split_prefixes_by_family(&network.vpc_peer_prefixes, 1);
 
+        has_any_vpc_vrf_loopback =
+            has_any_vpc_vrf_loopback || network.tenant_vrf_loopback_ip.is_some();
+
         vpc_configs
-            .entry(network.l3_vni.unwrap_or_default())
+            .entry(l3_vni)
             .and_modify(|v| {
+                if let (Some(existing_profile), Some(next_profile)) =
+                    (v.RoutingProfile.as_ref(), routing_profile.as_ref())
+                    && existing_profile != next_profile
+                {
+                    tracing::warn!(
+                        l3_vni,
+                        "found different routing profiles for the same VPC L3 VNI; using the first profile"
+                    );
+                }
+                if v.RoutingProfile.is_none() {
+                    v.RoutingProfile = routing_profile.clone();
+                }
                 v.PortPrefixes.extend_from_slice(&port.VpcPrefixes);
                 v.PortPrefixesIpv6.extend_from_slice(&port.VpcPrefixesIpv6);
                 v.PortConfigs.push(port.clone());
             })
             .or_insert_with(|| TmplVpc {
                 VrfName: port.VrfName.clone(),
-                L3VNI: network.l3_vni.unwrap_or_default(),
+                L3VNI: l3_vni,
+                HasVrfLoopback: network.tenant_vrf_loopback_ip.is_some(),
                 VrfLoopback: network.tenant_vrf_loopback_ip.unwrap_or_default(),
                 // TODO: This is wasteful because it should be specific to a VPC.
                 // Otherwise, all VPCs will have a BGP peer config for each
@@ -429,7 +435,12 @@ pub fn build(conf: NvueConfig) -> eyre::Result<String> {
     };
 
     let mut vpcs = vpc_configs.into_values().collect::<Vec<TmplVpc>>();
-    vpcs.sort_by(|a, b| a.L3VNI.cmp(&b.L3VNI));
+    vpcs.sort_by_key(|a| a.L3VNI);
+    let has_any_vpc_tenant_host_leak_to_underlay = vpcs.iter().any(|vpc| {
+        vpc.RoutingProfile
+            .as_ref()
+            .is_some_and(|profile| profile.LeakTenantHostRoutesToUnderlay)
+    });
 
     let (traffic_intercept_ipv4, traffic_intercept_ipv6) =
         split_prefixes_by_family(&conf.traffic_intercept_public_prefixes, 1);
@@ -456,6 +467,7 @@ pub fn build(conf: NvueConfig) -> eyre::Result<String> {
         VfInterceptHbnRepresentorIp: vf_intercept_hbn_representor_ip,
         VfInterceptBridgeSf: conf.vf_intercept_bridge_sf.unwrap_or_default(),
         HasAnyVpcTenantHostLeakToUnderlay: has_any_vpc_tenant_host_leak_to_underlay,
+        HasAnyVpcVrfLoopback: has_any_vpc_vrf_loopback,
         TrafficInterceptPublicPrefixes: traffic_intercept_ipv4,
         TrafficInterceptPublicPrefixesIpv6: traffic_intercept_ipv6,
         ASN: conf.asn,
@@ -502,7 +514,7 @@ pub fn build(conf: NvueConfig) -> eyre::Result<String> {
         Ipv6EgressNetworkSecurityPolicyOverrideRules: egress_ipv6_override_rules,
         HbnVersion: conf.hbn_version,
         Tenant: TmplComputeTenant {
-            RoutingProfile: routing_profile,
+            RoutingProfile: deprecated_tenant_routing_profile,
             Vpcs: vpcs,
             VrfName: conf.ct_vrf_name,
             L3VNI: conf.ct_l3_vni.unwrap_or_default().to_string(),
@@ -908,10 +920,54 @@ fn vni_to_svi_mac(vni: u32) -> eyre::Result<MacAddress> {
     sanitized_mac(&format!("{vni:012}"))
 }
 
-#[derive(Clone, Deserialize, Debug)]
+#[derive(Clone, Deserialize, Debug, PartialEq)]
 pub struct RouteTargetConfig {
     pub asn: u32,
     pub vni: u32,
+}
+
+/// Converts an agent routing profile into the template-ready routing profile.
+impl From<&RoutingProfile> for TmplRoutingProfile {
+    fn from(profile: &RoutingProfile) -> Self {
+        // Split mixed-family prefix lists before passing them to the template.
+        let (v4leaks, v6leaks) = split_prefixes_by_family(&profile.accepted_leaks_from_underlay, 1);
+        let (v4allowed_anycast, v6allowed_anycast) =
+            split_prefixes_by_family(&profile.allowed_anycast_prefixes, 1);
+        let has_leaks_from_underlay_ipv4 =
+            profile.leak_default_route_from_underlay || !v4leaks.is_empty();
+        let has_leaks_from_underlay_ipv6 =
+            profile.leak_default_route_from_underlay || !v6leaks.is_empty();
+
+        TmplRoutingProfile {
+            TenantLeakCommunitiesAccepted: profile.tenant_leak_communities_accepted,
+            LeakDefaultRouteFromUnderlay: profile.leak_default_route_from_underlay,
+            LeakTenantHostRoutesToUnderlay: profile.leak_tenant_host_routes_to_underlay,
+            HasLeaksFromUnderlayIpv4: has_leaks_from_underlay_ipv4,
+            HasLeaksFromUnderlayIpv6: has_leaks_from_underlay_ipv6,
+            AcceptedLeaksFromUnderlayIpv4: v4leaks,
+            AcceptedLeaksFromUnderlayIpv6: v6leaks,
+            HasAllowedAnycastPrefixesIpv4: !v4allowed_anycast.is_empty(),
+            HasAllowedAnycastPrefixesIpv6: !v6allowed_anycast.is_empty(),
+            AllowedAnycastPrefixesIpv4: v4allowed_anycast,
+            AllowedAnycastPrefixesIpv6: v6allowed_anycast,
+            RouteTargetImports: profile
+                .route_target_imports
+                .iter()
+                .map(|rt| TmplRouteTargetConfig {
+                    ASN: rt.asn,
+                    VNI: rt.vni,
+                })
+                .collect(),
+            RouteTargetsOnExports: profile
+                .route_targets_on_exports
+                .iter()
+                .map(|rt| TmplRouteTargetConfig {
+                    ASN: rt.asn,
+                    VNI: rt.vni,
+                })
+                .collect(),
+        }
+    }
 }
 
 // What we need to configure NVUE
@@ -974,13 +1030,16 @@ pub struct NvueConfig {
     pub ct_routing_profile: Option<RoutingProfile>,
 }
 
-#[derive(Clone, Deserialize, Debug)]
+#[derive(Clone, Deserialize, Debug, PartialEq)]
 pub struct RoutingProfile {
     pub leak_default_route_from_underlay: bool,
     pub leak_tenant_host_routes_to_underlay: bool,
     pub route_target_imports: Vec<RouteTargetConfig>,
     pub route_targets_on_exports: Vec<RouteTargetConfig>,
     pub tenant_leak_communities_accepted: bool,
+    pub accepted_leaks_from_underlay: Vec<String>,
+    #[serde(default)]
+    pub allowed_anycast_prefixes: Vec<String>,
 }
 
 #[derive(Clone, Deserialize, Debug)]
@@ -1106,6 +1165,8 @@ pub struct PortConfig {
     pub is_l2_segment: bool,
     pub is_phy: bool,
     pub network_security_group_id: Option<String>,
+    #[serde(default)]
+    pub routing_profile: Option<RoutingProfile>,
 }
 
 //
@@ -1138,6 +1199,9 @@ struct TmplNvue {
     /// Does any VPC at all have a routing profile that says
     /// tenant routes should leak to the underlay?
     HasAnyVpcTenantHostLeakToUnderlay: bool,
+
+    /// Does any VPC have a VRF loopback?
+    HasAnyVpcVrfLoopback: bool,
 
     /// The size of the of the prefix used for the internal
     /// bridge routing.
@@ -1226,7 +1290,7 @@ struct TmplNvue {
 }
 
 #[allow(non_snake_case)]
-#[derive(Clone, Gtmpl, Debug)]
+#[derive(Clone, Gtmpl, Debug, PartialEq)]
 struct TmplRouteTargetConfig {
     ASN: u32,
     VNI: u32,
@@ -1258,13 +1322,23 @@ struct TmplNetworkSecurityGroupRule {
 }
 
 #[allow(non_snake_case)]
-#[derive(Clone, Gtmpl, Debug)]
+#[derive(Clone, Gtmpl, Debug, PartialEq)]
 struct TmplRoutingProfile {
     LeakTenantHostRoutesToUnderlay: bool,
     LeakDefaultRouteFromUnderlay: bool,
     RouteTargetImports: Vec<TmplRouteTargetConfig>,
     RouteTargetsOnExports: Vec<TmplRouteTargetConfig>,
     TenantLeakCommunitiesAccepted: bool,
+    /// Whether there are _any_ leaks from the default
+    /// VRF into the tenant VRF being used.
+    HasLeaksFromUnderlayIpv4: bool,
+    HasLeaksFromUnderlayIpv6: bool,
+    AcceptedLeaksFromUnderlayIpv4: Vec<Prefix>,
+    AcceptedLeaksFromUnderlayIpv6: Vec<Prefix>,
+    HasAllowedAnycastPrefixesIpv4: bool,
+    HasAllowedAnycastPrefixesIpv6: bool,
+    AllowedAnycastPrefixesIpv4: Vec<Prefix>,
+    AllowedAnycastPrefixesIpv6: Vec<Prefix>,
 }
 
 #[allow(non_snake_case)]
@@ -1349,6 +1423,7 @@ struct TmplVpc {
     // from a dedicated resource-pool, handed out as un-related /32s, and
     // interfaces in FNN get /31s.
     /// The tenant loopback IP assigned to each DPU.
+    HasVrfLoopback: bool,
     VrfLoopback: String,
 
     HostInterfaces: Vec<TmplHostInterfaces>,
@@ -1380,7 +1455,7 @@ struct TmplHostInterfaces {
     /// IPv6 host address (if dual-stack).
     HostIPv6: Option<String>,
 
-    // HostRoute in the context of FNN-L3 is the /30 prefix allocation.
+    // HostRoute in the context of FNN-L3 is the /31 prefix allocation.
     // This used to be populated as the HostIP + "/32", but then with
     // the advent of interface prefix allocations (where ETV is just a /32,
     // and FNN-L3 is a /31), HostRoute became the allocation (which was
@@ -1448,7 +1523,7 @@ struct TmplConfigPort {
 }
 
 #[allow(non_snake_case)]
-#[derive(Clone, Gtmpl, Debug)]
+#[derive(Clone, Gtmpl, Debug, PartialEq)]
 struct Prefix {
     Index: String,
     Prefix: String,
@@ -1650,6 +1725,7 @@ mod tests {
             is_l2_segment: true,
             is_phy: false,
             network_security_group_id: None,
+            routing_profile: None,
             ipv6_port_config: None,
         }];
         conf.ct_access_vlans = vec![VlanConfig {
@@ -1678,6 +1754,8 @@ mod tests {
             leak_tenant_host_routes_to_underlay: false,
             route_target_imports: vec![],
             route_targets_on_exports: vec![],
+            accepted_leaks_from_underlay: vec![],
+            allowed_anycast_prefixes: vec![],
         });
         conf.ct_port_configs = vec![PortConfig {
             interface_name: "pf0vf0_if".into(),
@@ -1693,6 +1771,7 @@ mod tests {
             is_l2_segment: false,
             is_phy: false,
             network_security_group_id: None,
+            routing_profile: None,
             ipv6_port_config: None,
         }];
         conf.ct_access_vlans = vec![VlanConfig {
@@ -1727,6 +1806,7 @@ mod tests {
             is_l2_segment: true,
             is_phy: false,
             network_security_group_id: None,
+            routing_profile: None,
             ipv6_port_config: None,
         }];
         conf.ct_access_vlans = vec![VlanConfig {
@@ -1758,6 +1838,8 @@ mod tests {
 
             route_target_imports: vec![],
             route_targets_on_exports: vec![],
+            accepted_leaks_from_underlay: vec![],
+            allowed_anycast_prefixes: vec![],
         });
         conf.ct_port_configs = vec![PortConfig {
             interface_name: "pf0vf0_if".into(),
@@ -1773,6 +1855,7 @@ mod tests {
             is_l2_segment: false,
             is_phy: false,
             network_security_group_id: None,
+            routing_profile: None,
             ipv6_port_config: None,
         }];
         conf.ct_access_vlans = vec![VlanConfig {
@@ -1812,6 +1895,7 @@ mod tests {
             is_l2_segment: true,
             is_phy: false,
             network_security_group_id: None,
+            routing_profile: None,
             ipv6_port_config: None,
         }];
         conf.ct_access_vlans = vec![VlanConfig {
@@ -1841,6 +1925,8 @@ mod tests {
             leak_tenant_host_routes_to_underlay: false,
             route_target_imports: vec![],
             route_targets_on_exports: vec![],
+            accepted_leaks_from_underlay: vec![],
+            allowed_anycast_prefixes: vec![],
         });
         conf.ct_port_configs = vec![
             PortConfig {
@@ -1857,6 +1943,7 @@ mod tests {
                 is_l2_segment: false,
                 is_phy: false,
                 network_security_group_id: None,
+                routing_profile: None,
                 ipv6_port_config: None,
             },
             PortConfig {
@@ -1873,6 +1960,7 @@ mod tests {
                 is_l2_segment: false,
                 is_phy: false,
                 network_security_group_id: None,
+                routing_profile: None,
                 ipv6_port_config: None,
             },
         ];
@@ -1911,6 +1999,8 @@ mod tests {
             tenant_leak_communities_accepted: false,
             route_target_imports: vec![],
             route_targets_on_exports: vec![],
+            accepted_leaks_from_underlay: vec![],
+            allowed_anycast_prefixes: vec![],
         });
         conf.ct_port_configs = vec![PortConfig {
             interface_name: "pf0vf0_if".into(),
@@ -1930,6 +2020,7 @@ mod tests {
             is_l2_segment: false,
             is_phy: false,
             network_security_group_id: None,
+            routing_profile: None,
         }];
         conf.ct_access_vlans = vec![VlanConfig {
             vlan_id: 100,
@@ -1999,6 +2090,7 @@ mod tests {
             is_l2_segment: true,
             is_phy: true,
             network_security_group_id: None,
+            routing_profile: None,
             ipv6_port_config: None,
         }
     }
@@ -2072,6 +2164,8 @@ mod tests {
             leak_tenant_host_routes_to_underlay: false,
             route_target_imports: vec![],
             route_targets_on_exports: vec![],
+            accepted_leaks_from_underlay: vec![],
+            allowed_anycast_prefixes: vec![],
         }
     }
 

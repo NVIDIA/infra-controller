@@ -228,7 +228,7 @@ If Host validation fails, a Health Alert with ID `FailedValidationTest` or `Fail
 
 In addition to that, the full test output (stdout and stderr) will be stored within carbide-core and is made available to NICo users via APIs, admin-cli and admin-ui.
 
-Details can be found in the [Machine validation manual](../manuals/machine_validation.md).
+Details can be found in the [Host Validation guide](../provisioning/host-validation.md).
 
 ### SKU validation tests
 
@@ -246,7 +246,7 @@ SKU validation runs at the same points in the host lifecycle as machine validati
 If SKU validation fails, a Health Alert with ID `SkuValidation` will be placed on the host
 to make the host un-allocatable by tenants.
 
-Details can be found in the [SKU validation manual](../manuals/sku_validation.md).
+Details can be found in the [SKU Validation guide](../provisioning/sku-validation.md).
 
 ## Out of band health monitoring
 
@@ -264,6 +264,13 @@ In addition to metrics, `carbide-hw-health` also extracts the values of various 
 Finally, `carbide-hw-health` also emits a health-rollup in `HealthReport` format towards `carbide-core` that contains an assessed health status of the host based on the extracted metrics.
 This assessed health status is built by comparing the metrics that are emitted from BMCs against well-defined
 ranges or by interpreting the `health_ok` values provided by BMCs.
+
+For production deployments, `carbide-hw-health` discovers machine, switch, and power-shelf BMC endpoints from Carbide API via `[endpoint_sources.carbide_api]`. Machine endpoints carry the inventory metadata needed to interpret hardware health in fleet context, including machine ID, serial number, rack ID, rack placement, and NVLink domain UUID when present. Switch endpoints carry switch ID, serial number, and rack placement when present. Local and test deployments can instead configure explicit machine, switch, or power-shelf identity with `[[endpoint_sources.static_bmc_endpoints]]`; static machine endpoints can include the same serial number, rack placement, and NVLink domain UUID metadata, static switch endpoints can include serial number and rack placement metadata, and all static endpoints can provide `rack_id` when rack-level rollups are needed.
+
+The publishing sinks expose that inventory context using the conventions of the target backend:
+- `[sinks.prometheus]` adds machine metadata as metric labels named `machine_id`, `serial_number`, `machine_slot_number`, `machine_tray_index`, and `nvlink_domain_uuid`; switch metadata uses `switch_id`, `serial_number`, `switch_slot_number`, and `switch_tray_index`.
+- `[sinks.otlp]` adds machine metadata as OTLP resource attributes named `machine.id`, integer `machine.slot_number`, integer `machine.tray_index`, and `nvlink.domain.uuid`; switch metadata uses `switch.id`, integer `switch.slot_number`, and integer `switch.tray_index`.
+- `[sinks.health_report]`, `[sinks.rack_health_report]`, `[sinks.switch_health_report]`, and `[sinks.power_shelf_health_report]` use the same event context when submitting assessed health reports back to Carbide API. The persisted `HealthReport` and `HealthProbeAlert` schemas remain the probe success/alert model described above.
 
 ### BMC inventory monitoring
 

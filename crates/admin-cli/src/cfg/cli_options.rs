@@ -17,17 +17,16 @@
 use clap::{Parser, ValueEnum, ValueHint};
 use rpc::admin_cli::OutputFormat;
 
-use crate::cfg::measurement;
 use crate::{
-    bmc_machine, boot_override, component_manager, compute_allocation, credential, devenv, domain,
-    dpa, dpu, dpu_remediation, expected_machines, expected_power_shelf, expected_rack,
-    expected_switch, extension_service, firmware, generate_shell_complete, host, ib_partition,
-    instance, instance_type, inventory, ip, ipxe_template, jump, machine, machine_interfaces,
-    machine_validation, managed_host, managed_switch, mlx, network_devices, network_security_group,
-    network_segment, nvl_logical_partition, nvl_partition, operating_system, os_image, ping,
-    power_shelf, rack, rack_firmware, redfish, resource_pool, rms, route_server, scout_stream, set,
-    site_explorer, sku, ssh, switch, tenant, tenant_keyset, tpm_ca, trim_table, version, vpc,
-    vpc_peering, vpc_prefix,
+    attestation, bmc_machine, boot_override, component_manager, compute_allocation, credential,
+    devenv, domain, dpa, dpu, dpu_remediation, expected_machines, expected_power_shelf,
+    expected_rack, expected_switch, extension_service, firmware, generate_shell_complete, host,
+    ib_partition, instance, instance_type, inventory, ip, ipxe_template, jump, machine,
+    machine_interfaces, machine_validation, managed_host, managed_switch, mlx, network_devices,
+    network_security_group, network_segment, nvl_logical_partition, nvl_partition,
+    nvlink_nmxc_endpoints, operating_system, os_image, ping, power_shelf, rack, redfish,
+    resource_pool, rms, route_server, scout_stream, set, site_explorer, sku, ssh, switch, tenant,
+    tenant_keyset, tpm_ca, trim_table, version, vpc, vpc_peering, vpc_prefix,
 };
 
 #[derive(Parser, Debug)]
@@ -147,6 +146,12 @@ pub enum CliCommand {
         visible_alias = "ns"
     )]
     NetworkSegment(network_segment::Cmd),
+    #[clap(
+        name = "nvlink-nmxc-endpoints",
+        about = "Rack chassis serial → NMX-C endpoint mappings",
+        subcommand
+    )]
+    NvlinkNmxcEndpoints(nvlink_nmxc_endpoints::Cmd),
     #[clap(about = "Domain related handling", subcommand, visible_alias = "d")]
     Domain(domain::Cmd),
     #[clap(
@@ -161,12 +166,6 @@ pub enum CliCommand {
         visible_alias = "ms"
     )]
     ManagedSwitch(managed_switch::Cmd),
-    #[clap(
-        subcommand,
-        about = "Work with measured boot data.",
-        visible_alias = "mb"
-    )]
-    Measurement(measurement::Cmd),
     #[clap(about = "Resource pool handling", subcommand, visible_alias = "rp")]
     ResourcePool(resource_pool::Cmd),
     #[clap(about = "Redfish BMC actions", visible_alias = "rf")]
@@ -309,13 +308,6 @@ pub enum CliCommand {
     #[clap(about = "Rack Management", subcommand)]
     Rack(rack::Cmd),
 
-    #[clap(
-        about = "Rack Firmware configuration management",
-        subcommand,
-        visible_alias = "rack-fw"
-    )]
-    RackFirmware(rack_firmware::Cmd),
-
     #[clap(about = "RMS Actions")]
     Rms(rms::args::RmsAction),
 
@@ -362,6 +354,13 @@ pub enum CliCommand {
 
     #[clap(about = "Tenant management", subcommand, visible_alias = "tm")]
     Tenant(tenant::Cmd),
+
+    #[clap(
+        about = "MeasuredBoot or SPDM attestations",
+        subcommand,
+        visible_alias = "att"
+    )]
+    Attestation(attestation::Cmd),
 }
 
 impl CliOptions {

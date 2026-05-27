@@ -15,9 +15,13 @@
  * limitations under the License.
  */
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
+use ::rpc::measured_boot::FromGrpc;
 use base64::prelude::*;
 use carbide_uuid::machine::MachineId;
+use carbide_uuid::machine_validation::MachineValidationId;
 use chrono::Duration;
 use common::api_fixtures::dpu::{
     create_dpu_machine, create_dpu_machine_in_waiting_for_network_install,
@@ -39,12 +43,14 @@ use measured_boot::pcr::PcrRegisterValue;
 use measured_boot::records::MeasurementBundleState;
 use measured_boot::report::MeasurementReport;
 use model::controller_outcome::PersistentStateHandlerOutcome;
+use model::firmware::FirmwareComponentType;
 use model::hardware_info::TpmEkCertificate;
 use model::machine::health_override::HARDWARE_HEALTH_OVERRIDE_PREFIX;
 use model::machine::{
-    DpuInitState, DpuReprovisionStates, FailureCause, FailureDetails, FailureSource, InstanceState,
-    LockdownMode, MachineState, MachineValidatingState, ManagedHostState, MeasuringState,
-    ValidationState,
+    CleanupContext, CleanupState, DpuInitState, DpuReprovisionStates, FailureCause, FailureDetails,
+    FailureSource, HostReprovisionState, InstanceState, LockdownMode, MachineState,
+    MachineValidatingState, ManagedHostState, MeasuringState, RetryInfo, SpdmMeasuringState,
+    StateMachineArea, ValidationState,
 };
 use rpc::forge::forge_server::Forge;
 use rpc::forge::{HealthReportEntry, InsertMachineHealthReportRequest, TpmCaCert, TpmCaCertId};
@@ -54,6 +60,7 @@ use rpc::{DiscoveryData, DiscoveryInfo};
 use tonic::{Code, Request};
 
 use crate::handlers::measured_boot::rpc_forge::MachineDiscoveryInfo;
+use crate::measured_boot::convert_vec;
 use crate::state_controller::db_write_batch::DbWriteBatch;
 use crate::state_controller::machine::context::MachineStateHandlerContextObjects;
 use crate::state_controller::machine::handler::{
@@ -73,6 +80,7 @@ use crate::tests::common::api_fixtures::{
     TestEnvOverrides, create_managed_host_with_ek, discovery_completed, forge_agent_control,
     on_demand_machine_validation, update_time_params,
 };
+use crate::tests::common::attestation::spdm_attestation_run_to_failed_then_to_success;
 
 // Verify the group-sync property of `db::machine::try_update_network_config`,
 // where any write to a row in the host's group (the host or any of its DPUs)
@@ -170,6 +178,63 @@ async fn test_managed_host_network_config_group_sync(pool: sqlx::PgPool) {
     );
 }
 
+// Per-DPU network-config sync is rooted in the host-level
+// `network_config.version`, not the DPU's own row version.
+// carbide-api serves `host.version` to carbide-dpu-agent as
+// `managed_host_config_version`, and the agent echoes it back
+// as its observation; this just makes sure the host-level
+// verison is looked at, and the DPU-level version is ignored.
+#[crate::sqlx_test]
+async fn test_managed_host_network_config_sync_host_version(pool: sqlx::PgPool) {
+    let env = create_test_env(pool).await;
+    let mh = create_managed_host(&env).await;
+
+    // Do a baseline check that the initial ingestion
+    // `network_configured` brought DPU observations up
+    // to host.version, meaning things shold be in sync.
+    let mut txn = env.db_txn().await;
+    let snapshot = mh.snapshot(&mut txn).await;
+    assert!(
+        snapshot.managed_host_network_config_version_synced(),
+        "sync should be true after ingestion"
+    );
+
+    // Now, bump just the DPU row's `network_config_version` via
+    // a direct raw UPDATE (and bypassing `try_update_network_config`).
+    // The idea is this shouldn't matter, since we're looking at the
+    // host-level version.
+    let dpu_before = mh.dpu().db_machine(&mut txn).await;
+    let host_before = mh.host().db_machine(&mut txn).await;
+    let drifted_dpu_version = dpu_before.network_config.version.increment();
+    sqlx::query("UPDATE machines SET network_config_version = $1 WHERE id = $2")
+        .bind(drifted_dpu_version)
+        .bind(dpu_before.id)
+        .execute(txn.as_mut())
+        .await
+        .unwrap();
+    txn.commit().await.unwrap();
+
+    let mut txn = env.db_txn().await;
+    let host_after = mh.host().db_machine(&mut txn).await;
+    let dpu_after = mh.dpu().db_machine(&mut txn).await;
+    assert_eq!(
+        host_after.network_config.version, host_before.network_config.version,
+        "raw DPU update should leave host.version untouched"
+    );
+    assert_ne!(
+        dpu_after.network_config.version, host_after.network_config.version,
+        "dpu.row.version is now ahead of host.version"
+    );
+
+    // The observation version should still equal the host.version,
+    // so things should still be in sync!
+    let snapshot = mh.snapshot(&mut txn).await;
+    assert!(
+        snapshot.managed_host_network_config_version_synced(),
+        "sync should be true because observation == host.version, even though dpu.row.version is ahead"
+    );
+}
+
 // A freshly-created host defaults to admin (`use_admin_network` = true);
 // flipping the host-level `network_config.use_admin_network` to false
 // must be reflected by `ManagedHostStateSnapshot::use_admin_network()`.
@@ -240,7 +305,7 @@ async fn test_dpu_and_host_till_ready(pool: sqlx::PgPool) {
         (r#"{state="hostnotready",substate="discovered"}"#, 1),
         (
             r#"{state="hostnotready",substate="waitingfordiscovery"}"#,
-            1,
+            2,
         ),
         (r#"{state="hostnotready",substate="pollingbiossetup"}"#, 1),
         (
@@ -282,7 +347,7 @@ async fn test_dpu_and_host_till_ready(pool: sqlx::PgPool) {
         ("{state=\"hostnotready\",substate=\"discovered\"}", 1),
         (
             "{state=\"hostnotready\",substate=\"waitingfordiscovery\"}",
-            1,
+            2,
         ),
         ("{state=\"hostnotready\",substate=\"pollingbiossetup\"}", 1),
         (
@@ -564,10 +629,7 @@ async fn test_nvme_clean_failed_state_host(pool: sqlx::PgPool) {
                 message: "test nvme failure".to_string(),
             },
         ),
-        ram: None,
-        mem_overwrite: None,
-        ib: None,
-        result: 0,
+        ..Default::default()
     });
 
     env.api
@@ -608,10 +670,7 @@ async fn test_nvme_clean_failed_state_host(pool: sqlx::PgPool) {
                 message: "test nvme failure".to_string(),
             },
         ),
-        ram: None,
-        mem_overwrite: None,
-        ib: None,
-        result: 0,
+        ..Default::default()
     });
     env.api
         .cleanup_machine_completed(clean_failed_req)
@@ -639,11 +698,7 @@ async fn test_nvme_clean_failed_state_host(pool: sqlx::PgPool) {
     // Now the host cleans up successfully.
     let clean_succeeded_req = tonic::Request::new(rpc::MachineCleanupInfo {
         machine_id: mh.id.into(),
-        nvme: None,
-        ram: None,
-        mem_overwrite: None,
-        ib: None,
-        result: 0,
+        ..Default::default()
     });
     env.api
         .cleanup_machine_completed(clean_succeeded_req)
@@ -660,6 +715,165 @@ async fn test_nvme_clean_failed_state_host(pool: sqlx::PgPool) {
     assert!(matches!(
         host.current_state(),
         ManagedHostState::WaitingForCleanup { .. }
+    ));
+}
+
+#[crate::sqlx_test]
+async fn test_repeated_initial_discovery_cleanup_failure_preserves_host_init_source(
+    pool: sqlx::PgPool,
+) {
+    fn cleanup_failed_request(machine_id: MachineId) -> Request<rpc::MachineCleanupInfo> {
+        Request::new(rpc::MachineCleanupInfo {
+            machine_id: machine_id.into(),
+            nvme: Some(
+                rpc::protos::forge::machine_cleanup_info::CleanupStepResult {
+                    result: rpc::protos::forge::machine_cleanup_info::CleanupResult::Error as i32,
+                    message: "test nvme failure".to_string(),
+                },
+            ),
+            ..Default::default()
+        })
+    }
+
+    let env = create_test_env(pool).await;
+    let mh = common::api_fixtures::create_managed_host(&env).await;
+    let waiting_for_initial_discovery_cleanup = ManagedHostState::WaitingForCleanup {
+        cleanup_state: CleanupState::HostCleanup {
+            boss_controller_id: None,
+        },
+        cleanup_context: CleanupContext::InitialDiscovery,
+    };
+
+    let mut txn = env.db_txn().await;
+    let host = mh.host().db_machine(&mut txn).await;
+    db::machine::advance(
+        &host,
+        &mut txn,
+        &waiting_for_initial_discovery_cleanup,
+        None,
+    )
+    .await
+    .unwrap();
+    txn.commit().await.unwrap();
+
+    env.api
+        .cleanup_machine_completed(cleanup_failed_request(mh.id))
+        .await
+        .unwrap();
+    env.run_machine_state_controller_iteration().await;
+
+    let mut txn = env.db_txn().await;
+    let host = mh.host().db_machine(&mut txn).await;
+    assert!(matches!(
+        host.current_state(),
+        ManagedHostState::Failed {
+            details: FailureDetails {
+                cause: FailureCause::NVMECleanFailed { .. },
+                source: FailureSource::StateMachineArea(StateMachineArea::HostInit),
+                ..
+            },
+            ..
+        }
+    ));
+    assert!(matches!(
+        host.failure_details.source,
+        FailureSource::StateMachineArea(StateMachineArea::HostInit)
+    ));
+    let first_failed_at = host.failure_details.failed_at;
+    txn.commit().await.unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+
+    env.api
+        .cleanup_machine_completed(cleanup_failed_request(mh.id))
+        .await
+        .unwrap();
+
+    let mut txn = env.db_txn().await;
+    let host = mh.host().db_machine(&mut txn).await;
+    assert!(matches!(
+        host.failure_details.source,
+        FailureSource::StateMachineArea(StateMachineArea::HostInit)
+    ));
+    assert!(
+        host.failure_details.failed_at > first_failed_at,
+        "repeated cleanup failure should refresh failure details"
+    );
+    txn.commit().await.unwrap();
+
+    env.api
+        .cleanup_machine_completed(Request::new(rpc::MachineCleanupInfo {
+            machine_id: mh.id.into(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+
+    // Make the recovery timestamp unambiguously newer than the failed state version and failed_at.
+    let mut txn = env.db_txn().await;
+    db::machine::set_cleanup_time(&mh.id, chrono::Utc::now() + Duration::seconds(1), &mut txn)
+        .await
+        .unwrap();
+    txn.commit().await.unwrap();
+
+    env.run_machine_state_controller_iteration().await;
+
+    let mut txn = env.db_txn().await;
+    let host = mh.host().db_machine(&mut txn).await;
+    assert!(matches!(
+        host.current_state(),
+        ManagedHostState::HostInit {
+            machine_state: MachineState::WaitingForDiscovery
+        }
+    ));
+    txn.commit().await.unwrap();
+}
+
+#[crate::sqlx_test]
+async fn test_hdd_clean_failed_state_host(pool: sqlx::PgPool) {
+    let env = create_test_env(pool).await;
+    let mh = common::api_fixtures::create_managed_host(&env).await;
+    let mut txn = env.pool.begin().await.unwrap();
+    let host = mh.host().db_machine(&mut txn).await;
+
+    let clean_failed_req = tonic::Request::new(rpc::MachineCleanupInfo {
+        machine_id: mh.id.into(),
+        hdd: Some(
+            rpc::protos::forge::machine_cleanup_info::CleanupStepResult {
+                result: rpc::protos::forge::machine_cleanup_info::CleanupResult::Error as i32,
+                message: "test hdd failure".to_string(),
+            },
+        ),
+        ..Default::default()
+    });
+
+    env.api
+        .cleanup_machine_completed(clean_failed_req)
+        .await
+        .unwrap();
+
+    update_time_params(
+        &env.pool,
+        &host,
+        1,
+        Some(host.last_reboot_requested.as_ref().unwrap().time - Duration::seconds(59)),
+    )
+    .await;
+    // let state machine check the failure condition.
+    env.run_machine_state_controller_iteration().await;
+
+    let host = mh.host().db_machine(&mut txn).await;
+
+    assert!(matches!(
+        host.current_state(),
+        ManagedHostState::Failed {
+            details: FailureDetails {
+                cause: model::machine::FailureCause::NVMECleanFailed { .. },
+                ..
+            },
+            retry_count: 0,
+            ..
+        }
     ));
 }
 
@@ -838,8 +1052,9 @@ async fn test_failed_state_host_discovery_recovery(pool: sqlx::PgPool) {
         .api
         .get_pxe_instructions(tonic::Request::new(rpc::forge::PxeInstructionRequest {
             arch: rpc::forge::MachineArchitecture::X86 as i32,
-            interface_id: Some(host.interfaces[0].id),
             product: None,
+            client_ip: Some(host.interfaces[0].addresses[0].to_string()),
+            ..Default::default()
         }))
         .await
         .unwrap()
@@ -909,7 +1124,7 @@ async fn test_failed_state_host_discovery_recovery(pool: sqlx::PgPool) {
             validation_state: ValidationState::MachineValidation {
                 machine_validation: MachineValidatingState::MachineValidating {
                     context: "Discovery".to_string(),
-                    id: uuid::Uuid::default(),
+                    id: MachineValidationId::new(),
                     completed: 1,
                     total: 1,
                     is_enabled: true,
@@ -1185,7 +1400,7 @@ async fn test_measurement_failed_state_transition(pool: sqlx::PgPool) {
         .unwrap()
         .into_inner();
     assert_eq!(1, bundles_response.bundles.len());
-    let bundle = MeasurementBundle::from_grpc(Some(&bundles_response.bundles[0])).unwrap();
+    let bundle = MeasurementBundle::from_grpc(bundles_response.bundles[0].clone()).unwrap();
     assert_eq!(bundle.state, MeasurementBundleState::Active);
     let mut txn = env.db_txn().await;
     let retired_bundle = db::measured_boot::bundle::set_state_for_id(
@@ -1287,7 +1502,7 @@ async fn test_measurement_ready_to_retired_to_ca_fail_to_revoked_to_ready(pool: 
         .unwrap()
         .into_inner();
     assert_eq!(1, bundles_response.bundles.len());
-    let bundle = MeasurementBundle::from_grpc(Some(&bundles_response.bundles[0])).unwrap();
+    let bundle = MeasurementBundle::from_grpc(bundles_response.bundles[0].clone()).unwrap();
     assert_eq!(bundle.state, MeasurementBundleState::Active);
     let mut txn = env.db_txn().await;
     let retired_bundle = db::measured_boot::bundle::set_state_for_id(
@@ -1430,7 +1645,16 @@ async fn test_measurement_host_init_failed_to_waiting_for_measurements_to_pendin
 ) {
     let mut config = get_config();
     config.attestation_enabled = true;
-    let env = create_test_env_with_overrides(pool, TestEnvOverrides::with_config(config)).await;
+    config.spdm.enabled = true;
+
+    let mut overrides = TestEnvOverrides::with_config(config);
+
+    // set NRAS verifier to fail
+    let nras_should_fail_parsing_flag = Arc::new(AtomicBool::new(true));
+
+    overrides.nras_should_fail_parsing = Some(nras_should_fail_parsing_flag.clone());
+
+    let env = create_test_env_with_overrides(pool, overrides).await;
 
     // 1. create_dpu as usual
     // 2. start creating host until ca validation failure is encountered
@@ -1517,7 +1741,7 @@ async fn test_measurement_host_init_failed_to_waiting_for_measurements_to_pendin
         .attest_candidate_machine(Request::new(
             rpc::protos::measured_boot::AttestCandidateMachineRequest {
                 machine_id: host_machine_id.to_string(),
-                pcr_values: PcrRegisterValue::to_pb_vec(&pcr_values),
+                pcr_values: convert_vec(pcr_values),
             },
         ))
         .await
@@ -1549,7 +1773,7 @@ async fn test_measurement_host_init_failed_to_waiting_for_measurements_to_pendin
         .unwrap()
         .into_inner();
     assert_eq!(1, reports_response.reports.len());
-    let report = MeasurementReport::from_grpc(Some(&reports_response.reports[0])).unwrap();
+    let report = MeasurementReport::from_grpc(reports_response.reports[0].clone()).unwrap();
 
     let _promotion_response = env
         .api
@@ -1561,7 +1785,22 @@ async fn test_measurement_host_init_failed_to_waiting_for_measurements_to_pendin
         ))
         .await
         .unwrap();
-    txn.commit().await.unwrap();
+
+    // ---------
+    // now do the spdm attestation
+
+    spdm_attestation_run_to_failed_then_to_success(
+        env,
+        nras_should_fail_parsing_flag,
+        &mh,
+        &mut txn,
+        ManagedHostState::HostInit {
+            machine_state: MachineState::SpdmMeasuring {
+                spdm_measuring_state: SpdmMeasuringState::PollResult,
+            },
+        },
+    )
+    .await;
 
     // ---------
     // after the measurements are in, we should proceed to ready state
@@ -1586,6 +1825,43 @@ async fn test_measurement_host_init_failed_to_waiting_for_measurements_to_pendin
         }))
         .await
         .expect("Failed to add hardware health report to newly created machine");
+
+    let response = mh.host().forge_agent_control().await;
+    assert!(matches!(response.action, Some(Action::Retry(_))));
+    assert_eq!(response.legacy_action, LegacyAction::Retry as i32);
+
+    env.run_machine_state_controller_iteration_until_state_matches(
+        &host_machine_id,
+        3,
+        ManagedHostState::WaitingForCleanup {
+            cleanup_state: CleanupState::HostCleanup {
+                boss_controller_id: None,
+            },
+            cleanup_context: CleanupContext::InitialDiscovery,
+        },
+    )
+    .await;
+
+    let response = mh.host().forge_agent_control().await;
+    assert!(matches!(response.action, Some(Action::Reset(_))));
+    assert_eq!(response.legacy_action, LegacyAction::Reset as i32);
+
+    env.api
+        .cleanup_machine_completed(Request::new(rpc::MachineCleanupInfo {
+            machine_id: mh.id.into(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+
+    env.run_machine_state_controller_iteration_until_state_matches(
+        &host_machine_id,
+        3,
+        ManagedHostState::HostInit {
+            machine_state: MachineState::WaitingForDiscovery,
+        },
+    )
+    .await;
 
     let response = mh.host().forge_agent_control().await;
     assert!(matches!(response.action, Some(Action::Discovery(_))));
@@ -1620,7 +1896,7 @@ async fn test_measurement_host_init_failed_to_waiting_for_measurements_to_pendin
             validation_state: ValidationState::MachineValidation {
                 machine_validation: MachineValidatingState::MachineValidating {
                     context: "Discovery".to_string(),
-                    id: uuid::Uuid::default(),
+                    id: MachineValidationId::new(),
                     completed: 1,
                     total: 1,
                     is_enabled: env.config.machine_validation_config.enabled,
@@ -1657,6 +1933,91 @@ async fn test_measurement_host_init_failed_to_waiting_for_measurements_to_pendin
 }
 
 #[crate::sqlx_test]
+async fn test_forge_agent_control_host_reprovision_scout_upgrade_does_not_reset_without_cleanup_timestamp(
+    pool: sqlx::PgPool,
+) {
+    let env = create_test_env(pool).await;
+    let mh = create_managed_host(&env).await;
+    let upgrade_task_id = uuid::Uuid::new_v4().to_string();
+    let task_json = serde_json::json!({
+        "upgrade_task_id": &upgrade_task_id,
+        "component_type": "bmc",
+        "target_version": "1.2.3",
+        "script": {
+            "url": "http://pxe/scripts/upgrade.sh",
+            "sha256": "script-sha",
+        },
+        "execution_timeout_seconds": 30,
+        "artifact_download_timeout_seconds": 10,
+        "file_artifacts": [{
+            "url": "http://pxe/firmware.bin",
+            "sha256": "firmware-sha",
+        }],
+    })
+    .to_string();
+
+    let state = ManagedHostState::HostReprovision {
+        reprovision_state: HostReprovisionState::WaitingForScoutUpgrade {
+            upgrade_task_id,
+            firmware_type: FirmwareComponentType::Bmc,
+            final_version: "1.2.3".to_string(),
+            power_drains_needed: None,
+            started_at: chrono::Utc::now(),
+            deadline: chrono::Utc::now() + chrono::TimeDelta::minutes(60),
+            task_json,
+            result: None,
+        },
+        retry_count: 0,
+    };
+
+    let mut txn = env.db_txn().await;
+    let host = mh.host().db_machine(&mut txn).await;
+    db::machine::advance(&host, &mut txn, &state, None)
+        .await
+        .unwrap();
+    db::machine::clear_cleanup_time(&mh.host().id, &mut txn)
+        .await
+        .unwrap();
+    txn.commit().await.unwrap();
+
+    let response = mh.host().forge_agent_control().await;
+    assert!(matches!(response.action, Some(Action::FirmwareUpgrade(_))));
+    assert_eq!(response.legacy_action, LegacyAction::FirmwareUpgrade as i32);
+}
+
+#[crate::sqlx_test]
+async fn test_forge_agent_control_assigned_discovery_boot_does_not_reset_without_cleanup_timestamp(
+    pool: sqlx::PgPool,
+) {
+    let env = create_test_env(pool).await;
+    let mh = create_managed_host(&env).await;
+    let state = ManagedHostState::Assigned {
+        instance_state: InstanceState::BootingWithDiscoveryImage {
+            retry: RetryInfo { count: 0 },
+        },
+    };
+
+    let mut txn = env.db_txn().await;
+    let host = mh.host().db_machine(&mut txn).await;
+    db::machine::advance(&host, &mut txn, &state, None)
+        .await
+        .unwrap();
+    db::machine::clear_cleanup_time(&mh.host().id, &mut txn)
+        .await
+        .unwrap();
+    txn.commit().await.unwrap();
+
+    let mut txn = env.db_txn().await;
+    let host = mh.host().db_machine(&mut txn).await;
+    assert!(host.last_cleanup_time.is_none());
+    txn.commit().await.unwrap();
+
+    let response = mh.host().forge_agent_control().await;
+    assert!(matches!(response.action, Some(Action::Noop(_))));
+    assert_eq!(response.legacy_action, LegacyAction::Noop as i32);
+}
+
+#[crate::sqlx_test]
 async fn test_update_reboot_requested_time_off(pool: sqlx::PgPool) {
     let mut config = get_config();
     config.attestation_enabled = true;
@@ -1677,7 +2038,7 @@ async fn test_update_reboot_requested_time_off(pool: sqlx::PgPool) {
     let mut txn = env.db_txn().await;
     let snapshot = mh.snapshot(&mut txn).await;
     let mut write_batch = DbWriteBatch::new();
-    let mut services = env.state_handler_services();
+    let mut services = env.machine_state_handler_services();
     let mut metrics = MachineMetrics::default();
     let mut ctx = StateHandlerContext::<MachineStateHandlerContextObjects> {
         services: &mut services,
@@ -1714,7 +2075,7 @@ async fn test_update_reboot_requested_time_off(pool: sqlx::PgPool) {
 
     let mut txn = env.db_txn().await;
     let mut write_batch = DbWriteBatch::new();
-    let mut services = env.state_handler_services();
+    let mut services = env.machine_state_handler_services();
     let mut metrics = MachineMetrics::default();
     let mut ctx = StateHandlerContext::<MachineStateHandlerContextObjects> {
         services: &mut services,
@@ -1746,7 +2107,7 @@ async fn test_update_reboot_requested_time_off(pool: sqlx::PgPool) {
 
     let mut txn = env.db_txn().await;
     let mut write_batch = DbWriteBatch::new();
-    let mut services = env.state_handler_services();
+    let mut services = env.machine_state_handler_services();
     let mut metrics = MachineMetrics::default();
     let mut ctx = StateHandlerContext::<MachineStateHandlerContextObjects> {
         services: &mut services,
@@ -2040,6 +2401,42 @@ async fn test_tpm_logging(pool: sqlx::PgPool) {
     assert!(
         err.message().contains("machine_id foreign key violation"),
         "Expected TPM mismatch error, got: {}",
+        err.message()
+    );
+}
+
+#[crate::sqlx_test]
+async fn test_host_discovery_without_tpm_cert_does_not_downgrade_existing_tpm_identity(
+    pool: sqlx::PgPool,
+) {
+    let mut config = get_config();
+    config.tpm_required = false;
+    let env = create_test_env_with_overrides(pool, TestEnvOverrides::with_config(config)).await;
+    let host_config = env.managed_host_config();
+    let dpu_machine_id = create_dpu_machine(&env, &host_config).await;
+
+    let machine_interface_id = host_discover_dhcp(&env, &host_config, &dpu_machine_id).await;
+
+    host_discover_machine(&env, &host_config, machine_interface_id).await;
+
+    let mut discovery_info =
+        DiscoveryInfo::try_from(model::hardware_info::HardwareInfo::from(&host_config)).unwrap();
+    discovery_info.tpm_ek_certificate = None;
+
+    let result = env
+        .api
+        .discover_machine(Request::new(MachineDiscoveryInfo {
+            machine_interface_id: Some(machine_interface_id),
+            discovery_data: Some(DiscoveryData::Info(discovery_info)),
+            create_machine: false,
+        }))
+        .await;
+
+    let err = result.expect_err("Expected serial fallback to be rejected");
+    assert_eq!(err.code(), Code::FailedPrecondition);
+    assert!(
+        err.message().contains("TPM EK certificate missing"),
+        "Expected missing TPM EK certificate error, got: {}",
         err.message()
     );
 }

@@ -22,7 +22,10 @@ use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 
 use carbide_uuid::machine::MachineId;
+use carbide_uuid::nvlink::NvLinkDomainId;
+use carbide_uuid::power_shelf::PowerShelfId;
 use carbide_uuid::rack::RackId;
+use carbide_uuid::switch::SwitchId;
 use mac_address::MacAddress;
 use url::Url;
 
@@ -62,12 +65,16 @@ pub struct BmcEndpoint {
 }
 
 impl BmcEndpoint {
+    pub fn key(&self) -> String {
+        self.addr.mac.to_string()
+    }
+
     pub fn hash_key(&self) -> Cow<'static, str> {
         Cow::Owned(
             self.rack_id
                 .as_ref()
                 .map(|id| id.to_string())
-                .unwrap_or_else(|| self.addr.mac.to_string()),
+                .unwrap_or_else(|| self.key()),
         )
     }
 
@@ -93,9 +100,14 @@ impl BmcEndpoint {
     pub fn log_identity(&self) -> Cow<'_, str> {
         match &self.metadata {
             Some(EndpointMetadata::Machine(machine)) => Cow::Owned(machine.machine_id.to_string()),
+            Some(EndpointMetadata::PowerShelf(power_shelf)) => Cow::Borrowed(&power_shelf.serial),
             Some(EndpointMetadata::Switch(switch)) => Cow::Borrowed(&switch.serial),
             None => Cow::Owned(self.addr.mac.to_string()),
         }
+    }
+
+    pub fn switch_data(&self) -> Option<&SwitchData> {
+        self.metadata.as_ref().and_then(EndpointMetadata::as_switch)
     }
 
     pub fn credentials(&self) -> BmcCredentials {
@@ -115,13 +127,22 @@ impl BmcEndpoint {
 #[derive(Clone, Debug)]
 pub enum EndpointMetadata {
     Machine(MachineData),
+    PowerShelf(PowerShelfData),
     Switch(SwitchData),
 }
 
 impl EndpointMetadata {
+    pub fn as_switch(&self) -> Option<&SwitchData> {
+        match self {
+            EndpointMetadata::Switch(switch) => Some(switch),
+            _ => None,
+        }
+    }
+
     pub fn serial_number(&self) -> Option<&str> {
         match self {
             EndpointMetadata::Machine(machine) => machine.machine_serial.as_deref(),
+            EndpointMetadata::PowerShelf(power_shelf) => Some(power_shelf.serial.as_str()),
             EndpointMetadata::Switch(switch) => Some(switch.serial.as_str()),
         }
     }
@@ -131,11 +152,32 @@ impl EndpointMetadata {
 pub struct MachineData {
     pub machine_id: MachineId,
     pub machine_serial: Option<String>,
+    pub slot_number: Option<i32>,
+    pub tray_index: Option<i32>,
+    pub nvlink_domain_uuid: Option<NvLinkDomainId>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PowerShelfData {
+    pub id: Option<PowerShelfId>,
+    pub serial: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SwitchEndpointRole {
+    Bmc,
+    Host,
 }
 
 #[derive(Clone, Debug)]
 pub struct SwitchData {
+    pub id: Option<SwitchId>,
     pub serial: String,
+    pub slot_number: Option<i32>,
+    pub tray_index: Option<i32>,
+    pub endpoint_role: SwitchEndpointRole,
+    pub is_primary: bool,
+    pub nmxt_enabled: bool,
 }
 
 #[derive(Clone)]

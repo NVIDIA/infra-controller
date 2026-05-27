@@ -3,6 +3,8 @@
 {% block title %}Power Shelves{% endblock %}
 
 {% block content %}
+<div id="json"><a id="json-link" href="">JSON</a></div>
+
 <div class="container-fluid">
     <div class="row">
         <div class="col">
@@ -35,7 +37,7 @@
                             <tr>
                                 <td>{{ shelf.id|power_shelf_id_link|safe }}</td>
                                 <td>{{ shelf.name }}</td>
-                                <td>{{ shelf.state }}</td>
+                                <td>{{ shelf.state_display|safe }}</td>
                                 <td>{{ shelf.capacity }}</td>
                                 <td>{{ shelf.voltage }}</td>
                                 <td>

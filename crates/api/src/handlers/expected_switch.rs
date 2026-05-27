@@ -23,9 +23,21 @@ use tonic::{Request, Response, Status};
 
 use crate::CarbideError;
 use crate::api::Api;
-use crate::handlers::machine_interface_address::{
-    preallocate_machine_interface, update_preallocated_machine_interface,
-};
+use crate::handlers::machine_interface_address::update_preallocated_machine_interface;
+
+/// `nvos_ip_address` is paired with the single wired NVOS port. We reject any
+/// caller that sets it alongside zero-or-multiple `nvos_mac_addresses`, so the
+/// (mac, ip) pairing stays unambiguous for the discover hook and the
+/// reconciliation pass.
+fn validate_nvos_ip_pairing(switch: &ExpectedSwitch) -> Result<(), CarbideError> {
+    if switch.nvos_ip_address.is_some() && switch.nvos_mac_addresses.len() != 1 {
+        return Err(CarbideError::InvalidArgument(format!(
+            "nvos_ip_address requires exactly one nvos_mac_addresses entry, got {}",
+            switch.nvos_mac_addresses.len(),
+        )));
+    }
+    Ok(())
+}
 
 pub async fn add_expected_switch(
     api: &Api,
@@ -39,6 +51,8 @@ pub async fn add_expected_switch(
                 CarbideError::InvalidArgument(e.to_string())
             })?;
 
+    validate_nvos_ip_pairing(&switch)?;
+
     let mut txn = api
         .database_connection
         .begin()
@@ -46,10 +60,6 @@ pub async fn add_expected_switch(
         .map_err(|e| CarbideError::Internal {
             message: format!("Database error: {}", e),
         })?;
-
-    if let Some(bmc_ip) = switch.bmc_ip_address {
-        preallocate_machine_interface(&mut txn, switch.bmc_mac_address, bmc_ip).await?;
-    }
 
     db_expected_switch::create(&mut txn, switch)
         .await
@@ -105,6 +115,8 @@ pub async fn update_expected_switch(
                 CarbideError::InvalidArgument(e.to_string())
             })?;
 
+    validate_nvos_ip_pairing(&switch)?;
+
     let mut txn = api
         .database_connection
         .begin()
@@ -115,6 +127,11 @@ pub async fn update_expected_switch(
 
     if let Some(bmc_ip) = switch.bmc_ip_address {
         update_preallocated_machine_interface(&mut txn, switch.bmc_mac_address, bmc_ip).await?;
+    }
+    if let Some(nvos_ip) = switch.nvos_ip_address {
+        // Pairing already validated above; nvos_mac_addresses has exactly one entry.
+        let nvos_mac = switch.nvos_mac_addresses[0];
+        update_preallocated_machine_interface(&mut txn, nvos_mac, nvos_ip).await?;
     }
 
     db_expected_switch::update(&mut txn, &switch)

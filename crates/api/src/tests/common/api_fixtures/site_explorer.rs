@@ -20,6 +20,7 @@ use std::iter;
 use std::net::IpAddr;
 
 use carbide_uuid::machine::MachineId;
+use carbide_uuid::machine_validation::MachineValidationId;
 use carbide_uuid::power_shelf::{PowerShelfId, PowerShelfIdSource, PowerShelfType};
 use carbide_uuid::rack::{RackId, RackProfileId};
 use carbide_uuid::switch::SwitchId;
@@ -36,9 +37,10 @@ use model::expected_machine::ExpectedMachine;
 use model::hardware_info::HardwareInfo;
 use model::machine::health_override::HARDWARE_HEALTH_OVERRIDE_PREFIX;
 use model::machine::{
-    BomValidating, BomValidatingContext, DpfState, DpuInitState, FailureCause, FailureDetails,
-    FailureSource, LockdownInfo, LockdownMode, LockdownState, MachineState, MachineValidatingState,
-    ManagedHostState, ManagedHostStateSnapshot, MeasuringState, ValidationState,
+    BomValidating, BomValidatingContext, CleanupContext, CleanupState, DpfState, DpuInitState,
+    FailureCause, FailureDetails, FailureSource, LockdownInfo, LockdownMode, LockdownState,
+    MachineState, MachineValidatingState, ManagedHostState, ManagedHostStateSnapshot,
+    MeasuringState, SpdmMeasuringState, ValidationState,
 };
 use model::power_shelf::power_shelf_id::from_hardware_info;
 use model::power_shelf::{NewPowerShelf, PowerShelfConfig};
@@ -71,6 +73,117 @@ use crate::tests::common::api_fixtures::{
 };
 use crate::tests::common::mac_address_pool::EXPECTED_SWITCH_NVOS_MAC_ADDRESS_POOL;
 use crate::tests::common::rpc_builder::DhcpDiscovery;
+
+async fn current_host_state_and_cleanup_needed(
+    env: &TestEnv,
+    host_machine_id: MachineId,
+) -> (ManagedHostState, bool) {
+    let mut txn = env.db_txn().await;
+    let machine = db::machine::find_one(
+        txn.as_mut(),
+        &host_machine_id,
+        model::machine::machine_search_config::MachineSearchConfig::default(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+
+    (
+        machine.current_state().clone(),
+        machine.last_cleanup_time.is_none(),
+    )
+}
+
+async fn complete_initial_discovery_cleanup_if_needed(env: &TestEnv, host_machine_id: MachineId) {
+    // Keep the shared fixture usable with both lifecycle shapes: older flows stay in discovery,
+    // while newer flows require state-machine-owned cleanup before discovery can complete.
+    let mut state = env
+        .run_machine_state_controller_iteration_until_state_condition(
+            &host_machine_id,
+            20,
+            |machine| {
+                matches!(
+                    machine.current_state(),
+                    ManagedHostState::HostInit {
+                        machine_state: MachineState::WaitingForDiscovery
+                    } | ManagedHostState::WaitingForCleanup {
+                        cleanup_context: CleanupContext::InitialDiscovery,
+                        ..
+                    }
+                )
+            },
+        )
+        .await;
+
+    if matches!(
+        state,
+        ManagedHostState::HostInit {
+            machine_state: MachineState::WaitingForDiscovery
+        }
+    ) {
+        let (_, needs_initial_cleanup) =
+            current_host_state_and_cleanup_needed(env, host_machine_id).await;
+        if !needs_initial_cleanup {
+            return;
+        }
+
+        env.run_machine_state_controller_iteration().await;
+        (state, _) = current_host_state_and_cleanup_needed(env, host_machine_id).await;
+
+        if matches!(
+            state,
+            ManagedHostState::HostInit {
+                machine_state: MachineState::WaitingForDiscovery
+            }
+        ) {
+            return;
+        }
+    }
+
+    if !matches!(
+        state,
+        ManagedHostState::WaitingForCleanup {
+            cleanup_state: CleanupState::HostCleanup { .. },
+            cleanup_context: CleanupContext::InitialDiscovery,
+        }
+    ) {
+        env.run_machine_state_controller_iteration_until_state_condition(
+            &host_machine_id,
+            3,
+            |machine| {
+                matches!(
+                    machine.current_state(),
+                    ManagedHostState::WaitingForCleanup {
+                        cleanup_state: CleanupState::HostCleanup { .. },
+                        cleanup_context: CleanupContext::InitialDiscovery,
+                    }
+                )
+            },
+        )
+        .await;
+    }
+
+    let response = forge_agent_control(env, host_machine_id).await;
+    assert!(matches!(response.action, Some(Action::Reset(_))));
+    assert_eq!(response.legacy_action, LegacyAction::Reset as i32);
+
+    env.api
+        .cleanup_machine_completed(Request::new(rpc::MachineCleanupInfo {
+            machine_id: host_machine_id.into(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+
+    env.run_machine_state_controller_iteration_until_state_matches(
+        &host_machine_id,
+        3,
+        ManagedHostState::HostInit {
+            machine_state: MachineState::WaitingForDiscovery,
+        },
+    )
+    .await;
+}
 
 /// MockExploredHost presents a fluent interface for declaring a mock host and running it through
 /// the site-explorer ingestion lifecycle. Its methods are intended to be chained together to
@@ -155,7 +268,7 @@ impl<'a> MockExploredHost<'a> {
                     self.managed_host.dpus[dpu_index as usize].bmc_mac_address,
                     FIXTURE_UNDERLAY_NETWORK_SEGMENT_GATEWAY.ip(),
                 )
-                .vendor_string("SomeVendor")
+                .vendor_string("NVIDIA/BF/BMC")
                 .tonic_request(),
             )
             .await;
@@ -654,15 +767,26 @@ impl<'a> MockExploredHost<'a> {
             inject_machine_measurements(self.test_env, host_machine_id).await;
         }
 
-        self.test_env
-            .run_machine_state_controller_iteration_until_state_matches(
-                &host_machine_id,
-                20,
-                ManagedHostState::HostInit {
-                    machine_state: MachineState::WaitingForDiscovery,
-                },
-            )
-            .await;
+        // if SPDM attestation is enabled, we need to drive it to completion
+        if self.test_env.config.spdm.enabled {
+            self.test_env
+                .run_machine_state_controller_iteration_until_state_matches(
+                    &host_machine_id,
+                    10,
+                    ManagedHostState::HostInit {
+                        machine_state: MachineState::SpdmMeasuring {
+                            spdm_measuring_state: SpdmMeasuringState::PollResult,
+                        },
+                    },
+                )
+                .await;
+
+            for _ in 0..10 {
+                self.test_env.run_spdm_controller_iteration().await;
+            }
+        }
+
+        complete_initial_discovery_cleanup_if_needed(self.test_env, host_machine_id).await;
 
         self.test_env
             .api
@@ -699,7 +823,7 @@ impl<'a> MockExploredHost<'a> {
                                         mode: LockdownMode::Enable,
                                     },
                                 },
-                            }
+                            } | ManagedHostState::BomValidating { .. }
                         )
                 },
             )
@@ -709,13 +833,19 @@ impl<'a> MockExploredHost<'a> {
             return self;
         }
 
-        // We use forge_dpu_agent's health reporting as a signal that
-        // DPU has rebooted.
-        super::network_configured(
-            self.test_env,
-            &self.dpu_machine_ids.values().copied().collect(),
-        )
-        .await;
+        // Zero-DPU hosts skip the WaitForDPUUp lockdown state and land
+        // directly in BomValidating (see `is_zero_dpu` short-circuit in
+        // `LockdownState::TimeWaitForDPUDown`). There are no DPUs to
+        // signal as configured, so skip the network_configured handshake.
+        if !self.dpu_machine_ids.is_empty() {
+            // We use carbide-dpu-agent health reporting as a signal that
+            // DPU has rebooted.
+            super::network_configured(
+                self.test_env,
+                &self.dpu_machine_ids.values().copied().collect(),
+            )
+            .await;
+        }
 
         if self.test_env.config.bom_validation.enabled
             && !self
@@ -878,15 +1008,7 @@ impl<'a> MockExploredHost<'a> {
             .machine_id
             .unwrap();
         let mut machine_validation_result = machine_validation_result_data.unwrap_or_default();
-        self.test_env
-            .run_machine_state_controller_iteration_until_state_matches(
-                &host_machine_id,
-                10,
-                ManagedHostState::HostInit {
-                    machine_state: MachineState::WaitingForDiscovery,
-                },
-            )
-            .await;
+        complete_initial_discovery_cleanup_if_needed(self.test_env, host_machine_id).await;
 
         self.test_env
             .api
@@ -938,7 +1060,7 @@ impl<'a> MockExploredHost<'a> {
                     validation_state: ValidationState::MachineValidation {
                         machine_validation: MachineValidatingState::MachineValidating {
                             context: "Discovery".to_string(),
-                            id: uuid::Uuid::default(),
+                            id: MachineValidationId::new(),
                             completed: 1,
                             total: 1,
                             is_enabled: self.test_env.config.machine_validation_config.enabled,
@@ -951,12 +1073,10 @@ impl<'a> MockExploredHost<'a> {
         let response = forge_agent_control(self.test_env, host_machine_id).await;
         if self.test_env.config.machine_validation_config.enabled {
             let uuid = &response.data.unwrap().pair[1].value;
-            let validation_id = Some(rpc::Uuid {
-                value: uuid.to_owned(),
-            });
+            let validation_id: MachineValidationId = uuid.parse().unwrap();
             let success = update_machine_validation_run(
                 self.test_env,
-                validation_id.clone(),
+                Some(validation_id),
                 Some(rpc::Duration::from(std::time::Duration::from_secs(1200))),
                 1,
             )
@@ -964,13 +1084,13 @@ impl<'a> MockExploredHost<'a> {
             assert_eq!(success.message, "Success".to_string());
             let runs = get_machine_validation_runs(self.test_env, &host_machine_id, false).await;
             for run in runs.runs {
-                if run.validation_id == validation_id {
+                if run.validation_id == Some(validation_id) {
                     assert_eq!(run.status.unwrap_or_default().total, 1);
                     assert_eq!(run.status.unwrap_or_default().completed_tests, 0);
                     assert_eq!(run.duration_to_complete.unwrap_or_default().seconds, 1200);
                 }
             }
-            machine_validation_result.validation_id = validation_id.clone();
+            machine_validation_result.validation_id = Some(validation_id);
             persist_machine_validation_result(self.test_env, machine_validation_result.clone())
                 .await;
             assert_eq!(
@@ -985,7 +1105,7 @@ impl<'a> MockExploredHost<'a> {
 
             let runs = get_machine_validation_runs(self.test_env, &host_machine_id, false).await;
             for run in runs.runs {
-                if run.validation_id == validation_id {
+                if run.validation_id == Some(validation_id) {
                     assert_eq!(run.status.unwrap_or_default().total, 1);
                     assert_eq!(
                         run.status.unwrap_or_default().completed_tests,
@@ -1532,6 +1652,7 @@ pub async fn new_power_shelf(
     let new_power_shelf = NewPowerShelf {
         id: power_shelf_id,
         config,
+        bmc_mac_address: None,
         metadata: None,
         rack_id: None,
     };
@@ -1817,6 +1938,7 @@ pub async fn create_expected_switches(
                 None
             },
             bmc_ip_address: None,
+            nvos_ip_address: None,
             metadata: Metadata {
                 name: format!("Switch{}", i + 1),
                 description: format!("Test Switch {}", i + 1),
@@ -1829,7 +1951,7 @@ pub async fn create_expected_switches(
             .await
             .expect("unable to create expected switch");
 
-        let network_segment = db::network_segment::admin(txn)
+        let network_segments = db::network_segment::admin(txn)
             .await
             .map_err(|e| eyre::eyre!("Failed to get admin network segment: {:?}", e))
             .unwrap();
@@ -1837,9 +1959,8 @@ pub async fn create_expected_switches(
         for nvos_mac in &result.nvos_mac_addresses.clone() {
             db::machine_interface::create(
                 txn,
-                &network_segment,
+                &network_segments,
                 nvos_mac,
-                network_segment.subdomain_id,
                 false,
                 AddressSelectionStrategy::NextAvailableIp,
             )
@@ -1854,9 +1975,8 @@ pub async fn create_expected_switches(
 
         db::machine_interface::create(
             txn,
-            &overlay_network_segment,
+            std::slice::from_ref(&overlay_network_segment),
             &result.bmc_mac_address.clone(),
-            overlay_network_segment.subdomain_id,
             false,
             AddressSelectionStrategy::NextAvailableIp,
         )

@@ -1,4 +1,19 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # =============================================================================
 # bootstrap_ssh_host_key.sh — pre-create ssh-host-key in OpenSSH format
 #
@@ -9,7 +24,7 @@
 #   "-----BEGIN PRIVATE KEY-----"
 # which ssh-console-rs rejects with an encoding error at startup.
 #
-# This script creates the secret before `helmfile sync -l name=carbide-prereqs`
+# This script creates the secret before `helmfile sync -l name=nico-prereqs`
 # runs. Helm's lookup in templates/_helpers.tpl finds the existing secret and
 # reuses the key, so it is never overwritten with a PKCS8-format key.
 #
@@ -19,7 +34,7 @@
 # =============================================================================
 set -euo pipefail
 
-NAMESPACE="${1:-forge-system}"
+NAMESPACE="${1:-nico-system}"
 
 if kubectl get secret ssh-host-key -n "${NAMESPACE}" &>/dev/null; then
     echo "ssh-host-key already exists in ${NAMESPACE} — skipping"
@@ -37,8 +52,8 @@ kubectl create secret generic ssh-host-key \
 kubectl label secret ssh-host-key -n "${NAMESPACE}" \
     app.kubernetes.io/managed-by=Helm --overwrite
 kubectl annotate secret ssh-host-key -n "${NAMESPACE}" \
-    meta.helm.sh/release-name=carbide-prereqs \
-    meta.helm.sh/release-namespace=forge-system \
+    meta.helm.sh/release-name=nico-prereqs \
+    meta.helm.sh/release-namespace=nico-system \
     --overwrite
 
 rm -f /tmp/ssh_host_ed25519_key /tmp/ssh_host_ed25519_key.pub

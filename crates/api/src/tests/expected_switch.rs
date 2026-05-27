@@ -61,6 +61,7 @@ async fn test_duplicate_fail_create(pool: sqlx::PgPool) -> Result<(), Box<dyn st
             metadata: Metadata::default(),
             rack_id: None,
             bmc_retain_credentials: None,
+            nvos_ip_address: None,
             nvos_username: None,
             nvos_password: None,
         },
@@ -163,6 +164,7 @@ async fn test_add_expected_switch(pool: sqlx::PgPool) {
             rack_id: None,
             bmc_ip_address: String::new(),
             bmc_retain_credentials: None,
+            nvos_ip_address: None,
         },
         rpc::forge::ExpectedSwitch {
             expected_switch_id: None,
@@ -177,6 +179,7 @@ async fn test_add_expected_switch(pool: sqlx::PgPool) {
             rack_id: None,
             bmc_ip_address: String::new(),
             bmc_retain_credentials: None,
+            nvos_ip_address: None,
         },
         rpc::forge::ExpectedSwitch {
             expected_switch_id: None,
@@ -204,6 +207,7 @@ async fn test_add_expected_switch(pool: sqlx::PgPool) {
             rack_id: Some(RackId::new(uuid::Uuid::new_v4().to_string())),
             bmc_ip_address: String::new(),
             bmc_retain_credentials: None,
+            nvos_ip_address: None,
         },
     ] {
         env.api
@@ -304,6 +308,7 @@ async fn test_update_expected_switch(pool: sqlx::PgPool) {
             rack_id: None,
             bmc_ip_address: String::new(),
             bmc_retain_credentials: None,
+            nvos_ip_address: None,
         },
         rpc::forge::ExpectedSwitch {
             expected_switch_id: None,
@@ -318,6 +323,7 @@ async fn test_update_expected_switch(pool: sqlx::PgPool) {
             rack_id: None,
             bmc_ip_address: String::new(),
             bmc_retain_credentials: None,
+            nvos_ip_address: None,
         },
         rpc::forge::ExpectedSwitch {
             expected_switch_id: None,
@@ -345,6 +351,7 @@ async fn test_update_expected_switch(pool: sqlx::PgPool) {
             rack_id: Some(RackId::new(uuid::Uuid::new_v4().to_string())),
             bmc_ip_address: String::new(),
             bmc_retain_credentials: None,
+            nvos_ip_address: None,
         },
     ] {
         env.api
@@ -398,6 +405,7 @@ async fn test_get_expected_switch_by_id(pool: sqlx::PgPool) {
         rack_id: None,
         bmc_ip_address: String::new(),
         bmc_retain_credentials: None,
+        nvos_ip_address: None,
     };
 
     env.api
@@ -440,6 +448,7 @@ async fn test_delete_expected_switch_by_id(pool: sqlx::PgPool) {
         rack_id: None,
         bmc_ip_address: String::new(),
         bmc_retain_credentials: None,
+        nvos_ip_address: None,
     };
 
     env.api
@@ -494,6 +503,7 @@ async fn test_update_expected_switch_by_id(pool: sqlx::PgPool) {
         rack_id: None,
         bmc_ip_address: String::new(),
         bmc_retain_credentials: None,
+        nvos_ip_address: None,
     };
 
     env.api
@@ -523,6 +533,7 @@ async fn test_update_expected_switch_by_id(pool: sqlx::PgPool) {
         rack_id: None,
         bmc_ip_address: String::new(),
         bmc_retain_credentials: None,
+        nvos_ip_address: None,
     };
 
     env.api
@@ -565,6 +576,7 @@ async fn test_create_expected_switch_with_explicit_id(pool: sqlx::PgPool) {
         rack_id: None,
         bmc_ip_address: String::new(),
         bmc_retain_credentials: None,
+        nvos_ip_address: None,
     };
 
     env.api
@@ -608,6 +620,7 @@ async fn test_create_expected_switch_auto_generates_id(pool: sqlx::PgPool) {
         rack_id: None,
         bmc_ip_address: String::new(),
         bmc_retain_credentials: None,
+        nvos_ip_address: None,
     };
 
     env.api
@@ -719,6 +732,7 @@ async fn test_update_expected_switch_error(pool: sqlx::PgPool) {
         rack_id: None,
         bmc_ip_address: String::new(),
         bmc_retain_credentials: None,
+        nvos_ip_address: None,
     };
 
     let err = env
@@ -829,6 +843,7 @@ async fn test_replace_all_expected_switches(pool: sqlx::PgPool) {
         rack_id: Some(RackId::new(uuid::Uuid::new_v4().to_string())),
         bmc_ip_address: String::new(),
         bmc_retain_credentials: None,
+        nvos_ip_address: None,
     };
 
     let expected_switch_2 = rpc::forge::ExpectedSwitch {
@@ -844,6 +859,7 @@ async fn test_replace_all_expected_switches(pool: sqlx::PgPool) {
         rack_id: Some(RackId::new(uuid::Uuid::new_v4().to_string())),
         bmc_ip_address: String::new(),
         bmc_retain_credentials: None,
+        nvos_ip_address: None,
     };
 
     expected_switch_list
@@ -943,8 +959,9 @@ async fn test_update_persists_nvos_mac_addresses(pool: sqlx::PgPool) {
     assert_eq!(fetched.nvos_mac_addresses, vec![new_nvos_mac]);
 }
 
-/// When an expected switch is created with a bmc_ip_address, a real
-/// machine_interface with a static address should be created in the DB.
+/// When an expected switch is registered with a bmc_ip_address, the static `machine_interface`
+/// gets materialized lazily by site-explorer's per-iteration sweep (the gRPC `add` handler
+/// doesn't preallocate inline). Verify that flow end-to-end.
 #[crate::sqlx_test()]
 async fn test_add_with_bmc_ip_creates_static_interface(
     pool: sqlx::PgPool,
@@ -967,8 +984,20 @@ async fn test_add_with_bmc_ip_creates_static_interface(
             metadata: Some(rpc::forge::Metadata::default()),
             rack_id: None,
             bmc_retain_credentials: None,
+            nvos_ip_address: None,
         }))
         .await?;
+
+    // Add doesn't preallocate inline; mimic what site-explorer does on the next iteration --
+    // materialize the static BMC interface for this entity.
+    carbide_site_explorer::try_preallocate_one(
+        &env.pool,
+        bmc_mac,
+        bmc_ip.parse().unwrap(),
+        model::machine_interface::InterfaceType::Bmc,
+        "expected_switch BMC",
+    )
+    .await;
 
     let mut txn = env.pool.begin().await?;
     let interfaces = db::machine_interface::find_by_mac_address(&mut *txn, bmc_mac).await?;
@@ -1021,6 +1050,7 @@ async fn test_add_without_bmc_ip_creates_no_interface(
             metadata: Some(rpc::forge::Metadata::default()),
             rack_id: None,
             bmc_retain_credentials: None,
+            nvos_ip_address: None,
         }))
         .await?;
 
@@ -1057,6 +1087,7 @@ async fn test_add_expected_switch_with_bmc_retain_credentials(
             metadata: Some(rpc::forge::Metadata::default()),
             rack_id: None,
             bmc_retain_credentials: Some(true),
+            nvos_ip_address: None,
         }))
         .await?;
 
@@ -1102,6 +1133,7 @@ async fn test_update_expected_switch_preserves_bmc_retain_credentials(
             metadata: Some(rpc::forge::Metadata::default()),
             rack_id: None,
             bmc_retain_credentials: Some(true),
+            nvos_ip_address: None,
         }))
         .await?;
 
@@ -1120,6 +1152,7 @@ async fn test_update_expected_switch_preserves_bmc_retain_credentials(
             metadata: Some(rpc::forge::Metadata::default()),
             rack_id: None,
             bmc_retain_credentials: None,
+            nvos_ip_address: None,
         }))
         .await?;
 
@@ -1136,6 +1169,251 @@ async fn test_update_expected_switch_preserves_bmc_retain_credentials(
         retrieved.bmc_retain_credentials,
         Some(true),
         "bmc_retain_credentials should be preserved after update with None"
+    );
+
+    Ok(())
+}
+
+/// `nvos_ip_address` is paired with the single wired NVOS port. Setting it without any
+/// `nvos_mac_addresses` would leave the (mac, ip) pairing undefined, so the handler must
+/// reject it with `InvalidArgument`.
+#[crate::sqlx_test]
+async fn test_add_expected_switch_rejects_nvos_ip_without_mac(
+    pool: sqlx::PgPool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let env = create_test_env(pool).await;
+    let bmc_mac: MacAddress = "7A:7B:7C:7D:7E:60".parse().unwrap();
+
+    let err = env
+        .api
+        .add_expected_switch(tonic::Request::new(rpc::forge::ExpectedSwitch {
+            expected_switch_id: None,
+            bmc_mac_address: bmc_mac.to_string(),
+            bmc_username: "ADMIN".into(),
+            bmc_password: "PASS".into(),
+            switch_serial_number: "SW-NVOS-NO-MAC".into(),
+            nvos_mac_addresses: vec![],
+            nvos_username: None,
+            nvos_password: None,
+            bmc_ip_address: String::new(),
+            nvos_ip_address: Some("192.0.2.250".into()),
+            metadata: Some(rpc::forge::Metadata::default()),
+            rack_id: None,
+            bmc_retain_credentials: None,
+        }))
+        .await
+        .expect_err("add must reject nvos_ip_address with no nvos_mac_addresses");
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+
+    Ok(())
+}
+
+/// Setting `nvos_ip_address` alongside multiple `nvos_mac_addresses` is ambiguous (which MAC
+/// gets the IP?), so the handler must reject it instead of silently picking one.
+#[crate::sqlx_test]
+async fn test_add_expected_switch_rejects_nvos_ip_with_multiple_macs(
+    pool: sqlx::PgPool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let env = create_test_env(pool).await;
+    let bmc_mac: MacAddress = "7A:7B:7C:7D:7E:61".parse().unwrap();
+
+    let err = env
+        .api
+        .add_expected_switch(tonic::Request::new(rpc::forge::ExpectedSwitch {
+            expected_switch_id: None,
+            bmc_mac_address: bmc_mac.to_string(),
+            bmc_username: "ADMIN".into(),
+            bmc_password: "PASS".into(),
+            switch_serial_number: "SW-NVOS-MULTI-MAC".into(),
+            nvos_mac_addresses: vec![
+                "8A:8B:8C:8D:8E:01".to_string(),
+                "8A:8B:8C:8D:8E:02".to_string(),
+            ],
+            nvos_username: None,
+            nvos_password: None,
+            bmc_ip_address: String::new(),
+            nvos_ip_address: Some("192.0.2.251".into()),
+            metadata: Some(rpc::forge::Metadata::default()),
+            rack_id: None,
+            bmc_retain_credentials: None,
+        }))
+        .await
+        .expect_err("add must reject nvos_ip_address with multiple nvos_mac_addresses");
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+
+    Ok(())
+}
+
+/// Happy path: `nvos_ip_address` paired with exactly one `nvos_mac_addresses` entry is
+/// accepted by `add`, and the field round-trips through `get`.
+#[crate::sqlx_test]
+async fn test_add_expected_switch_with_nvos_ip_round_trips(
+    pool: sqlx::PgPool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let env = create_test_env(pool).await;
+    let bmc_mac: MacAddress = "7A:7B:7C:7D:7E:62".parse().unwrap();
+    let nvos_mac: MacAddress = "8A:8B:8C:8D:8E:10".parse().unwrap();
+    let nvos_ip = "192.0.2.252";
+
+    env.api
+        .add_expected_switch(tonic::Request::new(rpc::forge::ExpectedSwitch {
+            expected_switch_id: None,
+            bmc_mac_address: bmc_mac.to_string(),
+            bmc_username: "ADMIN".into(),
+            bmc_password: "PASS".into(),
+            switch_serial_number: "SW-NVOS-OK".into(),
+            nvos_mac_addresses: vec![nvos_mac.to_string()],
+            nvos_username: None,
+            nvos_password: None,
+            bmc_ip_address: String::new(),
+            nvos_ip_address: Some(nvos_ip.into()),
+            metadata: Some(rpc::forge::Metadata::default()),
+            rack_id: None,
+            bmc_retain_credentials: None,
+        }))
+        .await?;
+
+    let retrieved = env
+        .api
+        .get_expected_switch(tonic::Request::new(rpc::forge::ExpectedSwitchRequest {
+            bmc_mac_address: bmc_mac.to_string(),
+            expected_switch_id: None,
+        }))
+        .await?
+        .into_inner();
+
+    assert_eq!(
+        retrieved.nvos_ip_address.as_deref(),
+        Some(nvos_ip),
+        "nvos_ip_address must survive the add -> get round-trip"
+    );
+
+    Ok(())
+}
+
+/// Symmetric to the add validation: update must also reject `nvos_ip_address` when the
+/// `nvos_mac_addresses` count is not exactly one. Covers the case where an operator
+/// adds a valid switch and then mutates it into an invalid pairing.
+#[crate::sqlx_test]
+async fn test_update_expected_switch_rejects_invalid_nvos_pairing(
+    pool: sqlx::PgPool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let env = create_test_env(pool).await;
+    let bmc_mac: MacAddress = "7A:7B:7C:7D:7E:63".parse().unwrap();
+    let nvos_mac: MacAddress = "8A:8B:8C:8D:8E:20".parse().unwrap();
+
+    env.api
+        .add_expected_switch(tonic::Request::new(rpc::forge::ExpectedSwitch {
+            expected_switch_id: None,
+            bmc_mac_address: bmc_mac.to_string(),
+            bmc_username: "ADMIN".into(),
+            bmc_password: "PASS".into(),
+            switch_serial_number: "SW-NVOS-UPDATE".into(),
+            nvos_mac_addresses: vec![nvos_mac.to_string()],
+            nvos_username: None,
+            nvos_password: None,
+            bmc_ip_address: String::new(),
+            nvos_ip_address: None,
+            metadata: Some(rpc::forge::Metadata::default()),
+            rack_id: None,
+            bmc_retain_credentials: None,
+        }))
+        .await?;
+
+    let err = env
+        .api
+        .update_expected_switch(tonic::Request::new(rpc::forge::ExpectedSwitch {
+            expected_switch_id: None,
+            bmc_mac_address: bmc_mac.to_string(),
+            bmc_username: "ADMIN".into(),
+            bmc_password: "PASS".into(),
+            switch_serial_number: "SW-NVOS-UPDATE".into(),
+            // Drop the NVOS MAC but try to keep the IP -- pairing now invalid.
+            nvos_mac_addresses: vec![],
+            nvos_username: None,
+            nvos_password: None,
+            bmc_ip_address: String::new(),
+            nvos_ip_address: Some("192.0.2.253".into()),
+            metadata: Some(rpc::forge::Metadata::default()),
+            rack_id: None,
+            bmc_retain_credentials: None,
+        }))
+        .await
+        .expect_err("update must reject nvos_ip_address with no nvos_mac_addresses");
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+
+    Ok(())
+}
+
+/// First DHCPDISCOVER for an `ExpectedSwitch.nvos_ip_address`: discover() consults
+/// `find_by_nvos_mac_address`, preallocates from `nvos_ip_address`, and the existing
+/// find_or_create path serves that static IP. Mirrors the host-NIC fixed_ip flow. Add-time
+/// doesn't preallocate; row materialization is deferred until this hook fires or until
+/// site-explorer's reconciliation pass runs.
+#[crate::sqlx_test]
+async fn test_dhcp_discover_preallocates_nvos_ip_for_unknown_mac(
+    pool: sqlx::PgPool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let env = create_test_env(pool).await;
+    let bmc_mac: MacAddress = "7A:7B:7C:7D:7E:64".parse().unwrap();
+    let nvos_mac: MacAddress = "8A:8B:8C:8D:8E:30".parse().unwrap();
+    let nvos_ip = "192.0.2.254";
+
+    env.api
+        .add_expected_switch(tonic::Request::new(rpc::forge::ExpectedSwitch {
+            expected_switch_id: None,
+            bmc_mac_address: bmc_mac.to_string(),
+            bmc_username: "ADMIN".into(),
+            bmc_password: "PASS".into(),
+            switch_serial_number: "SW-NVOS-DHCP".into(),
+            nvos_mac_addresses: vec![nvos_mac.to_string()],
+            nvos_username: None,
+            nvos_password: None,
+            bmc_ip_address: String::new(),
+            nvos_ip_address: Some(nvos_ip.into()),
+            metadata: Some(rpc::forge::Metadata::default()),
+            rack_id: None,
+            bmc_retain_credentials: None,
+        }))
+        .await?;
+
+    let mut txn = env.db_txn().await;
+    let before = db::machine_interface::find_by_mac_address(txn.as_mut(), nvos_mac).await?;
+    assert!(
+        before.is_empty(),
+        "add does not preallocate inline; the interface should only appear after discover()"
+    );
+    txn.commit().await?;
+
+    let nvos_mac_str = nvos_mac.to_string();
+    let response = env
+        .api
+        .discover_dhcp(
+            common::rpc_builder::DhcpDiscovery::builder(
+                &nvos_mac_str,
+                common::api_fixtures::FIXTURE_DHCP_RELAY_ADDRESS,
+            )
+            .tonic_request(),
+        )
+        .await?
+        .into_inner();
+
+    assert_eq!(
+        response.address, nvos_ip,
+        "NVOS DHCP should serve the configured nvos_ip_address"
+    );
+
+    let mut txn = env.db_txn().await;
+    let after = db::machine_interface::find_by_mac_address(txn.as_mut(), nvos_mac).await?;
+    assert_eq!(after.len(), 1, "interface should be created by discover()");
+    assert_eq!(
+        after[0].interface_type,
+        model::machine_interface::InterfaceType::Data,
+        "NVOS discover hook should mark the interface as InterfaceType::Data, not Bmc"
+    );
+    assert!(
+        after[0].addresses.contains(&nvos_ip.parse().unwrap()),
+        "preallocated row should carry the configured nvos_ip_address"
     );
 
     Ok(())

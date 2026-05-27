@@ -136,19 +136,13 @@ pub(crate) async fn seed_power_shelf(
                 capacity: None,
                 voltage: None,
             },
+            bmc_mac_address: Some(mac),
             metadata: Some(Metadata::default()),
             rack_id: Some(rack_id.clone()),
         },
     )
     .await
     .expect("failed to create power shelf");
-
-    sqlx::query("UPDATE power_shelves SET bmc_mac_address = $1 WHERE id = $2")
-        .bind(mac)
-        .bind(ps_id)
-        .execute(&mut *txn)
-        .await
-        .expect("failed to set power shelf bmc_mac_address");
 
     ps_id
 }
@@ -169,6 +163,7 @@ pub(crate) async fn seed_switch(
             serial_number: label.to_owned(),
             bmc_mac_address: mac,
             bmc_ip_address: None,
+            nvos_ip_address: None,
             bmc_username: "admin".into(),
             bmc_password: "pass".into(),
             nvos_username: None,

@@ -1,0 +1,729 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package model
+
+import (
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	cdb "github.com/NVIDIA/infra-controller-rest/db/pkg/db"
+	cdbm "github.com/NVIDIA/infra-controller-rest/db/pkg/db/model"
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
+
+	cwssaws "github.com/NVIDIA/infra-controller-rest/workflow-schema/schema/site-agent/workflows/v1"
+)
+
+func TestAPIDpuExtensionServiceCreateRequest_Validate(t *testing.T) {
+	validUUID := uuid.New().String()
+
+	tests := []struct {
+		desc      string
+		obj       APIDpuExtensionServiceCreateRequest
+		expectErr bool
+	}{
+		{
+			desc: "ok when only required fields are provided",
+			obj: APIDpuExtensionServiceCreateRequest{
+				Name:        "test-service",
+				ServiceType: DpuExtensionServiceTypeKubernetesPod,
+				SiteID:      validUUID,
+				Data:        "apiVersion: v1\nkind: Pod\nmetadata:\n  name: test",
+			},
+			expectErr: false,
+		},
+		{
+			desc: "ok when all fields are provided",
+			obj: APIDpuExtensionServiceCreateRequest{
+				Name:        "test-service",
+				Description: cdb.GetStrPtr("test description"),
+				ServiceType: DpuExtensionServiceTypeKubernetesPod,
+				SiteID:      validUUID,
+				Data:        "apiVersion: v1\nkind: Pod\nmetadata:\n  name: test",
+			},
+			expectErr: false,
+		},
+		{
+			desc: "ok when credentials are provided",
+			obj: APIDpuExtensionServiceCreateRequest{
+				Name:        "test-service",
+				ServiceType: DpuExtensionServiceTypeKubernetesPod,
+				SiteID:      validUUID,
+				Data:        "apiVersion: v1\nkind: Pod\nmetadata:\n  name: test",
+				Credentials: &APIDpuExtensionServiceCredentials{
+					RegistryURL: "https://registry.hub.docker.com",
+					Username:    cdb.GetStrPtr("testuser"),
+					Password:    cdb.GetStrPtr("testpass"),
+				},
+			},
+			expectErr: false,
+		},
+		{
+			desc: "ok when observability is provided",
+			obj: APIDpuExtensionServiceCreateRequest{
+				Name:        "test-service",
+				ServiceType: DpuExtensionServiceTypeKubernetesPod,
+				SiteID:      validUUID,
+				Data:        "apiVersion: v1\nkind: Pod\nmetadata:\n  name: test",
+				Observability: &APIDpuExtensionServiceObservability{
+					Configs: []APIDpuExtensionServiceObservabilityConfig{
+						{
+							Prometheus: &APIDpuExtensionServiceObservabilityConfigPrometheus{
+								ScrapeIntervalSeconds: 30,
+								Endpoint:              "busybox:9090",
+							},
+						},
+					},
+				},
+			},
+			expectErr: false,
+		},
+		{
+			desc: "ok when observability is provided as an empty config list",
+			obj: APIDpuExtensionServiceCreateRequest{
+				Name:        "test-service",
+				ServiceType: DpuExtensionServiceTypeKubernetesPod,
+				SiteID:      validUUID,
+				Data:        "apiVersion: v1\nkind: Pod\nmetadata:\n  name: test",
+				Observability: &APIDpuExtensionServiceObservability{
+					Configs: []APIDpuExtensionServiceObservabilityConfig{},
+				},
+			},
+			expectErr: false,
+		},
+		{
+			desc: "error when name is missing",
+			obj: APIDpuExtensionServiceCreateRequest{
+				ServiceType: DpuExtensionServiceTypeKubernetesPod,
+				SiteID:      validUUID,
+				Data:        "apiVersion: v1\nkind: Pod\nmetadata:\n  name: test",
+			},
+			expectErr: true,
+		},
+		{
+			desc: "error when name is too short",
+			obj: APIDpuExtensionServiceCreateRequest{
+				Name:        "t",
+				ServiceType: DpuExtensionServiceTypeKubernetesPod,
+				SiteID:      validUUID,
+				Data:        "apiVersion: v1\nkind: Pod\nmetadata:\n  name: test",
+			},
+			expectErr: true,
+		},
+		{
+			desc: "error when name is too long",
+			obj: APIDpuExtensionServiceCreateRequest{
+				Name:        strings.Repeat("a", 257),
+				ServiceType: DpuExtensionServiceTypeKubernetesPod,
+				SiteID:      validUUID,
+				Data:        "apiVersion: v1\nkind: Pod\nmetadata:\n  name: test",
+			},
+			expectErr: true,
+		},
+		{
+			desc: "error when name has invalid characters",
+			obj: APIDpuExtensionServiceCreateRequest{
+				Name:        " test_service",
+				ServiceType: DpuExtensionServiceTypeKubernetesPod,
+				SiteID:      validUUID,
+				Data:        "apiVersion: v1\nkind: Pod\nmetadata:\n  name: test",
+			},
+			expectErr: true,
+		},
+		{
+			desc: "error when serviceType is missing",
+			obj: APIDpuExtensionServiceCreateRequest{
+				Name:   "test-service",
+				SiteID: validUUID,
+				Data:   "apiVersion: v1\nkind: Pod\nmetadata:\n  name: test",
+			},
+			expectErr: true,
+		},
+		{
+			desc: "error when serviceType is invalid",
+			obj: APIDpuExtensionServiceCreateRequest{
+				Name:        "test-service",
+				ServiceType: "InvalidType",
+				SiteID:      validUUID,
+				Data:        "apiVersion: v1\nkind: Pod\nmetadata:\n  name: test",
+			},
+			expectErr: true,
+		},
+		{
+			desc: "error when siteId is missing",
+			obj: APIDpuExtensionServiceCreateRequest{
+				Name:        "test-service",
+				ServiceType: DpuExtensionServiceTypeKubernetesPod,
+				Data:        "apiVersion: v1\nkind: Pod\nmetadata:\n  name: test",
+			},
+			expectErr: true,
+		},
+		{
+			desc: "error when siteId is not a valid UUID",
+			obj: APIDpuExtensionServiceCreateRequest{
+				Name:        "test-service",
+				ServiceType: DpuExtensionServiceTypeKubernetesPod,
+				SiteID:      "invalid-uuid",
+				Data:        "apiVersion: v1\nkind: Pod\nmetadata:\n  name: test",
+			},
+			expectErr: true,
+		},
+		{
+			desc: "error when data is missing",
+			obj: APIDpuExtensionServiceCreateRequest{
+				Name:        "test-service",
+				ServiceType: DpuExtensionServiceTypeKubernetesPod,
+				SiteID:      validUUID,
+			},
+			expectErr: true,
+		},
+		{
+			desc: "error when credentials are invalid - missing username",
+			obj: APIDpuExtensionServiceCreateRequest{
+				Name:        "test-service",
+				ServiceType: DpuExtensionServiceTypeKubernetesPod,
+				SiteID:      validUUID,
+				Data:        "apiVersion: v1\nkind: Pod\nmetadata:\n  name: test",
+				Credentials: &APIDpuExtensionServiceCredentials{
+					RegistryURL: "https://registry.hub.docker.com",
+					Password:    cdb.GetStrPtr("testpass"),
+				},
+			},
+			expectErr: true,
+		},
+		{
+			desc: "error when credentials are invalid - missing password",
+			obj: APIDpuExtensionServiceCreateRequest{
+				Name:        "test-service",
+				ServiceType: DpuExtensionServiceTypeKubernetesPod,
+				SiteID:      validUUID,
+				Data:        "apiVersion: v1\nkind: Pod\nmetadata:\n  name: test",
+				Credentials: &APIDpuExtensionServiceCredentials{
+					RegistryURL: "https://registry.hub.docker.com",
+					Username:    cdb.GetStrPtr("testuser"),
+				},
+			},
+			expectErr: true,
+		},
+		{
+			desc: "error when credentials have invalid registry URL",
+			obj: APIDpuExtensionServiceCreateRequest{
+				Name:        "test-service",
+				ServiceType: DpuExtensionServiceTypeKubernetesPod,
+				SiteID:      validUUID,
+				Data:        "apiVersion: v1\nkind: Pod\nmetadata:\n  name: test",
+				Credentials: &APIDpuExtensionServiceCredentials{
+					RegistryURL: "not-a-valid-url",
+					Username:    cdb.GetStrPtr("testuser"),
+					Password:    cdb.GetStrPtr("testpass"),
+				},
+			},
+			expectErr: true,
+		},
+		{
+			desc: "ok when observability configs contain different oneof variants across entries",
+			obj: APIDpuExtensionServiceCreateRequest{
+				Name:        "test-service",
+				ServiceType: DpuExtensionServiceTypeKubernetesPod,
+				SiteID:      validUUID,
+				Data:        "apiVersion: v1\nkind: Pod\nmetadata:\n  name: test",
+				Observability: &APIDpuExtensionServiceObservability{
+					Configs: []APIDpuExtensionServiceObservabilityConfig{
+						{
+							Prometheus: &APIDpuExtensionServiceObservabilityConfigPrometheus{
+								ScrapeIntervalSeconds: 30,
+								Endpoint:              "busybox:9090",
+							},
+						},
+						{
+							Logging: &APIDpuExtensionServiceObservabilityConfigLogging{
+								Path: "/var/log/busybox.log",
+							},
+						},
+					},
+				},
+			},
+			expectErr: false,
+		},
+		{
+			desc: "error when a single observability config contains both prometheus and logging",
+			obj: APIDpuExtensionServiceCreateRequest{
+				Name:        "test-service",
+				ServiceType: DpuExtensionServiceTypeKubernetesPod,
+				SiteID:      validUUID,
+				Data:        "apiVersion: v1\nkind: Pod\nmetadata:\n  name: test",
+				Observability: &APIDpuExtensionServiceObservability{
+					Configs: []APIDpuExtensionServiceObservabilityConfig{
+						{
+							Prometheus: &APIDpuExtensionServiceObservabilityConfigPrometheus{
+								ScrapeIntervalSeconds: 30,
+								Endpoint:              "busybox:9090",
+							},
+							Logging: &APIDpuExtensionServiceObservabilityConfigLogging{
+								Path: "/var/log/busybox.log",
+							},
+						},
+					},
+				},
+			},
+			expectErr: true,
+		},
+		{
+			desc: "error when observability contains too many configs",
+			obj: APIDpuExtensionServiceCreateRequest{
+				Name:        "test-service",
+				ServiceType: DpuExtensionServiceTypeKubernetesPod,
+				SiteID:      validUUID,
+				Data:        "apiVersion: v1\nkind: Pod\nmetadata:\n  name: test",
+				Observability: &APIDpuExtensionServiceObservability{
+					Configs: func() []APIDpuExtensionServiceObservabilityConfig {
+						configs := make([]APIDpuExtensionServiceObservabilityConfig, DpuExtensionServiceMaxObservabilityConfigs+1)
+						for i := range configs {
+							configs[i] = APIDpuExtensionServiceObservabilityConfig{
+								Prometheus: &APIDpuExtensionServiceObservabilityConfigPrometheus{
+									ScrapeIntervalSeconds: 30,
+									Endpoint:              "busybox:9090",
+								},
+							}
+						}
+						return configs
+					}(),
+				},
+			},
+			expectErr: true,
+		},
+		{
+			desc: "error when observability config name is too long",
+			obj: APIDpuExtensionServiceCreateRequest{
+				Name:        "test-service",
+				ServiceType: DpuExtensionServiceTypeKubernetesPod,
+				SiteID:      validUUID,
+				Data:        "apiVersion: v1\nkind: Pod\nmetadata:\n  name: test",
+				Observability: &APIDpuExtensionServiceObservability{
+					Configs: []APIDpuExtensionServiceObservabilityConfig{
+						{
+							Name: cdb.GetStrPtr(strings.Repeat("a", DpuExtensionServiceMaxObservabilityConfigNameLength+1)),
+							Prometheus: &APIDpuExtensionServiceObservabilityConfigPrometheus{
+								ScrapeIntervalSeconds: 30,
+								Endpoint:              "busybox:9090",
+							},
+						},
+					},
+				},
+			},
+			expectErr: true,
+		},
+		{
+			desc: "error when observability config name is empty",
+			obj: APIDpuExtensionServiceCreateRequest{
+				Name:        "test-service",
+				ServiceType: DpuExtensionServiceTypeKubernetesPod,
+				SiteID:      validUUID,
+				Data:        "apiVersion: v1\nkind: Pod\nmetadata:\n  name: test",
+				Observability: &APIDpuExtensionServiceObservability{
+					Configs: []APIDpuExtensionServiceObservabilityConfig{
+						{
+							Name: cdb.GetStrPtr(""),
+							Prometheus: &APIDpuExtensionServiceObservabilityConfigPrometheus{
+								ScrapeIntervalSeconds: 30,
+								Endpoint:              "busybox:9090",
+							},
+						},
+					},
+				},
+			},
+			expectErr: true,
+		},
+		{
+			desc: "error when observability config name is whitespace only",
+			obj: APIDpuExtensionServiceCreateRequest{
+				Name:        "test-service",
+				ServiceType: DpuExtensionServiceTypeKubernetesPod,
+				SiteID:      validUUID,
+				Data:        "apiVersion: v1\nkind: Pod\nmetadata:\n  name: test",
+				Observability: &APIDpuExtensionServiceObservability{
+					Configs: []APIDpuExtensionServiceObservabilityConfig{
+						{
+							Name: cdb.GetStrPtr("   "),
+							Prometheus: &APIDpuExtensionServiceObservabilityConfigPrometheus{
+								ScrapeIntervalSeconds: 30,
+								Endpoint:              "busybox:9090",
+							},
+						},
+					},
+				},
+			},
+			expectErr: true,
+		},
+		{
+			desc: "error when observability endpoint contains invalid characters",
+			obj: APIDpuExtensionServiceCreateRequest{
+				Name:        "test-service",
+				ServiceType: DpuExtensionServiceTypeKubernetesPod,
+				SiteID:      validUUID,
+				Data:        "apiVersion: v1\nkind: Pod\nmetadata:\n  name: test",
+				Observability: &APIDpuExtensionServiceObservability{
+					Configs: []APIDpuExtensionServiceObservabilityConfig{
+						{
+							Prometheus: &APIDpuExtensionServiceObservabilityConfigPrometheus{
+								ScrapeIntervalSeconds: 30,
+								Endpoint:              "http://busybox:9090/metrics",
+							},
+						},
+					},
+				},
+			},
+			expectErr: true,
+		},
+		{
+			desc: "error when observability path contains invalid characters",
+			obj: APIDpuExtensionServiceCreateRequest{
+				Name:        "test-service",
+				ServiceType: DpuExtensionServiceTypeKubernetesPod,
+				SiteID:      validUUID,
+				Data:        "apiVersion: v1\nkind: Pod\nmetadata:\n  name: test",
+				Observability: &APIDpuExtensionServiceObservability{
+					Configs: []APIDpuExtensionServiceObservabilityConfig{
+						{
+							Logging: &APIDpuExtensionServiceObservabilityConfigLogging{
+								Path: "/var/log/busybox$.log",
+							},
+						},
+					},
+				},
+			},
+			expectErr: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.desc, func(t *testing.T) {
+			err := tc.obj.Validate()
+			assert.Equal(t, tc.expectErr, err != nil)
+			if err != nil {
+				fmt.Println(err.Error())
+			}
+		})
+	}
+}
+
+func TestAPIDpuExtensionServiceUpdateRequest_Validate(t *testing.T) {
+	tests := []struct {
+		desc      string
+		obj       APIDpuExtensionServiceUpdateRequest
+		expectErr bool
+	}{
+		{
+			desc: "ok when name is updated",
+			obj: APIDpuExtensionServiceUpdateRequest{
+				Name: cdb.GetStrPtr("updated-name"),
+			},
+			expectErr: false,
+		},
+		{
+			desc: "ok when description is updated",
+			obj: APIDpuExtensionServiceUpdateRequest{
+				Description: cdb.GetStrPtr("updated description"),
+			},
+			expectErr: false,
+		},
+		{
+			desc: "ok when data is updated",
+			obj: APIDpuExtensionServiceUpdateRequest{
+				Data: cdb.GetStrPtr("apiVersion: v1\nkind: Pod\nmetadata:\n  name: updated"),
+			},
+			expectErr: false,
+		},
+		{
+			desc: "ok when all fields are updated",
+			obj: APIDpuExtensionServiceUpdateRequest{
+				Name:        cdb.GetStrPtr("updated-name"),
+				Description: cdb.GetStrPtr("updated description"),
+				Data:        cdb.GetStrPtr("apiVersion: v1\nkind: Pod\nmetadata:\n  name: updated"),
+			},
+			expectErr: false,
+		},
+		{
+			desc: "ok when credentials are updated",
+			obj: APIDpuExtensionServiceUpdateRequest{
+				Credentials: &APIDpuExtensionServiceCredentials{
+					RegistryURL: "https://registry.hub.docker.com",
+					Username:    cdb.GetStrPtr("newuser"),
+					Password:    cdb.GetStrPtr("newpass"),
+				},
+			},
+			expectErr: false,
+		},
+		{
+			desc: "ok when observability is updated",
+			obj: APIDpuExtensionServiceUpdateRequest{
+				Observability: &APIDpuExtensionServiceObservability{
+					Configs: []APIDpuExtensionServiceObservabilityConfig{
+						{
+							Logging: &APIDpuExtensionServiceObservabilityConfigLogging{
+								Path: "/var/log/busybox.log",
+							},
+						},
+					},
+				},
+			},
+			expectErr: false,
+		},
+		{
+			desc: "ok when observability is updated to an empty config list",
+			obj: APIDpuExtensionServiceUpdateRequest{
+				Observability: &APIDpuExtensionServiceObservability{
+					Configs: []APIDpuExtensionServiceObservabilityConfig{},
+				},
+			},
+			expectErr: false,
+		},
+		{
+			desc: "error when name is empty string",
+			obj: APIDpuExtensionServiceUpdateRequest{
+				Name: cdb.GetStrPtr(""),
+			},
+			expectErr: true,
+		},
+		{
+			desc: "error when name is too short",
+			obj: APIDpuExtensionServiceUpdateRequest{
+				Name: cdb.GetStrPtr("t"),
+			},
+			expectErr: true,
+		},
+		{
+			desc: "error when name is too long",
+			obj: APIDpuExtensionServiceUpdateRequest{
+				Name: cdb.GetStrPtr(strings.Repeat("a", 257)),
+			},
+			expectErr: true,
+		},
+		{
+			desc: "error when name has invalid characters",
+			obj: APIDpuExtensionServiceUpdateRequest{
+				Name: cdb.GetStrPtr(" test_service"),
+			},
+			expectErr: true,
+		},
+		{
+			desc: "error when credentials are invalid - missing username",
+			obj: APIDpuExtensionServiceUpdateRequest{
+				Credentials: &APIDpuExtensionServiceCredentials{
+					RegistryURL: "https://registry.hub.docker.com",
+					Password:    cdb.GetStrPtr("testpass"),
+				},
+			},
+			expectErr: true,
+		},
+		{
+			desc: "error when credentials are invalid - missing password",
+			obj: APIDpuExtensionServiceUpdateRequest{
+				Credentials: &APIDpuExtensionServiceCredentials{
+					RegistryURL: "https://registry.hub.docker.com",
+					Username:    cdb.GetStrPtr("testuser"),
+				},
+			},
+			expectErr: true,
+		},
+		{
+			desc: "error when credentials have invalid registry URL",
+			obj: APIDpuExtensionServiceUpdateRequest{
+				Credentials: &APIDpuExtensionServiceCredentials{
+					RegistryURL: "not-a-valid-url",
+					Username:    cdb.GetStrPtr("testuser"),
+					Password:    cdb.GetStrPtr("testpass"),
+				},
+			},
+			expectErr: true,
+		},
+		{
+			desc: "error when observability is missing config type",
+			obj: APIDpuExtensionServiceUpdateRequest{
+				Observability: &APIDpuExtensionServiceObservability{
+					Configs: []APIDpuExtensionServiceObservabilityConfig{{}},
+				},
+			},
+			expectErr: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.desc, func(t *testing.T) {
+			err := tc.obj.Validate()
+			assert.Equal(t, tc.expectErr, err != nil)
+			if err != nil {
+				fmt.Println(err.Error())
+			}
+		})
+	}
+}
+
+func TestAPIDpuExtensionServiceCredentials_Validate(t *testing.T) {
+	tests := []struct {
+		desc      string
+		obj       APIDpuExtensionServiceCredentials
+		expectErr bool
+	}{
+		{
+			desc: "ok when all fields are provided with valid values",
+			obj: APIDpuExtensionServiceCredentials{
+				RegistryURL: "https://registry.hub.docker.com",
+				Username:    cdb.GetStrPtr("testuser"),
+				Password:    cdb.GetStrPtr("testpass"),
+			},
+			expectErr: false,
+		},
+		{
+			desc: "ok with different valid registry URL",
+			obj: APIDpuExtensionServiceCredentials{
+				RegistryURL: "https://nvcr.io",
+				Username:    cdb.GetStrPtr("$oauthtoken"),
+				Password:    cdb.GetStrPtr("secret-token"),
+			},
+			expectErr: false,
+		},
+		{
+			desc: "error when registry URL is missing",
+			obj: APIDpuExtensionServiceCredentials{
+				Username: cdb.GetStrPtr("testuser"),
+				Password: cdb.GetStrPtr("testpass"),
+			},
+			expectErr: true,
+		},
+		{
+			desc: "error when registry URL is invalid",
+			obj: APIDpuExtensionServiceCredentials{
+				RegistryURL: "not-a-valid-url",
+				Username:    cdb.GetStrPtr("testuser"),
+				Password:    cdb.GetStrPtr("testpass"),
+			},
+			expectErr: true,
+		},
+		{
+			desc: "error when username is missing",
+			obj: APIDpuExtensionServiceCredentials{
+				RegistryURL: "https://registry.hub.docker.com",
+				Password:    cdb.GetStrPtr("testpass"),
+			},
+			expectErr: true,
+		},
+		{
+			desc: "error when password is missing",
+			obj: APIDpuExtensionServiceCredentials{
+				RegistryURL: "https://registry.hub.docker.com",
+				Username:    cdb.GetStrPtr("testuser"),
+			},
+			expectErr: true,
+		},
+		{
+			desc: "error when both username and password are missing",
+			obj: APIDpuExtensionServiceCredentials{
+				RegistryURL: "https://registry.hub.docker.com",
+			},
+			expectErr: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.desc, func(t *testing.T) {
+			err := tc.obj.Validate()
+			assert.Equal(t, tc.expectErr, err != nil)
+			if err != nil {
+				fmt.Println(err.Error())
+			}
+		})
+	}
+}
+
+func TestNewAPIDpuExtensionService(t *testing.T) {
+	obsName := "busybox-metrics"
+	dbdes := &cdbm.DpuExtensionService{
+		ID:          uuid.New(),
+		Name:        "test-service",
+		ServiceType: "test-type",
+		Version:     cdb.GetStrPtr("v1"),
+		VersionInfo: &cdbm.DpuExtensionServiceVersionInfo{
+			Version:        "v1",
+			Data:           "apiVersion: v1\nkind: Pod",
+			HasCredentials: true,
+			Created:        time.Now(),
+			Observability: &cdbm.DpuExtensionServiceObservability{
+				DpuExtensionServiceObservability: &cwssaws.DpuExtensionServiceObservability{
+					Configs: []*cwssaws.DpuExtensionServiceObservabilityConfig{
+						{
+							Name: &obsName,
+							Config: &cwssaws.DpuExtensionServiceObservabilityConfig_Prometheus{
+								Prometheus: &cwssaws.DpuExtensionServiceObservabilityConfigPrometheus{
+									ScrapeIntervalSeconds: 30,
+									Endpoint:              "busybox:9090",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		Status:  cdbm.DpuExtensionServiceStatusReady,
+		Created: time.Now(),
+		Updated: time.Now(),
+	}
+
+	dbdesds := []cdbm.StatusDetail{
+		{
+			ID:       uuid.New(),
+			EntityID: dbdes.ID.String(),
+			Status:   dbdes.Status,
+			Created:  time.Now(),
+			Updated:  time.Now(),
+		},
+	}
+
+	tests := []struct {
+		desc    string
+		dbdes   *cdbm.DpuExtensionService
+		dbdesds []cdbm.StatusDetail
+	}{
+		{
+			desc:    "ok when all required fields are provided",
+			dbdes:   dbdes,
+			dbdesds: dbdesds,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.desc, func(t *testing.T) {
+			ades := NewAPIDpuExtensionService(tc.dbdes, tc.dbdesds)
+			assert.Equal(t, tc.dbdes.ID.String(), ades.ID)
+			assert.Equal(t, tc.dbdes.Name, ades.Name)
+			assert.Equal(t, tc.dbdes.ServiceType, ades.ServiceType)
+			assert.Equal(t, tc.dbdes.SiteID.String(), ades.SiteID)
+			assert.Equal(t, tc.dbdes.TenantID.String(), ades.TenantID)
+			assert.Equal(t, tc.dbdes.Version, ades.Version)
+			assert.Equal(t, tc.dbdes.VersionInfo.Version, ades.VersionInfo.Version)
+			assert.Equal(t, tc.dbdes.VersionInfo.Data, ades.VersionInfo.Data)
+			assert.Equal(t, tc.dbdes.VersionInfo.HasCredentials, ades.VersionInfo.HasCredentials)
+			assert.Equal(t, tc.dbdes.VersionInfo.Created, ades.VersionInfo.Created)
+			assert.Equal(t, tc.dbdes.VersionInfo.Observability.GetConfigs()[0].GetPrometheus().Endpoint, ades.VersionInfo.Observability.Configs[0].Prometheus.Endpoint)
+			assert.Equal(t, tc.dbdes.ActiveVersions, ades.ActiveVersions)
+			assert.Equal(t, tc.dbdes.Status, ades.Status)
+			assert.Equal(t, tc.dbdes.Created, ades.Created)
+			assert.Equal(t, tc.dbdes.Updated, ades.Updated)
+			assert.Equal(t, len(tc.dbdesds), len(ades.StatusHistory))
+		})
+	}
+}

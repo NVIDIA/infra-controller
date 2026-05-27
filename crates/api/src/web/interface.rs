@@ -15,48 +15,134 @@
  * limitations under the License.
  */
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use askama::Template;
 use axum::Json;
-use axum::extract::{Path as AxumPath, State as AxumState};
+use axum::extract::{OriginalUri, Path as AxumPath, Query, State as AxumState};
 use axum::response::{Html, IntoResponse, Response};
 use chrono::{DateTime, Utc};
 use hyper::http::StatusCode;
 use rpc::forge as forgerpc;
 use rpc::forge::forge_server::Forge;
 
-use super::filters;
+use super::pagination::{self, PageContext, PaginationParams};
+use super::{Base, filters};
 use crate::api::Api;
 
 #[derive(Template)]
 #[template(path = "interface_show.html")]
 struct InterfaceShow {
     interfaces: Vec<InterfaceRowDisplay>,
+    page: PageContext,
 }
 
 struct InterfaceRowDisplay {
     id: String,
+    interface_type: String,
     mac_address: String,
     ip_address: String,
+    association_type: String,
     machine_id: String,
+    switch_id: String,
+    power_shelf_id: String,
     hostname: String,
     vendor: String,
     domain_name: String,
 }
 
+struct InterfaceAssociationDisplay {
+    association_type: String,
+    machine_id: String,
+    switch_id: String,
+    power_shelf_id: String,
+}
+
+impl From<&forgerpc::MachineInterface> for InterfaceAssociationDisplay {
+    fn from(mi: &forgerpc::MachineInterface) -> Self {
+        let machine_id = mi
+            .machine_id
+            .as_ref()
+            .map(|id| id.to_string())
+            .unwrap_or_default();
+        let switch_id = mi
+            .switch_id
+            .as_ref()
+            .map(|id| id.to_string())
+            .unwrap_or_default();
+        let power_shelf_id = mi
+            .power_shelf_id
+            .as_ref()
+            .map(|id| id.to_string())
+            .unwrap_or_default();
+        let association_type = mi
+            .association_type
+            .and_then(|value| forgerpc::InterfaceAssociationType::try_from(value).ok());
+        let association_type = association_type.or({
+            if !machine_id.is_empty() {
+                Some(forgerpc::InterfaceAssociationType::Machine)
+            } else if !switch_id.is_empty() {
+                Some(forgerpc::InterfaceAssociationType::Switch)
+            } else if !power_shelf_id.is_empty() {
+                Some(forgerpc::InterfaceAssociationType::Powershelf)
+            } else {
+                None
+            }
+        });
+        let (association_type, machine_id, switch_id, power_shelf_id) = match association_type {
+            Some(forgerpc::InterfaceAssociationType::Machine) => (
+                "Machine".to_string(),
+                machine_id,
+                String::new(),
+                String::new(),
+            ),
+            Some(forgerpc::InterfaceAssociationType::Switch) => (
+                "Switch".to_string(),
+                String::new(),
+                switch_id,
+                String::new(),
+            ),
+            Some(forgerpc::InterfaceAssociationType::Powershelf) => (
+                "Powershelf".to_string(),
+                String::new(),
+                String::new(),
+                power_shelf_id,
+            ),
+            Some(forgerpc::InterfaceAssociationType::None) | None => (
+                "None".to_string(),
+                String::new(),
+                String::new(),
+                String::new(),
+            ),
+        };
+
+        Self {
+            association_type,
+            machine_id,
+            switch_id,
+            power_shelf_id,
+        }
+    }
+}
+
 impl From<forgerpc::MachineInterface> for InterfaceRowDisplay {
     fn from(mi: forgerpc::MachineInterface) -> Self {
+        let association = InterfaceAssociationDisplay::from(&mi);
+
         Self {
             id: mi.id.unwrap_or_default().to_string(),
+            interface_type: if mi.interface_type == Some(forgerpc::InterfaceType::Bmc as i32) {
+                "BMC".to_string()
+            } else {
+                "Data".to_string()
+            },
             mac_address: mi.mac_address,
             ip_address: mi.address.join(","),
-            machine_id: mi
-                .machine_id
-                .as_ref()
-                .map(|id| id.to_string())
-                .unwrap_or_default(),
+            association_type: association.association_type,
+            machine_id: association.machine_id,
+            switch_id: association.switch_id,
+            power_shelf_id: association.power_shelf_id,
             hostname: mi.hostname,
             vendor: mi.vendor.unwrap_or_default(),
             domain_name: String::new(), // filled in later
@@ -65,7 +151,11 @@ impl From<forgerpc::MachineInterface> for InterfaceRowDisplay {
 }
 
 /// List machine interfaces
-pub async fn show_html(AxumState(state): AxumState<Arc<Api>>) -> Response {
+pub async fn show_html(
+    AxumState(state): AxumState<Arc<Api>>,
+    Query(params): Query<PaginationParams>,
+    uri: OriginalUri,
+) -> Response {
     let machine_interfaces = match fetch_machine_interfaces(state.clone()).await {
         Ok(n) => n,
         Err(err) => {
@@ -109,7 +199,13 @@ pub async fn show_html(AxumState(state): AxumState<Arc<Api>>) -> Response {
         display.domain_name = domain_name;
         interfaces.push(display);
     }
-    let tmpl = InterfaceShow { interfaces };
+
+    let (info, interfaces) = pagination::paginate_vec(interfaces, &params);
+
+    let tmpl = InterfaceShow {
+        interfaces,
+        page: PageContext::new(info, uri.path()),
+    };
     (StatusCode::OK, Html(tmpl.render().unwrap())).into_response()
 }
 
@@ -139,58 +235,19 @@ async fn fetch_machine_interfaces(
     out.interfaces
         .sort_unstable_by(|iface1, iface2| iface1.hostname.cmp(&iface2.hostname));
 
-    enrich_bmc_machine_ids(&api.database_connection, &mut out.interfaces).await;
-
     Ok(out.interfaces)
-}
-
-/// Resolve BMC IP → machine_id from `machine_topologies` and stamp it onto
-/// unlinked interfaces for display purposes only. No DB writes.
-async fn enrich_bmc_machine_ids(
-    pool: &sqlx::PgPool,
-    interfaces: &mut [forgerpc::MachineInterface],
-) {
-    let candidate_ips: Vec<String> = interfaces
-        .iter()
-        .filter(|i| i.machine_id.is_none() && i.attached_dpu_machine_id.is_none())
-        .flat_map(|i| i.address.iter().cloned())
-        .collect();
-
-    if candidate_ips.is_empty() {
-        return;
-    }
-
-    let pairs = match db::machine_topology::find_machine_bmc_pairs(pool, candidate_ips).await {
-        Ok(pairs) => pairs,
-        Err(err) => {
-            tracing::warn!(%err, "find_machine_bmc_pairs error during BMC interface enrichment");
-            return;
-        }
-    };
-
-    let bmc_ip_to_machine: HashMap<String, _> =
-        pairs.into_iter().map(|(mid, ip)| (ip, mid)).collect();
-
-    for interface in interfaces.iter_mut() {
-        if interface.machine_id.is_some() || interface.attached_dpu_machine_id.is_some() {
-            continue;
-        }
-        for ip in &interface.address {
-            if let Some(&machine_id) = bmc_ip_to_machine.get(ip) {
-                interface.is_bmc = Some(true);
-                interface.machine_id = Some(machine_id);
-                break;
-            }
-        }
-    }
 }
 
 #[derive(Template)]
 #[template(path = "interface_detail.html")]
 struct InterfaceDetail {
     id: String,
+    interface_type: String,
     dpu_machine_id: String,
+    association_type: String,
     machine_id: String,
+    switch_id: String,
+    power_shelf_id: String,
     segment_id: String,
     mac_address: String,
     ip_address: String,
@@ -201,11 +258,11 @@ struct InterfaceDetail {
     is_primary: bool,
     created: String,
     last_dhcp: String,
-    is_bmc: bool,
 }
 
 impl From<forgerpc::MachineInterface> for InterfaceDetail {
     fn from(mi: forgerpc::MachineInterface) -> Self {
+        let association = InterfaceAssociationDisplay::from(&mi);
         let created: DateTime<Utc> = mi
             .created
             .expect("machine_interfaces.created is NOT NULL in DB, should exist")
@@ -217,16 +274,20 @@ impl From<forgerpc::MachineInterface> for InterfaceDetail {
         };
         Self {
             id: mi.id.unwrap_or_default().to_string(),
+            interface_type: if mi.interface_type == Some(forgerpc::InterfaceType::Bmc as i32) {
+                "BMC".to_string()
+            } else {
+                "Data".to_string()
+            },
             dpu_machine_id: mi
                 .attached_dpu_machine_id
                 .as_ref()
                 .map(|id| id.to_string())
                 .unwrap_or_default(),
-            machine_id: mi
-                .machine_id
-                .as_ref()
-                .map(|id| id.to_string())
-                .unwrap_or_default(),
+            association_type: association.association_type,
+            machine_id: association.machine_id,
+            switch_id: association.switch_id,
+            power_shelf_id: association.power_shelf_id,
             segment_id: mi.segment_id.unwrap_or_default().to_string(),
             mac_address: mi.mac_address,
             ip_address: mi.address.join(","),
@@ -241,7 +302,6 @@ impl From<forgerpc::MachineInterface> for InterfaceDetail {
             last_dhcp: last_dhcp
                 .map(|d| d.format("%F %T %Z").to_string())
                 .unwrap_or_default(),
-            is_bmc: mi.is_bmc.unwrap_or(false),
         }
     }
 }
@@ -308,3 +368,6 @@ pub async fn detail(
     // TODO tmpl.domain_name = domain_name;
     (StatusCode::OK, Html(tmpl.render().unwrap())).into_response()
 }
+
+impl super::Base for InterfaceShow {}
+impl super::Base for InterfaceDetail {}

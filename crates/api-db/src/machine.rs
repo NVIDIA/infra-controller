@@ -25,6 +25,7 @@ use std::str::FromStr;
 use carbide_uuid::dpa_interface::DpaInterfaceId;
 use carbide_uuid::instance_type::InstanceTypeId;
 use carbide_uuid::machine::{MachineId, MachineType};
+use carbide_uuid::machine_validation::MachineValidationId;
 use chrono::{DateTime, Utc};
 use config_version::{ConfigVersion, Versioned};
 use health_report::{HealthReport, HealthReportApplyMode};
@@ -54,7 +55,6 @@ use model::resource_pool::common::CommonPools;
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgRow;
 use sqlx::{FromRow, PgConnection, Pool, Postgres, Row};
-use uuid::Uuid;
 
 use super::{DatabaseError, ObjectFilter, Transaction, queries};
 use crate::DatabaseResult;
@@ -165,6 +165,8 @@ pub async fn find_existing_machine(
         ON np.segment_id = ns.id
     WHERE
         mi.mac_address = $1::macaddr
+        AND
+        mi.interface_type != 'Bmc'
         AND
         $2::inet <<= np.prefix";
 
@@ -308,7 +310,8 @@ pub async fn find_by_ip(
             r#"{}
                 INNER JOIN machine_interfaces mi ON mi.machine_id = m.id
                 INNER JOIN machine_interface_addresses mia on mia.interface_id=mi.id
-                WHERE mia.address = $1::inet"#,
+                WHERE mia.address = $1::inet
+                AND mi.interface_type != 'Bmc'"#,
             JSON_MACHINE_SNAPSHOT_QUERY.deref()
         );
     }
@@ -456,7 +459,7 @@ pub async fn find_by_hostname(
 ) -> Result<Option<Machine>, DatabaseError> {
     lazy_static! {
         static ref query: String = format!(
-            "{} JOIN machine_interfaces mi ON m.id = mi.machine_id WHERE mi.hostname = $1",
+            "{} JOIN machine_interfaces mi ON m.id = mi.machine_id WHERE mi.hostname = $1 AND mi.interface_type != 'Bmc'",
             JSON_MACHINE_SNAPSHOT_QUERY.deref()
         );
     }
@@ -476,7 +479,7 @@ pub async fn find_by_mac_address(
 ) -> Result<Option<Machine>, DatabaseError> {
     lazy_static! {
         static ref query: String = format!(
-            "{} JOIN machine_interfaces mi ON m.id = mi.machine_id WHERE mi.mac_address = $1::macaddr",
+            "{} JOIN machine_interfaces mi ON m.id = mi.machine_id WHERE mi.mac_address = $1::macaddr AND mi.interface_type != 'Bmc'",
             JSON_MACHINE_SNAPSHOT_QUERY.deref()
         );
     }
@@ -614,6 +617,36 @@ pub async fn update_cleanup_time(
     Ok(())
 }
 
+pub async fn set_cleanup_time(
+    machine_id: &MachineId,
+    cleanup_time: DateTime<Utc>,
+    txn: &mut PgConnection,
+) -> Result<(), DatabaseError> {
+    let query = "UPDATE machines SET last_cleanup_time=$1 WHERE id=$2 RETURNING id";
+    let _id = sqlx::query_as::<_, MachineId>(query)
+        .bind(cleanup_time)
+        .bind(machine_id)
+        .fetch_one(txn)
+        .await
+        .map_err(|e| DatabaseError::query(query, e))?;
+
+    Ok(())
+}
+
+pub async fn clear_cleanup_time(
+    machine_id: &MachineId,
+    txn: &mut PgConnection,
+) -> Result<(), DatabaseError> {
+    let query = "UPDATE machines SET last_cleanup_time=NULL WHERE id=$1 RETURNING id";
+    let _id = sqlx::query_as::<_, MachineId>(query)
+        .bind(machine_id)
+        .fetch_one(txn)
+        .await
+        .map_err(|e| DatabaseError::query(query, e))?;
+
+    Ok(())
+}
+
 pub async fn update_bios_password_set_time(
     machine_id: &MachineId,
     txn: &mut PgConnection,
@@ -663,6 +696,7 @@ pub async fn find_host_by_dpu_machine_id(
         static ref query: String = format!(
             r#"{} INNER JOIN machine_interfaces mi ON m.id = mi.machine_id
                     WHERE mi.attached_dpu_machine_id=$1
+                    AND mi.interface_type != 'Bmc'
                     AND mi.attached_dpu_machine_id != mi.machine_id"#,
             JSON_MACHINE_SNAPSHOT_QUERY.deref()
         );
@@ -683,6 +717,7 @@ pub async fn lookup_host_machine_ids_by_dpu_ids(
     let query = r#"SELECT mi.machine_id
         FROM machine_interfaces mi
         WHERE mi.attached_dpu_machine_id != mi.machine_id
+        AND mi.interface_type != 'Bmc'
         AND mi.attached_dpu_machine_id = ANY($1)"#;
 
     sqlx::query_as(query)
@@ -726,7 +761,8 @@ pub async fn find_dpus_by_host_machine_id(
             r#"{}
                     INNER JOIN machine_interfaces mi
                       ON m.id = mi.attached_dpu_machine_id
-                    WHERE mi.machine_id=$1"#,
+                    WHERE mi.machine_id=$1
+                    AND mi.interface_type != 'Bmc'"#,
             JSON_MACHINE_SNAPSHOT_QUERY.deref()
         );
     }
@@ -1872,7 +1908,7 @@ pub async fn update_machine_validation_time(
 }
 pub async fn update_machine_validation_id(
     machine_id: &MachineId,
-    validation_id: uuid::Uuid,
+    validation_id: MachineValidationId,
     context_column_name: String,
     txn: &mut PgConnection,
 ) -> Result<MachineId, DatabaseError> {
@@ -2033,7 +2069,7 @@ pub async fn allocate_secondary_vtep_ip(
 
 pub async fn find_by_validation_id(
     txn: &mut PgConnection,
-    validation_id: &Uuid,
+    validation_id: &MachineValidationId,
 ) -> Result<Option<Machine>, DatabaseError> {
     lazy_static! {
         static ref query: String = format!(

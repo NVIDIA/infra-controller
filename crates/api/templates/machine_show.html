@@ -4,7 +4,7 @@
 
 {% block content %}
 <div id="json"><a id="json-link" href="">JSON</a></div>
-<h1>{{ title }}</h1>
+<h1>{{ title }} ({{ page.total_items() }})</h1>
 
 <table class="sortable overview">
 	<thead>
@@ -33,32 +33,9 @@
 	<tbody>
 	{% for m in machines %}
 		<tr>
-			<td>{{ loop.index }}</td> 
+			<td>{{ page.current_page() * page.limit() + loop.index }}</td>
 			<td>{{ m.id|machine_id_link|safe }}</td>
-			<td>
-				{% if m.state.to_lowercase().contains("failed") %}
-					<span class="bubble error">
-						{{ m.state }}
-						{% if !m.state.contains("Ready") %}({{ m.time_in_state }}){% endif %}
-						{% if m.time_in_state_above_sla %}⏱️{% endif %}
-					</span>
-				{% else if m.time_in_state_above_sla %}
-					<span class="bubble warning">
-						{{ m.state }}
-						{% if !m.state.contains("Ready") %}({{ m.time_in_state }}){% endif %}
-						⏱️
-					</span>
-				{% else if m.state == "Ready" || m.state == "Assigned/Ready" %}
-					<span class="bubble success">
-						{{ m.state }}
-					</span>
-				{% else %}
-					<span class="bubble">
-						{{ m.state }}
-						{% if !m.state.contains("Ready") %}({{ m.time_in_state }}){% endif %}
-					</span>
-				{% endif %}
-			</td>
+			<td>{{ m.state_display|safe }}</td>
 			<td>
 				<a href="/admin/machine/{{ m.id }}/health">
 					{{ m.health_probe_alerts|health_alerts_fmt(false, false)|safe }}
@@ -98,5 +75,7 @@
 	{% endfor %}
 	</tbody>
 </table>
+
+{% include "pages_footer.html" %}
 
 {% endblock %}

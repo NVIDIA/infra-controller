@@ -19,6 +19,7 @@ use std::collections::HashMap;
 
 use carbide_network::virtualization::VpcVirtualizationType;
 use db::dns::domain;
+use db::network_segment::reconcile_network_defs;
 use db::vpc::{self};
 use db::{ObjectColumnFilter, Transaction, dpu_agent_upgrade_policy, network_segment};
 use itertools::Itertools;
@@ -82,19 +83,29 @@ pub async fn create_initial_networks(
         return Ok(());
     }
     let domain_id = all_domains[0].id;
+    reconcile_network_defs(&mut txn, networks).await?;
+
     for (name, def) in networks {
         if db::network_segment::find_by_name(&mut txn, name)
             .await
             .is_ok()
         {
-            // Network segments are only created the first time we start carbide-api
+            // Network segments are only created the first time we start carbide-api;
+            // `reconcile_network_defs` above has already recorded the snapshot if
+            // it was missing (the backfill path).
             tracing::debug!("Network segment {name} exists");
             continue;
         }
         let mut ns = NewNetworkSegment::build_from(name, domain_id, def)?;
         ns.can_stretch = Some(true);
+        // Capture before `save` moves `ns`. `insert_network_def` needs
+        // the id because `network_def.segment_id` is FK-bound to it.
+        let segment_id = ns.id;
         // update_network_segments_svi_ip will take care of allocating svi ip.
         crate::handlers::network_segment::save(api, &mut txn, ns, true, false).await?;
+        // Snapshot the network definition in the same transaction as the network_segment row,
+        // so the two stay consistent across restarts.
+        db::network_segment::insert_network_def(&mut txn, name, segment_id, def).await?;
         tracing::info!("Created network segment {name}");
     }
 
@@ -156,10 +167,13 @@ pub async fn update_network_segments_svi_ip(db_pool: &Pool<Postgres>) -> Result<
 
     let all_segments = all_segments
         .into_iter()
-        .filter(|x| x.can_stretch.is_some_and(|x| x))
+        .filter(|x| x.status.can_stretch.is_some_and(|x| x))
         .collect::<Vec<_>>();
 
-    let all_vpcs_ids = all_segments.iter().filter_map(|x| x.vpc_id).collect_vec();
+    let all_vpcs_ids = all_segments
+        .iter()
+        .filter_map(|x| x.config.vpc_id)
+        .collect_vec();
     let all_vpcs = db::vpc::find_by(
         &mut txn,
         ObjectColumnFilter::List(vpc::IdColumn, &all_vpcs_ids),
@@ -175,7 +189,7 @@ pub async fn update_network_segments_svi_ip(db_pool: &Pool<Postgres>) -> Result<
 
     // Allocate SVI IP for the segments attached to a FNN VPC.
     for segment in all_segments {
-        let Some(vpc_id) = segment.vpc_id else {
+        let Some(vpc_id) = segment.config.vpc_id else {
             continue;
         };
 
@@ -246,35 +260,113 @@ pub(crate) async fn create_admin_vpc(
 
     let mut txn = Transaction::begin(db_pool).await?;
 
-    let admin_segment = db::network_segment::admin(&mut txn).await?;
-    let existing_vpc = db::vpc::find_by_vni(&mut txn, vpc_vni as i32).await?;
-    if let Some(existing_vpc) = existing_vpc.first() {
-        if let Some(vpc_id) = admin_segment.vpc_id {
-            if vpc_id != existing_vpc.id {
+    let configured_vni = vpc_vni as i32;
+    let admin_segments = db::network_segment::admin(&mut txn).await?;
+    let attached_admin_vpc_ids = admin_segments
+        .iter()
+        .filter_map(|segment| segment.config.vpc_id)
+        .unique()
+        .collect_vec();
+
+    // Admin VPC startup reconciliation has three expected cases:
+    // 1. Fresh install with admin FNN enabled: no admin segments are attached
+    //    and no VPC should already own the configured admin VNI, so create it.
+    // 2. Existing install with admin FNN already seeded: admin segments point
+    //    at one admin VPC, so that attached VPC is authoritative and its VNI
+    //    may be updated from config.
+    // 3. Existing install enabling admin FNN for the first time: admin segments
+    //    are unattached, but tenant VPCs may already exist. In this case we
+    //    must reject if any VPC already owns the configured admin VNI rather
+    //    than adopting that VPC as the admin VPC.
+    let existing_vpc = match attached_admin_vpc_ids.as_slice() {
+        [admin_vpc_id] => {
+            // The attached VPC is the authoritative admin VPC across config changes.
+            let mut vpcs = db::vpc::find_by(
+                &mut txn,
+                ObjectColumnFilter::One(vpc::IdColumn, admin_vpc_id),
+            )
+            .await?;
+            if vpcs.len() != 1 {
                 return Err(CarbideError::internal(format!(
-                    "Mismatch found in admin vpc id {} and admin network segment's attached vpc id {vpc_id}.",
-                    existing_vpc.id
+                    "Admin network segment references missing VPC {admin_vpc_id}."
+                )));
+            }
+            Some(vpcs.remove(0))
+        }
+        [] => {
+            // This is first-time admin VPC seeding. Do not adopt an existing
+            // tenant VPC that happens to use the configured admin VNI.
+            if let Some(conflicting_vpc) =
+                db::vpc::find_by_vni(&mut txn, configured_vni).await?.pop()
+            {
+                return Err(CarbideError::internal(format!(
+                    "Configured admin VPC VNI {configured_vni} is already used by VPC {}, but no admin VPC is attached to admin network segments.",
+                    conflicting_vpc.id
+                )));
+            }
+            None
+        }
+        _ => {
+            return Err(CarbideError::internal(format!(
+                "Admin network segments are attached to multiple VPCs: {}.",
+                attached_admin_vpc_ids.iter().join(", ")
+            )));
+        }
+    };
+
+    if let Some(mut existing_vpc) = existing_vpc {
+        let existing_vni = existing_vpc.status.as_ref().and_then(|status| status.vni);
+        if existing_vni != Some(configured_vni) || existing_vpc.vni != Some(configured_vni) {
+            if let Some(conflicting_vpc) = db::vpc::find_by_vni(&mut txn, configured_vni)
+                .await?
+                .into_iter()
+                .find(|vpc| vpc.id != existing_vpc.id)
+            {
+                return Err(CarbideError::internal(format!(
+                    "Configured admin VPC VNI {configured_vni} is already used by VPC {}, but admin network segments are attached to VPC {}.",
+                    conflicting_vpc.id, existing_vpc.id
                 )));
             }
 
-            // All good here. We have valid admin vpc and it is attached to valid segment.
-            return Ok(());
-        } else {
-            // Somehow vni field is not updated in network segment table. do it now.
-            db::network_segment::set_vpc_id_and_can_stretch(
-                &admin_segment,
-                &mut txn,
-                existing_vpc.id,
-            )
-            .await?;
-            return Ok(());
+            existing_vpc = db::vpc::set_vni(&existing_vpc, &mut txn, configured_vni).await?;
+            tracing::info!(
+                vpc_id = %existing_vpc.id,
+                previous_vni = ?existing_vni,
+                configured_vni,
+                "Updated admin VPC VNI from FNN config"
+            );
         }
+
+        for admin_segment in admin_segments {
+            match admin_segment.config.vpc_id {
+                Some(vpc_id) if vpc_id != existing_vpc.id => {
+                    return Err(CarbideError::internal(format!(
+                        "Mismatch found in admin vpc id {} and admin network segment's attached vpc id {vpc_id}.",
+                        existing_vpc.id
+                    )));
+                }
+                Some(_) => {}
+                None => {
+                    // Attach any newly-created admin segment to the existing admin VPC.
+                    db::network_segment::set_vpc_id_and_can_stretch(
+                        &admin_segment,
+                        &mut txn,
+                        existing_vpc.id,
+                    )
+                    .await?;
+                }
+            }
+        }
+
+        txn.commit().await?;
+
+        return Ok(());
     }
 
     // Let's create admin vpc.
     let admin_vpc = NewVpc {
         id: uuid::Uuid::new_v4().into(),
-        vni: Some(vpc_vni as i32),
+        vni: Some(configured_vni),
         tenant_organization_id: "carbide_internal".to_string(),
         // For consistency, but admin routing profile is defined in-line in the
         // FNN config.
@@ -291,14 +383,16 @@ pub(crate) async fn create_admin_vpc(
     let vpc = db::vpc::persist(
         admin_vpc,
         VpcStatus {
-            vni: Some(vpc_vni as i32),
+            vni: Some(configured_vni),
         },
         &mut txn,
     )
     .await?;
 
-    // Attach it to admin network segment.
-    db::network_segment::set_vpc_id_and_can_stretch(&admin_segment, &mut txn, vpc.id).await?;
+    // Attach it to admin network segments.
+    for admin_segment in admin_segments {
+        db::network_segment::set_vpc_id_and_can_stretch(&admin_segment, &mut txn, vpc.id).await?;
+    }
 
     txn.commit().await?;
 

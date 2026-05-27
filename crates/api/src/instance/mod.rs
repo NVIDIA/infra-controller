@@ -19,6 +19,7 @@ use std::collections::{HashMap, HashSet};
 
 use ::rpc::errors::RpcDataConversionError;
 use ::rpc::forge as rpc;
+use carbide_network::virtualization::VpcVirtualizationType;
 use carbide_uuid::infiniband::IBPartitionId;
 use carbide_uuid::instance::InstanceId;
 use carbide_uuid::instance_type::InstanceTypeId;
@@ -47,6 +48,7 @@ use model::metadata::Metadata;
 use model::network_segment::NetworkSegmentType;
 use model::os::OperatingSystemVariant;
 use model::tenant::TenantOrganizationId;
+use model::vpc::{FabricInterfaceType, VpcVirtualizationTypeCapabilities};
 use model::vpc_prefix::VpcPrefix;
 use sqlx::PgConnection;
 
@@ -187,7 +189,7 @@ pub async fn allocate_network(
     // This is needed so that last_used_prefix is not modified by multiple clients at same time.
     // Keep values in mut Hashmap and update last_used_prefix in the end of this function.
     // Also Validate:
-    // 1. All vpc_prefix_ids should point to same vpc.
+    // 1. vpc_prefix_ids can span VPCs only when every VPC is FNN.
     // 2. Pointed vpc'organization id must be same as instance's tenant_org.
     // 3. If no vpc_prefix_id is mentioned, return.
 
@@ -220,21 +222,37 @@ pub async fn allocate_network(
 
     // This can be empty also if vpc_prefix_id is not configured at carbide.
     // In this case error 'Unknown VPC prefix id' will be thrown.
-    if vpc_prefixes
+    let vpc_ids = vpc_prefixes
         .values()
         .map(|x| x.vpc_id)
-        .collect::<HashSet<_>>()
-        .len()
-        > 1
-    {
-        return Err(CarbideError::internal(format!(
-            "Interface config contains interfaces from multiple vpcs {:?}.",
-            vpc_prefixes
-                .values()
-                .map(|x| (x.id, x.vpc_id))
-                .collect_vec()
-        )));
-    };
+        .collect::<HashSet<_>>();
+    if vpc_ids.len() > 1 {
+        let vpc_ids = vpc_ids.into_iter().collect_vec();
+        let vpcs = db::vpc::find_by(
+            &mut *txn,
+            ObjectColumnFilter::List(db::vpc::IdColumn, &vpc_ids),
+        )
+        .await?;
+
+        if vpcs.len() != vpc_ids.len()
+            || vpcs
+                .iter()
+                .any(|x| x.network_virtualization_type != VpcVirtualizationType::Fnn)
+        {
+            return Err(CarbideError::InvalidConfiguration(
+                ConfigValidationError::InvalidValue(format!(
+                    "Interface config contains interfaces from multiple VPCs, which is only supported when all VPCs use FNN: prefixes={:?}, vpcs={:?}.",
+                    vpc_prefixes
+                        .values()
+                        .map(|x| (x.id, x.vpc_id))
+                        .collect_vec(),
+                    vpcs.iter()
+                        .map(|x| (x.id, x.network_virtualization_type))
+                        .collect_vec()
+                )),
+            ));
+        }
+    }
 
     // Allocate linknet prefixes for each interface's VPC prefix(es).
     for interface in &mut network_config.interfaces {
@@ -299,16 +317,25 @@ pub async fn allocate_network(
                 // Dual-stack: if IPv6 config is set, add a v6 linknet to the same segment.
                 if let Some(ref v6_config) = interface.ipv6_interface_config {
                     let v6_prefix_id = &v6_config.vpc_prefix_id;
-                    let (v6_vpc_prefix, v6_last_used) = {
+                    let (v6_vpc_id, v6_vpc_prefix, v6_last_used) = {
                         vpc_prefixes
                             .get(v6_prefix_id)
-                            .map(|vpc| (vpc.config.prefix, vpc.status.last_used_prefix))
+                            .map(|vpc| (vpc.vpc_id, vpc.config.prefix, vpc.status.last_used_prefix))
                             .ok_or_else(|| {
                                 CarbideError::internal(format!(
                                     "Unknown VPC prefix id: {v6_prefix_id}"
                                 ))
                             })?
                     };
+
+                    if v6_vpc_id != vpc_id {
+                        return Err(CarbideError::InvalidConfiguration(
+                            ConfigValidationError::InvalidValue(format!(
+                                "dual-stack VPC prefixes must belong to the same VPC: primary_vpc_prefix_id={vpc_prefix_id}, primary_vpc_id={vpc_id}, ipv6_vpc_prefix_id={v6_prefix_id}, ipv6_vpc_id={v6_vpc_id}",
+                            )),
+                        ));
+                    }
+
                     let v6_linknet_prefix = 127;
                     let v6_requested_prefix = v6_config
                         .requested_ip_addr
@@ -834,12 +861,25 @@ pub async fn batch_allocate_instances(
                 .unwrap_or(true),
         )?;
 
-        // Reject instance configs whose network interfaces reference segments
-        // the host can't actually serve. For a zero-DPU host, this means
-        // anything beyond its HostInband segments; there's no DPU to handle
-        // overlay/tenant networking, so accepting the request would leave a
-        // zero-DPU instance stuck in Provisioning with no path to completion.
+        // Zero-DPU hosts (no DPU, or DPU in NIC mode) MUST use `auto`, because
+        // their only valid attachments are HostInband segments, and NICo knows
+        // which one(s) the host is on. Conversely, hosts with DPUs cannot use
+        // `auto`, and are expected to enumerate their interfaces explicitly.
         if mh_snapshot.is_zero_dpu() {
+            if !request.config.network.auto {
+                return Err(CarbideError::InvalidArgument(format!(
+                    "zero-DPU host {} requires `InstanceNetworkConfig.auto = true`; cannot allocate an instance with explicitly-listed interfaces or with `auto = false`",
+                    mh_snapshot.host_snapshot.id,
+                )));
+            }
+
+            // ...and eeven though gRPC <-> model validation rejects
+            // auto + non-empty interfaces, double-check here so a future
+            // refactor can't silently sneak unsupported segment references
+            // past this point. For a zero-DPU host, the only valid
+            // attachments are HostInband segments; nothing else can be
+            // served by a host with no DPU to handle overlay/tenant
+            // networking.
             let allowed_segment_ids: HashSet<_> = mh_snapshot
                 .host_snapshot
                 .interfaces
@@ -863,6 +903,38 @@ pub async fn batch_allocate_instances(
                 }
             }
 
+            // Each of the host's HostInband segments must be bound to a
+            // VPC whose fabric interface type matches a zero-DPU host's
+            // (i.e. `Nic`). HostInband segments are allowed to exist
+            // without a VPC at segment-create time (so operators can
+            // create them up front for DHCP routing during site-explorer
+            // ingestion); we require the binding here, when a tenant
+            // intent actually shows up to allocate an instance.
+            for segment_id in &allowed_segment_ids {
+                let vpc = db::vpc::find_by_segment(&mut txn, *segment_id)
+                    .await
+                    .map_err(|e| {
+                        if e.is_not_found() {
+                            CarbideError::FailedPrecondition(format!(
+                                "zero-DPU host {} has HostInband segment {} that is not bound to a Flat VPC; instance allocation requires the segment to be in a Flat VPC",
+                                mh_snapshot.host_snapshot.id, segment_id,
+                            ))
+                        } else {
+                            CarbideError::from(e)
+                        }
+                    })?;
+                let vpc_iface = vpc.network_virtualization_type.fabric_interface_type();
+                if vpc_iface != FabricInterfaceType::Nic {
+                    return Err(CarbideError::FailedPrecondition(format!(
+                        "zero-DPU host {} has HostInband segment {} bound to VPC {} ({}); zero-DPU hosts can only allocate into VPCs whose fabric_interface_type is `nic` (got `{vpc_iface}`)",
+                        mh_snapshot.host_snapshot.id,
+                        segment_id,
+                        vpc.id,
+                        vpc.network_virtualization_type,
+                    )));
+                }
+            }
+
             // Extension services run on DPU agents; a zero-DPU host has no
             // place to schedule them. We need to check, otherwise the status
             // would just report "Unknown" forever.
@@ -871,6 +943,40 @@ pub async fn batch_allocate_instances(
                     "zero-DPU host {} cannot serve extension services; remove `dpu_extension_services` from the instance config.",
                     mh_snapshot.host_snapshot.id,
                 )));
+            }
+        } else {
+            // `auto` is only valid on zero-DPU hosts; DPU-managed hosts must
+            // list their interfaces explicitly.
+            if request.config.network.auto {
+                return Err(CarbideError::InvalidArgument(format!(
+                    "host {} has DPUs; `InstanceNetworkConfig.auto` is only valid on zero-DPU hosts",
+                    mh_snapshot.host_snapshot.id,
+                )));
+            }
+
+            // DPU-managed hosts must only allocate into VPCs whose
+            // fabric interface type matches (i.e. `Dpu`). The segment-
+            // binding rule already prevents `HostInband` segments from
+            // living in a Dpu-fabric VPC, but reject explicitly here so
+            // a DPU instance referencing a `HostInband` segment (which
+            // would be in a Nic-fabric VPC) fails with a clear message
+            // rather than getting stuck somewhere downstream.
+            for iface in &request.config.network.interfaces {
+                if let Some(ns_id) = iface.network_segment_id {
+                    let vpc = db::vpc::find_by_segment(&mut txn, ns_id)
+                        .await
+                        .map_err(CarbideError::from)?;
+                    let vpc_iface = vpc.network_virtualization_type.fabric_interface_type();
+                    if vpc_iface != FabricInterfaceType::Dpu {
+                        return Err(CarbideError::FailedPrecondition(format!(
+                            "DPU-managed host {} cannot allocate an instance into VPC {} ({}, via segment {}); DPU hosts can only allocate into VPCs whose fabric_interface_type is `dpu` (got `{vpc_iface}`)",
+                            mh_snapshot.host_snapshot.id,
+                            vpc.id,
+                            vpc.network_virtualization_type,
+                            ns_id,
+                        )));
+                    }
+                }
             }
         }
 
@@ -932,7 +1038,7 @@ pub async fn batch_allocate_instances(
         let updated_network_config = db::instance_network_config::add_inband_interfaces_to_config(
             request.config.network.clone(),
             inband_segment_ids,
-        );
+        )?;
 
         // Allocate IPs
         let updated_network_config = db::instance_network_config::with_allocated_ips(

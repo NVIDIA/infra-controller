@@ -38,7 +38,9 @@ use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
 use hyper_util::rt::TokioExecutor;
 use ipnetwork::IpNetwork;
-use rpc::forge::{DpuInfo, FlatInterfaceNetworkSecurityGroupConfig, InterfaceAssociationType};
+use rpc::forge::{
+    DpuInfo, FlatInterfaceNetworkSecurityGroupConfig, InterfaceAssociationType, InterfaceType,
+};
 use rpc::{Timestamp, common as rpc_common};
 use tokio::sync::Mutex;
 
@@ -88,6 +90,7 @@ async fn test_traffic_intercept_bridging() -> eyre::Result<()> {
     let bridging = traffic_intercept_bridging::build(
         traffic_intercept_bridging::TrafficInterceptBridgingConfig {
             secondary_overlay_vtep_ip: "1.1.1.1".to_string(),
+            secondary_vtep_aggregate_prefixes: vec!["1.1.1.0/24".to_string()],
             vf_intercept_bridge_ip: "10.10.10.2".to_string(),
             vf_intercept_bridge_name: "pfdpu000br-dpu".to_string(),
             intercept_bridge_prefix_len: 29,
@@ -459,6 +462,7 @@ async fn handle_netconf(AxumState(state): AxumState<Arc<Mutex<State>>>) -> impl 
         internal_uuid: None,
         mtu: None,
         ipv6_interface_config: None,
+        routing_profile: None,
     };
     assert_eq!(admin_interface.svi_ip, None);
 
@@ -628,6 +632,7 @@ async fn handle_netconf(AxumState(state): AxumState<Arc<Mutex<State>>>) -> impl 
         internal_uuid: None,
         mtu: None,
         ipv6_interface_config: None,
+        routing_profile: None,
     };
 
     let network_security_policy_overrides = vec![
@@ -758,7 +763,6 @@ async fn handle_netconf(AxumState(state): AxumState<Arc<Mutex<State>>>) -> impl 
                 user_data: Some("".to_string()),
                 variant: Some(rpc::forge::instance_operating_system_config::Variant::Ipxe(rpc::forge::InlineIpxe {
                     ipxe_script: " chain http://10.217.126.4/public/blobs/internal/x86_64/qcow-imager.efi loglevel=7 console=ttyS0,115200 console=tty0 pci=realloc=off image_url=https://pbss.s8k.io/v1/AUTH_team-forge/images.qcow2/carbide-dev-environment/carbide-dev-environment-latest.qcow2".to_string(),
-                    user_data: Some("".to_string()),
                 })),
             }),
             network: Some(rpc::InstanceNetworkConfig {
@@ -774,6 +778,7 @@ async fn handle_netconf(AxumState(state): AxumState<Arc<Mutex<State>>>) -> impl 
                     ip_address: None,
                     ipv6_interface_config: None,
                 }],
+                auto: false,
             }),
             infiniband: None,
             network_security_group_id: None,
@@ -838,6 +843,8 @@ async fn handle_netconf(AxumState(state): AxumState<Arc<Mutex<State>>>) -> impl 
             tenant_leak_communities_accepted: false,
             leak_default_route_from_underlay: false,
             leak_tenant_host_routes_to_underlay: false,
+            accepted_leaks_from_underlay: vec![],
+            allowed_anycast_prefixes: vec![],
             route_target_imports: vec![rpc_common::RouteTarget {
                 asn: 44444,
                 vni: 55555,
@@ -861,6 +868,7 @@ async fn handle_netconf(AxumState(state): AxumState<Arc<Mutex<State>>>) -> impl 
             }),
             additional_overlay_vtep_ip: Some("10.2.2.1".to_string()),
             public_prefixes: vec!["7.8.0.0/16".to_string()],
+            secondary_vtep_aggregate_prefixes: vec!["10.2.2.0/24".to_string()],
         }),
 
         dhcp_servers: vec!["127.0.0.1".to_string()],
@@ -958,6 +966,7 @@ fn timestamp_from_secs_nanos(secs: i64, nanos: i32) -> Timestamp {
     Timestamp::from(system_time)
 }
 
+#[allow(deprecated)]
 async fn handle_find_interfaces() -> impl axum::response::IntoResponse {
     let interface = rpc::forge::MachineInterface {
         id: Some(
@@ -986,7 +995,8 @@ async fn handle_find_interfaces() -> impl axum::response::IntoResponse {
         vendor: None,
         created: Some(timestamp_from_secs_nanos(1773084037, 3824000)),
         last_dhcp: Some(timestamp_from_secs_nanos(1773097243, 70533000)),
-        is_bmc: None,
+        is_bmc: Some(false),
+        interface_type: Some(InterfaceType::Data.into()),
         power_shelf_id: None,
         switch_id: None,
         association_type: Some(InterfaceAssociationType::Machine.into()),

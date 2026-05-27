@@ -24,11 +24,12 @@ use common::api_fixtures::{
 use db::{self};
 use futures_util::FutureExt;
 use mac_address::MacAddress;
-use model::machine::{DpuInitState, HostReprovisionState, MachineState, ManagedHostState};
+use model::machine::{
+    CleanupContext, DpuInitState, HostReprovisionState, MachineState, ManagedHostState,
+};
 use rpc::forge::CloudInitInstructionsRequest;
 use rpc::forge::forge_server::Forge;
 
-use crate::handlers::machine_interface_address::preallocate_machine_interface;
 use crate::tests::common;
 use crate::tests::common::api_fixtures::managed_host::ManagedHostConfig;
 use crate::tests::common::api_fixtures::site_explorer::MockExploredHost;
@@ -65,11 +66,23 @@ async fn get_pxe_instructions(
     arch: rpc::forge::MachineArchitecture,
     product: Option<String>,
 ) -> rpc::forge::PxeInstructions {
+    let mut txn = env.pool.begin().await.unwrap();
+    let iface = db::machine_interface::find_one(txn.as_mut(), interface_id)
+        .await
+        .unwrap();
+    txn.commit().await.unwrap();
+    let client_ip = iface
+        .addresses
+        .first()
+        .expect("interface must have at least one address to PXE boot")
+        .to_string();
+
     env.api
         .get_pxe_instructions(tonic::Request::new(rpc::forge::PxeInstructionRequest {
             arch: arch as i32,
-            interface_id: Some(interface_id),
             product,
+            client_ip: Some(client_ip),
+            ..Default::default()
         }))
         .await
         .unwrap()
@@ -351,6 +364,7 @@ async fn test_pxe_host(pool: sqlx::PgPool) {
         host_id,
         &ManagedHostState::WaitingForCleanup {
             cleanup_state: model::machine::CleanupState::Init,
+            cleanup_context: CleanupContext::Deprovision,
         },
         &env.pool,
     )
@@ -427,6 +441,46 @@ async fn test_cloud_init_when_machine_is_not_created(pool: sqlx::PgPool) {
     assert!(cloud_init_cfg.discovery_instructions.is_some());
 }
 
+/// Verifies cloud-init discovery instructions carry the configured DPU VF count.
+#[crate::sqlx_test]
+async fn test_cloud_init_uses_configured_num_of_vfs(pool: sqlx::PgPool) {
+    let mut config = get_config();
+    config.dpu_config.num_of_vfs = 64;
+    let env = create_test_env_with_overrides(pool, TestEnvOverrides::with_config(config)).await;
+
+    // Discover an unassigned interface so the API returns discovery instructions.
+    let mac_address = "FF:FF:FF:FF:FF:FE".to_string();
+    env.api
+        .discover_dhcp(DhcpDiscovery::builder(&mac_address, "192.0.2.1").tonic_request())
+        .await
+        .unwrap();
+
+    // Look up the allocated IP address to request cloud-init instructions.
+    let mut txn = env.pool.begin().await.unwrap();
+    let interfaces = db::machine_interface::find_by_mac_address(
+        txn.as_mut(),
+        mac_address.parse::<MacAddress>().unwrap(),
+    )
+    .await
+    .unwrap();
+    txn.commit().await.unwrap();
+
+    let cloud_init_cfg = env
+        .api
+        .get_cloud_init_instructions(tonic::Request::new(CloudInitInstructionsRequest {
+            ip: interfaces[0].addresses[0].to_string(),
+        }))
+        .await
+        .expect("get_cloud_init_instructions returned an error")
+        .into_inner();
+
+    // The configured value should pass through to carbide-pxe unchanged.
+    let discovery_instructions = cloud_init_cfg
+        .discovery_instructions
+        .expect("expected discovery instructions");
+    assert_eq!(discovery_instructions.num_of_vfs, Some(64));
+}
+
 #[crate::sqlx_test]
 async fn test_cloud_init_after_dpu_update(pool: sqlx::PgPool) {
     let env = create_test_env(pool).await;
@@ -479,7 +533,7 @@ async fn preallocate_external_interface(
     let ip_addr: std::net::IpAddr = ip.parse().unwrap();
 
     let mut txn = env.pool.begin().await.unwrap();
-    preallocate_machine_interface(&mut txn, mac_address, ip_addr)
+    db::machine_interface::preallocate_machine_interface(&mut txn, mac_address, ip_addr)
         .await
         .unwrap();
     txn.commit().await.unwrap();
@@ -648,4 +702,28 @@ async fn test_cloud_init_url_overrides_none_for_internal_host(pool: sqlx::PgPool
         cloud_init.pxe_url_override, None,
         "internal host should not get pxe_url_override"
     );
+}
+
+// carbide-pxe identifies the booting machine by the client IP it observed
+// and forwards it to carbide-api. An IP that doesn't map to any interface
+// in machine_interface_addresses should NotFound cleanly. (The happy path
+// -- known IP resolves to the right interface -- is exercised by every
+// other test in this module that calls get_pxe_instructions, since the
+// helper now goes through the client_ip lookup.)
+#[crate::sqlx_test]
+async fn test_pxe_instructions_unknown_client_ip_returns_not_found(pool: sqlx::PgPool) {
+    let env = create_env_with_external_urls(pool).await;
+
+    let result = env
+        .api
+        .get_pxe_instructions(tonic::Request::new(rpc::forge::PxeInstructionRequest {
+            arch: rpc::forge::MachineArchitecture::X86 as i32,
+            product: None,
+            client_ip: Some("203.0.113.99".to_string()),
+            ..Default::default()
+        }))
+        .await;
+
+    let status = result.expect_err("expected NotFound for unknown client_ip");
+    assert_eq!(status.code(), tonic::Code::NotFound, "got: {status:?}");
 }

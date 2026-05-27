@@ -23,14 +23,15 @@ use model::machine::{
 };
 use model::sku::diff_skus;
 use sqlx::{PgConnection, PgTransaction};
-
-use super::{HostHandlerParams, discovered_after_state_transition};
-use crate::state_controller::common_services::CommonStateHandlerServices;
-use crate::state_controller::machine::context::MachineStateHandlerContextObjects;
-use crate::state_controller::machine::handler::trigger_reboot_if_needed;
-use crate::state_controller::state_handler::{
+use state_controller::state_handler::{
     StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
+
+use super::{HostHandlerParams, discovered_after_state_transition};
+use crate::state_controller::machine::context::{
+    MachineStateHandlerContextObjects, MachineStateHandlerServices,
+};
+use crate::state_controller::machine::handler::trigger_reboot_if_needed;
 
 fn get_bom_validation_context(state: &ManagedHostState) -> BomValidatingContext {
     if let ManagedHostState::BomValidating {
@@ -196,7 +197,7 @@ fn should_allow_allocation_on_validation_failure(host_handler_params: &HostHandl
 pub(crate) async fn handle_bom_validation_requested(
     host_handler_params: &HostHandlerParams,
     mh_snapshot: &ManagedHostStateSnapshot,
-    services: &CommonStateHandlerServices,
+    services: &MachineStateHandlerServices,
 ) -> Result<Option<StateHandlerOutcome<ManagedHostState>>, StateHandlerError> {
     if !host_handler_params.bom_validation.enabled {
         tracing::debug!("BOM validation disabled");

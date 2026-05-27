@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use ::rpc::measured_boot::FromGrpc;
 use askama::Template;
 use axum::extract::{Path as AxumPath, Query as AxumQuery, State as AxumState};
 use axum::response::{Html, IntoResponse};
@@ -30,7 +31,7 @@ use measured_boot::{
 use rpc::forge::forge_server::Forge;
 use rpc::protos::measured_boot as mbprotos;
 
-use super::filters;
+use super::{Base, filters};
 use crate::api::Api;
 
 const PCR_SLOT_MAX_NUM: usize = 12;
@@ -107,7 +108,7 @@ pub async fn show_attestation_results(
     });
     let report = match state.show_measurement_report_for_id(request).await {
         Ok(resp) => match resp.into_inner().report {
-            Some(report) => match mbreport::MeasurementReport::from_grpc(Some(&report)) {
+            Some(report) => match mbreport::MeasurementReport::from_grpc(report) {
                 Ok(report) => report,
                 Err(err) => {
                     tracing::error!(%err, "show_attestation_results");
@@ -142,7 +143,7 @@ pub async fn show_attestation_results(
         });
         let bundle = match state.show_measurement_bundle(request).await {
             Ok(resp) => match resp.into_inner().bundle {
-                Some(bundle) => match mbbundle::MeasurementBundle::from_grpc(Some(&bundle)) {
+                Some(bundle) => match mbbundle::MeasurementBundle::from_grpc(bundle) {
                     Ok(bundle) => bundle,
                     Err(err) => {
                         tracing::error!(%err, "show_attestation_results");
@@ -175,7 +176,7 @@ pub async fn show_attestation_results(
         });
         match state.find_closest_bundle_match(request).await {
             Ok(resp) => match resp.into_inner().bundle {
-                Some(bundle) => match mbbundle::MeasurementBundle::from_grpc(Some(&bundle)) {
+                Some(bundle) => match mbbundle::MeasurementBundle::from_grpc(bundle) {
                     Ok(bundle) => Some(bundle),
                     Err(err) => {
                         tracing::error!(%err, "show_attestation_results");
@@ -208,7 +209,7 @@ pub async fn show_attestation_results(
         match state.show_measurement_system_profile(request).await {
             Ok(resp) => match resp.into_inner().system_profile {
                 Some(profile_pb) => {
-                    match mbprofile::MeasurementSystemProfile::from_grpc(Some(&profile_pb)) {
+                    match mbprofile::MeasurementSystemProfile::from_grpc(profile_pb) {
                         Ok(profile) => profile,
                         Err(err) => {
                             tracing::error!(%err, "show_attestation_results");
@@ -321,18 +322,16 @@ async fn get_latest_journal_for_machine_id(
 
     let latest_journal = match state.show_measurement_journal(request).await {
         Ok(response) => match response.into_inner().journal {
-            Some(journal_proto) => {
-                match mbjournal::MeasurementJournal::from_grpc(Some(&journal_proto)) {
-                    Ok(journal) => journal,
-                    Err(err) => {
-                        tracing::error!(%err, "get_latest_journal_for_machine_id");
-                        return Err((
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Html("Failed parsing MeasurementBundle protobuf".to_string()),
-                        ));
-                    }
+            Some(journal_proto) => match mbjournal::MeasurementJournal::from_grpc(journal_proto) {
+                Ok(journal) => journal,
+                Err(err) => {
+                    tracing::error!(%err, "get_latest_journal_for_machine_id");
+                    return Err((
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Html("Failed parsing MeasurementBundle protobuf".to_string()),
+                    ));
                 }
-            }
+            },
             None => {
                 return Err((
                     StatusCode::BAD_REQUEST,
@@ -357,7 +356,7 @@ pub async fn show_attestation_summary(AxumState(state): AxumState<Arc<Api>>) -> 
 
     let attestation_summary = match state.list_attestation_summary(request).await {
         Ok(response) => AttestationSummary {
-            attestations: match MachineAttestationSummaryList::from_grpc(&response.into_inner()) {
+            attestations: match MachineAttestationSummaryList::try_from(response.into_inner()) {
                 Ok(attestations_list) => attestations_list.0,
                 Err(err) => {
                     tracing::error!(%err, "show_attestation_summary");
@@ -475,3 +474,6 @@ fn extract_pcr_slot_idx(potential_idx: &str) -> Result<Option<String>, (StatusCo
 
     Ok(None)
 }
+
+impl super::Base for AttestationSummary {}
+impl super::Base for AttestationResults {}

@@ -20,6 +20,7 @@ use base64::prelude::*;
 use bmc_mock::{DUMMY_FACTORY_PASSWORD, DUMMY_FACTORY_USERNAME, MachineInfo};
 use carbide_uuid::instance::InstanceId;
 use carbide_uuid::machine::{MachineId, MachineInterfaceId};
+use carbide_uuid::machine_validation::MachineValidationId;
 use mac_address::MacAddress;
 use rpc::forge::instance_operating_system_config::Variant;
 use rpc::forge::machine_cleanup_info::CleanupStepResult;
@@ -277,7 +278,6 @@ impl ApiClient {
             os: Some(InstanceOperatingSystemConfig {
                 variant: Some(Variant::Ipxe(InlineIpxe {
                     ipxe_script: "Non-existing-ipxe".to_string(),
-                    user_data: None,
                 })),
                 user_data: None,
                 phone_home_enabled: false,
@@ -285,6 +285,7 @@ impl ApiClient {
             }),
             network: Some(rpc::InstanceNetworkConfig {
                 interfaces: vec![interface_config],
+                auto: false,
             }),
             network_security_group_id: None,
             infiniband: None,
@@ -405,7 +406,6 @@ impl ApiClient {
         self.0
             .create_vpc(rpc::forge::VpcCreationRequest {
                 id: None,
-                name: "".to_string(),
                 tenant_organization_id: "Forge-simulation-tenant".to_string(),
                 tenant_keyset_id: None,
                 network_security_group_id: None,
@@ -429,13 +429,13 @@ impl ApiClient {
     pub async fn machine_validation_complete(
         &self,
         machine_id: &MachineId,
-        validation_id: rpc::common::Uuid,
+        validation_id: &MachineValidationId,
     ) -> ClientApiResult<()> {
         self.0
             .machine_validation_completed(rpc::forge::MachineValidationCompletedRequest {
                 machine_id: Some(*machine_id),
                 machine_validation_error: None,
-                validation_id: Some(validation_id),
+                validation_id: Some(*validation_id),
             })
             .await
             .map_err(ClientApiError::InvocationError)
@@ -461,7 +461,7 @@ impl ApiClient {
                 result: 0,
                 message: "".to_string(),
             }),
-            result: 0,
+            ..Default::default()
         };
 
         self.0
@@ -474,14 +474,15 @@ impl ApiClient {
     pub async fn get_pxe_instructions(
         &self,
         arch: rpc::forge::MachineArchitecture,
-        interface_id: MachineInterfaceId,
+        client_ip: std::net::IpAddr,
         product: Option<String>,
     ) -> ClientApiResult<PxeInstructions> {
         self.0
             .get_pxe_instructions(rpc::forge::PxeInstructionRequest {
                 arch: arch.into(),
-                interface_id: Some(interface_id),
                 product,
+                client_ip: Some(client_ip.to_string()),
+                ..Default::default()
             })
             .await
             .map_err(ClientApiError::InvocationError)

@@ -16,6 +16,7 @@
  */
 
 mod firmware;
+mod leak_detector;
 mod logs;
 mod nmxt;
 mod nvue;
@@ -23,6 +24,7 @@ mod runtime;
 mod sensors;
 
 pub use firmware::{FirmwareCollector, FirmwareCollectorConfig};
+pub use leak_detector::{LeakDetectorCollector, LeakDetectorCollectorConfig};
 pub(crate) use logs::auto::{AutoFailureBudget, BudgetDecision, FailureKind};
 pub use logs::{
     DowngradeEvent, DowngradeReason, LogDowngradeRegistry, LogsCollector, LogsCollectorConfig,

@@ -9,9 +9,9 @@
 {% else if grouped_hosts.is_some() %}
 	<h1>Grouped Managed Hosts</h1>
 {% else if is_filtered %}
-	<h1>Filtered Managed Hosts</h1>
+	<h1>Filtered Managed Hosts ({{ page.total_items() }})</h1>
 {% else %}
-	<h1>All Managed Hosts</h1>
+	<h1>All Managed Hosts ({{ page.total_items() }})</h1>
 {% endif %}
 
 <details {% if is_filtered || grouped_hosts.is_some() %}open{% endif %}>
@@ -90,7 +90,7 @@
 			<select id="mem-filter" name="mem-filter">
 				<option value="-1">All</option>
 				{% for (val, display) in mems %}
-				<option value="{{ val }}" {% if active_mem_filter|as_ref == val %}selected{% endif %}>{{ display }}</option>
+				<option value="{{ val }}" {% if active_mem_filter|ref == val %}selected{% endif %}>{{ display }}</option>
 				{% endfor %}
 			</select>
 		</div>
@@ -152,6 +152,7 @@
 
 {% if grouped_hosts.is_none() %}
 	{% include "managed_host_individual_table.html" %}
+	{% include "pages_footer.html" %}
 {% else %}
 	{% include "managed_host_grouped_table.html" %}
 {% endif %}

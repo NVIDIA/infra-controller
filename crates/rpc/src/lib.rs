@@ -62,7 +62,15 @@ pub use crate::protos::{fmds, health, site_explorer};
 
 pub mod errors;
 pub mod forge_tls_client;
+pub mod libmlx;
+pub mod measured_boot;
+pub mod network;
 pub mod protos;
+pub mod secrets;
+pub mod utils;
+
+#[cfg(feature = "model")]
+pub mod model;
 
 #[cfg(feature = "cli")]
 pub mod admin_cli;
@@ -876,6 +884,12 @@ impl forge_agent_control_response::Action {
     }
 }
 
+impl From<MacAddress> for forge::find_bmc_ips_request::LookupBy {
+    fn from(addr: MacAddress) -> Self {
+        Self::MacAddress(addr.to_string())
+    }
+}
+
 #[cfg(feature = "cli")]
 // This impl allows us to use the RPC RouteServerSourceType type
 // as a first class enum with clap, for the purpose of allowing
@@ -944,12 +958,11 @@ mod tests {
             user_data: Some("def".to_string()),
             variant: Some(Variant::Ipxe(InlineIpxe {
                 ipxe_script: "abc".to_string(),
-                user_data: Some("def".to_string()),
             })),
         };
 
         assert_eq!(
-            "{\"phone_home_enabled\":true,\"run_provisioning_instructions_on_every_boot\":true,\"user_data\":\"def\",\"variant\":{\"Ipxe\":{\"ipxe_script\":\"abc\",\"user_data\":\"def\"}}}",
+            "{\"phone_home_enabled\":true,\"run_provisioning_instructions_on_every_boot\":true,\"user_data\":\"def\",\"variant\":{\"Ipxe\":{\"ipxe_script\":\"abc\"}}}",
             serde_json::to_string(&os).unwrap()
         );
     }

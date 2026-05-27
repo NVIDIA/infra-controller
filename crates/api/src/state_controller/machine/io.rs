@@ -25,12 +25,13 @@ use model::controller_outcome::PersistentStateHandlerOutcome;
 use model::machine::machine_search_config::MachineSearchConfig;
 use model::machine::slas::MachineSlaConfig;
 use model::machine::{
-    self, DpuDiscoveringState, DpuInitState, HostHealthConfig, MachineValidatingState,
-    ManagedHostState, ManagedHostStateSnapshot, MeasuringState, ValidationState,
+    self, AttestationMode, DpuDiscoveringState, DpuInitState, HostHealthConfig,
+    MachineValidatingState, ManagedHostState, ManagedHostStateSnapshot, MeasuringState,
+    SpdmMeasuringState, ValidationState,
 };
 use sqlx::PgConnection;
+use state_controller::io::StateControllerIO;
 
-use crate::state_controller::io::StateControllerIO;
 use crate::state_controller::machine::context::MachineStateHandlerContextObjects;
 use crate::state_controller::machine::metrics::MachineMetricsEmitter;
 
@@ -183,6 +184,7 @@ impl StateControllerIO for MachineStateControllerIO {
                 MachineState::WaitingForLockdown { .. } => "waitingforlockdown",
                 MachineState::EnableIpmiOverLan => "enableipmioverlan",
                 MachineState::Measuring { .. } => "machinestatemeasuring",
+                MachineState::SpdmMeasuring { .. } => "machinestatespdmmeasuring",
             }
         }
 
@@ -232,6 +234,13 @@ impl StateControllerIO for MachineStateControllerIO {
             }
         }
 
+        fn spdm_measuring_state_name(spdm_measuring_state: &SpdmMeasuringState) -> &'static str {
+            match spdm_measuring_state {
+                SpdmMeasuringState::TriggerMeasurements => "triggermeasurements",
+                SpdmMeasuringState::PollResult => "pollresult",
+            }
+        }
+
         fn cleanup_state_name(cleanup_state: &CleanupState) -> &'static str {
             match cleanup_state {
                 CleanupState::Init => "init",
@@ -276,7 +285,7 @@ impl StateControllerIO for MachineStateControllerIO {
             ManagedHostState::Assigned { instance_state } => {
                 ("assigned", instance_state_name(instance_state))
             }
-            ManagedHostState::WaitingForCleanup { cleanup_state } => {
+            ManagedHostState::WaitingForCleanup { cleanup_state, .. } => {
                 ("waitingforcleanup", cleanup_state_name(cleanup_state))
             }
             ManagedHostState::Created => ("created", ""),
@@ -287,10 +296,27 @@ impl StateControllerIO for MachineStateControllerIO {
             ManagedHostState::Measuring { measuring_state } => {
                 ("measuring", measuring_state_name(measuring_state))
             }
-            ManagedHostState::PostAssignedMeasuring { measuring_state } => (
-                "postassignedmeasuring",
-                measuring_state_name(measuring_state),
+            ManagedHostState::PreAssignedMeasuring {
+                spdm_measuring_state,
+            } => (
+                "preassignedmeasuringspdm",
+                spdm_measuring_state_name(spdm_measuring_state),
             ),
+            ManagedHostState::PostAssignedMeasuring { attestation_mode } => {
+                match attestation_mode {
+                    AttestationMode::MeasuredBoot { measuring_state } => (
+                        "postassignedmeasuringmeasuredboot",
+                        measuring_state_name(measuring_state),
+                    ),
+                    AttestationMode::SpdmAttestation {
+                        spdm_measuring_state,
+                    } => (
+                        "postassignedmeasuringspdm",
+                        spdm_measuring_state_name(spdm_measuring_state),
+                    ),
+                }
+            }
+            ManagedHostState::StartAssignmentCycle => ("startassignmentcycle", ""),
             ManagedHostState::BomValidating {
                 bom_validating_state,
             } => match bom_validating_state {

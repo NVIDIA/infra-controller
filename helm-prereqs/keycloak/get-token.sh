@@ -1,4 +1,19 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # Fetches a Keycloak access token for the ncx-service client (client_credentials
 # grant) and prints it to stdout. Nothing else.
 #
@@ -7,11 +22,11 @@
 #   TOKEN=$(./get-token.sh)
 set -euo pipefail
 
-NS="${KEYCLOAK_NS:-carbide-rest}"
+NS="${KEYCLOAK_NS:-nico-rest}"
 KC_URL="http://keycloak.${NS}:8082"
-TOKEN_URL="${KC_URL}/realms/carbide/protocol/openid-connect/token"
+TOKEN_URL="${KC_URL}/realms/nico/protocol/openid-connect/token"
 CLIENT_ID="ncx-service"
-CLIENT_SECRET="carbide-local-secret"
+CLIENT_SECRET="nico-local-secret"
 
 # Runs curl from inside the cluster via a one-shot pod.
 # This ensures JWT issuer matches the internal Keycloak URL.

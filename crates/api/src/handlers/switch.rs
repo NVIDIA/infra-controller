@@ -68,26 +68,17 @@ pub async fn find_switch(
             })?
     };
 
-    let bmc_info_map: std::collections::HashMap<String, rpc::BmcInfo> = {
-        let rows = db_switch::list_switch_bmc_info(&mut txn)
+    let switch_ids: Vec<_> = switch_list.iter().map(|switch| switch.id).collect();
+    let endpoint_info_map: std::collections::HashMap<_, _> = if switch_ids.is_empty() {
+        std::collections::HashMap::new()
+    } else {
+        db_switch::find_switch_endpoints_by_ids(&mut *txn, &switch_ids)
             .await
             .map_err(|e| CarbideError::Internal {
-                message: format!("Failed to get switch BMC info: {}", e),
-            })?;
-
-        rows.into_iter()
-            .map(|row| {
-                (
-                    row.bmc_mac_address.to_string(),
-                    rpc::BmcInfo {
-                        ip: Some(row.ip_address.to_string()),
-                        mac: Some(row.bmc_mac_address.to_string()),
-                        version: None,
-                        firmware_version: None,
-                        port: None,
-                    },
-                )
-            })
+                message: format!("Failed to get switch endpoint info: {}", e),
+            })?
+            .into_iter()
+            .map(|row| (row.switch_id, row))
             .collect()
     };
 
@@ -98,13 +89,30 @@ pub async fn find_switch(
     let switches: Vec<rpc::Switch> = switch_list
         .into_iter()
         .map(|s| {
-            let bmc_info = s
-                .bmc_mac_address
-                .as_ref()
-                .and_then(|mac| bmc_info_map.get(&mac.to_string()).cloned());
+            let endpoint_info = endpoint_info_map.get(&s.id);
 
             rpc::Switch::try_from(s).map(|mut rpc_switch| {
-                rpc_switch.bmc_info = bmc_info;
+                rpc_switch.bmc_info = endpoint_info.map(|row| rpc::BmcInfo {
+                    ip: Some(row.bmc_ip.to_string()),
+                    mac: Some(row.bmc_mac.to_string()),
+                    version: None,
+                    firmware_version: None,
+                    port: None,
+                    machine_interface_id: None,
+                });
+                rpc_switch.nvos_info = endpoint_info.and_then(|row| {
+                    let (Some(nvos_mac), Some(nvos_ip)) =
+                        (row.nvos_mac.as_ref(), row.nvos_ip.as_ref())
+                    else {
+                        return None;
+                    };
+
+                    Some(rpc::SwitchNvosInfo {
+                        ip: Some(nvos_ip.to_string()),
+                        mac: Some(nvos_mac.to_string()),
+                        port: None,
+                    })
+                });
                 rpc_switch
             })
         })
@@ -157,39 +165,45 @@ pub async fn find_by_ids(
     )
     .await?;
 
-    let bmc_info_map: std::collections::HashMap<_, _> = {
-        let rows = db_switch::find_bmc_info_by_switch_ids(&mut txn, &switch_ids)
+    let endpoint_info_map: std::collections::HashMap<_, _> =
+        db_switch::find_switch_endpoints_by_ids(&mut txn, &switch_ids)
             .await
             .map_err(|e| CarbideError::Internal {
-                message: format!("Failed to get switch BMC info: {}", e),
-            })?;
-
-        rows.into_iter()
-            .map(|row| {
-                (
-                    row.switch_id,
-                    rpc::BmcInfo {
-                        ip: Some(row.bmc_ip.to_string()),
-                        mac: Some(row.bmc_mac.to_string()),
-                        version: None,
-                        firmware_version: None,
-                        port: None,
-                    },
-                )
-            })
-            .collect()
-    };
+                message: format!("Failed to get switch endpoint info: {}", e),
+            })?
+            .into_iter()
+            .map(|row| (row.switch_id, row))
+            .collect();
 
     let _ = txn.rollback().await;
 
     let switches: Vec<rpc::Switch> = switch_list
         .into_iter()
         .map(|s| {
-            let id = s.id;
-            let bmc_info = bmc_info_map.get(&id).cloned();
+            let endpoint_info = endpoint_info_map.get(&s.id);
 
             rpc::Switch::try_from(s).map(|mut rpc_switch| {
-                rpc_switch.bmc_info = bmc_info;
+                rpc_switch.bmc_info = endpoint_info.map(|row| rpc::BmcInfo {
+                    ip: Some(row.bmc_ip.to_string()),
+                    mac: Some(row.bmc_mac.to_string()),
+                    version: None,
+                    firmware_version: None,
+                    port: None,
+                    machine_interface_id: None,
+                });
+                rpc_switch.nvos_info = endpoint_info.and_then(|row| {
+                    let (Some(nvos_mac), Some(nvos_ip)) =
+                        (row.nvos_mac.as_ref(), row.nvos_ip.as_ref())
+                    else {
+                        return None;
+                    };
+
+                    Some(rpc::SwitchNvosInfo {
+                        ip: Some(nvos_ip.to_string()),
+                        mac: Some(nvos_mac.to_string()),
+                        port: None,
+                    })
+                });
                 rpc_switch
             })
         })

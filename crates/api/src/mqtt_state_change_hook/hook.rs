@@ -17,65 +17,33 @@
 
 //! MQTT hook implementation for publishing state changes.
 
-use std::sync::Arc;
 use std::time::Duration;
 
+use carbide_mqtt_common::hook::{MqttPublisher, QueuedMessage, process_events};
+use carbide_mqtt_common::metrics::MqttHookMetrics;
 use carbide_uuid::machine::MachineId;
 use model::machine::ManagedHostState;
-use mqttea::{MqtteaClient, MqtteaClientError};
 use opentelemetry::metrics::Meter;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
-use tokio::time::error::Elapsed;
-use tokio::time::{Instant, timeout_at};
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::mqtt_state_change_hook::message::ManagedHostStateChangeMessage;
-use crate::mqtt_state_change_hook::metrics::MqttHookMetrics;
 use crate::state_controller::state_change_emitter::{StateChangeEvent, StateChangeHook};
-
-/// Topic prefix for state change messages.
-const TOPIC_PREFIX: &str = "nico/v1/machine";
-
-/// Internal queue item containing pre-serialized MQTT message with deadline.
-struct QueuedMessage {
-    topic: String,
-    payload: Vec<u8>,
-    /// Deadline by which this message must be published.
-    deadline: Instant,
-}
-
-/// Trait for MQTT publishing, enabling test mocks.
-#[async_trait::async_trait]
-pub trait MqttPublisher: Send + Sync + 'static {
-    /// Publish a message to the given topic.
-    async fn publish(&self, topic: &str, payload: Vec<u8>) -> Result<(), MqtteaClientError>;
-}
-
-#[async_trait::async_trait]
-impl MqttPublisher for MqtteaClient {
-    async fn publish(&self, topic: &str, payload: Vec<u8>) -> Result<(), MqtteaClientError> {
-        MqtteaClient::publish(self, topic, payload).await
-    }
-}
-
-#[async_trait::async_trait]
-impl<T: MqttPublisher> MqttPublisher for Arc<T> {
-    async fn publish(&self, topic: &str, payload: Vec<u8>) -> Result<(), MqtteaClientError> {
-        T::publish(self, topic, payload).await
-    }
-}
 
 /// MQTT hook that publishes `ManagedHostState` changes to the MQTT broker.
 ///
 /// Implements the AsyncAPI specification in `carbide.yaml`, publishing to
-/// `nico/v1/machine/{machineId}/state`.
+/// `{topic_prefix}/{machineId}/state` where `topic_prefix` is supplied by the
+/// caller (defaults to `NICO/v1/machine` when sourced from config).
 ///
 /// This hook maintains an internal queue and processes events in a background task.
 /// If the queue is full, events are dropped and a warning is logged.
 pub struct MqttStateChangeHook {
     sender: mpsc::Sender<QueuedMessage>,
     publish_timeout: Duration,
+    topic_prefix: String,
     metrics: MqttHookMetrics,
 }
 
@@ -90,6 +58,7 @@ impl MqttStateChangeHook {
         client: P,
         join_set: &mut JoinSet<()>,
         publish_timeout: Duration,
+        topic_prefix: String,
         queue_capacity: usize,
         meter: &Meter,
         cancel_token: CancellationToken,
@@ -105,12 +74,13 @@ impl MqttStateChangeHook {
         Self {
             sender,
             publish_timeout,
+            topic_prefix,
             metrics,
         }
     }
 
-    fn build_topic(machine_id: &MachineId) -> String {
-        format!("{}/{}/state", TOPIC_PREFIX, machine_id)
+    fn build_topic(&self, machine_id: &MachineId) -> String {
+        format!("{}/{}/state", self.topic_prefix, machine_id)
     }
 }
 
@@ -122,7 +92,7 @@ impl StateChangeHook<MachineId, ManagedHostState> for MqttStateChangeHook {
             managed_host_state: event.new_state,
             timestamp: event.timestamp,
         };
-        let topic = Self::build_topic(event.object_id);
+        let topic = self.build_topic(event.object_id);
 
         match message.to_json_bytes() {
             Ok(payload) => {
@@ -149,43 +119,12 @@ impl StateChangeHook<MachineId, ManagedHostState> for MqttStateChangeHook {
     }
 }
 
-/// Background task that processes queued messages and publishes to MQTT.
-async fn process_events<P: MqttPublisher>(
-    mut receiver: mpsc::Receiver<QueuedMessage>,
-    client: P,
-    metrics: MqttHookMetrics,
-    cancel_token: CancellationToken,
-) {
-    while let Some(Some(msg)) = cancel_token.run_until_cancelled(receiver.recv()).await {
-        match timeout_at(msg.deadline, client.publish(&msg.topic, msg.payload)).await {
-            Ok(Ok(())) => {
-                tracing::debug!(topic = %msg.topic, "Published state change to MQTT");
-                metrics.record_success();
-            }
-            Ok(Err(e)) => {
-                tracing::warn!(
-                    topic = %msg.topic,
-                    error = %e,
-                    "Failed to publish state change to MQTT"
-                );
-                metrics.record_publish_error();
-            }
-            Err(Elapsed { .. }) => {
-                tracing::warn!(
-                    topic = %msg.topic,
-                    "MQTT publish timed out"
-                );
-                metrics.record_timeout();
-            }
-        }
-    }
-    tracing::debug!("MQTT state change hook background task stopped");
-}
-
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use mqttea::MqtteaClientError;
     use opentelemetry::global;
     use tokio::sync::Barrier;
 
@@ -248,6 +187,7 @@ mod tests {
             publisher,
             &mut join_set,
             Duration::from_secs(1),
+            "NICO/v1/machine".to_string(),
             16,
             &test_meter(),
             cancel_token.clone(),
@@ -260,7 +200,7 @@ mod tests {
         // Wait for publish to complete
         let (topic, payload) = receiver.recv().await.expect("should receive message");
 
-        assert!(topic.starts_with("nico/v1/machine/"));
+        assert!(topic.starts_with("NICO/v1/machine/"));
         assert!(topic.ends_with("/state"));
 
         let parsed: serde_json::Value = serde_json::from_slice(&payload).unwrap();
@@ -307,6 +247,7 @@ mod tests {
             publisher,
             &mut join_set,
             Duration::from_millis(1),
+            "NICO/v1/machine".to_string(),
             16,
             &test_meter(),
             cancel_token.clone(),
@@ -358,6 +299,7 @@ mod tests {
             publisher,
             &mut join_set,
             Duration::from_secs(10),
+            "NICO/v1/machine".to_string(),
             QUEUE_SIZE,
             &test_meter(),
             cancel_token.clone(),
@@ -385,6 +327,37 @@ mod tests {
 
         // Queue can hold QUEUE_SIZE events, so exactly that many should be processed
         assert_eq!(count, QUEUE_SIZE);
+
+        cancel_token.cancel();
+        join_set.join_all().await;
+    }
+
+    #[tokio::test]
+    async fn test_custom_topic_prefix_is_used() {
+        let (publisher, mut receiver) = SignalingPublisher::new();
+        let mut join_set = JoinSet::new();
+        let cancel_token = CancellationToken::new();
+        let hook = MqttStateChangeHook::new(
+            publisher,
+            &mut join_set,
+            Duration::from_secs(1),
+            "custom/prefix".to_string(),
+            16,
+            &test_meter(),
+            cancel_token.clone(),
+        );
+
+        let id = test_machine_id();
+        let state = ManagedHostState::Ready;
+        hook.on_state_changed(&make_event(&id, &state));
+
+        let (topic, _payload) = receiver.recv().await.expect("should receive message");
+
+        assert!(
+            topic.starts_with("custom/prefix/"),
+            "topic should use the configured prefix, got {topic}"
+        );
+        assert!(topic.ends_with("/state"));
 
         cancel_token.cancel();
         join_set.join_all().await;

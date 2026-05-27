@@ -1,3 +1,20 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include <hooks/hooks.h>
 #include <log/logger.h>
 #include <log/macros.h>
@@ -109,6 +126,19 @@ extern "C" {
         }
 
 		handle->registerCallout("pkt4_receive", pkt4_receive);
+		// lease4_select fires between pkt4_receive and pkt4_send, and is the
+		// only place where we can override the IP that Kea will persist into
+		// its lease memfile. The pkt4_send hook still runs and still sets
+		// yiaddr/options on the outgoing packet, but lease4_select is what
+		// keeps the Kea memfile aligned with the NICo database regardless of
+		// what address the client requested (option 50 / ciaddr), because
+        // just because the client requested it doesn't mean that's what
+        // they're going to get, and that's ok.
+		handle->registerCallout("lease4_select", lease4_select);
+		// lease4_renew is the renewal-time side of lease4_select.
+		// Together they keep the Kea memfile aligned with the NICo
+		// database through both initial allocation and renewal.
+		handle->registerCallout("lease4_renew", lease4_renew);
 		handle->registerCallout("pkt4_send", pkt4_send);
 		handle->registerCallout("lease4_expire", lease4_expire);
 		handle->registerCallout("lease6_expire", lease6_expire);

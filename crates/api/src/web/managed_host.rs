@@ -22,8 +22,8 @@ use askama::Template;
 use axum::Json;
 use axum::extract::{Path as AxumPath, Query, State as AxumState};
 use axum::response::{Html, IntoResponse, Redirect, Response};
-use carbide_utils::managed_host_display::get_memory_details;
-use carbide_utils::{ManagedHostMetadata, reason_to_user_string};
+use carbide_rpc_utils::managed_host_display::get_memory_details;
+use carbide_rpc_utils::{ManagedHostMetadata, reason_to_user_string};
 use db::managed_host;
 use hyper::http::StatusCode;
 use itertools::Itertools;
@@ -32,7 +32,8 @@ use model::{self, machine};
 use rpc::forge::forge_server::Forge;
 use rpc::forge::{self as forgerpc};
 
-use super::filters;
+use super::pagination::{self, PageContext, PaginationParams};
+use super::{Base, filters};
 use crate::api::Api;
 
 const UNKNOWN: &str = "Unknown";
@@ -59,6 +60,7 @@ struct ManagedHostShow {
     mems: Vec<(isize, String)>,
     active_mem_filter: isize,
     is_filtered: bool,
+    page: PageContext,
 }
 
 struct GroupedHosts {
@@ -337,7 +339,8 @@ impl ManagedHostRowDisplay {
                 .dpus
                 .iter()
                 .map(|d| {
-                    filters::machine_id_link(d.machine_id.clone()).unwrap_or("UNKNOWN".to_string())
+                    filters::machine_link(d.machine_id.clone(), "machine")
+                        .unwrap_or("UNKNOWN".to_string())
                 })
                 .collect(),
             DpuProperty::BmcIp => self
@@ -429,6 +432,11 @@ pub async fn show_html(
     let group_by_param = params.remove("group-by").unwrap_or("none".to_string());
     let group_by = GroupingKey::params_to_vec(&group_by_param);
 
+    let pagination_params = PaginationParams {
+        current_page: params.remove("current_page").and_then(|s| s.parse().ok()),
+        limit: params.remove("limit").and_then(|s| s.parse().ok()),
+    };
+
     let mut hosts = Vec::new();
     let mut models_per_vendor: HashMap<String, Vec<String>> = HashMap::new();
     let mut states = HashSet::new();
@@ -513,6 +521,19 @@ pub async fn show_html(
 
     hosts.sort_unstable();
 
+    let grouped_hosts = group_hosts(&hosts, &group_by);
+
+    // Paginate the filtered result set (only for individual view, not grouped).
+    let (info, hosts) = if grouped_hosts.is_some() {
+        let info = pagination::paginate_vec(
+            Vec::<ManagedHostRowDisplay>::new(),
+            &PaginationParams::default(),
+        );
+        (info.0, hosts)
+    } else {
+        pagination::paginate_vec(hosts, &pagination_params)
+    };
+
     let vendors: Vec<String> = models_per_vendor
         .keys()
         .cloned()
@@ -558,8 +579,22 @@ pub async fn show_html(
         || active_ib_filter != "all"
         || active_mem_filter != -1;
 
+    let extra_query_params = ActiveFilters {
+        health_alerts: &active_health_alerts_filter,
+        maintenance: &active_maintenance_filter,
+        vendor: &active_vendor_filter,
+        model: &active_model_filter,
+        state: &active_state_filter,
+        gpu: &active_gpu_filter,
+        ib: &active_ib_filter,
+        mem: active_mem_filter,
+        time_in_state_above_sla: &active_time_in_state_above_sla_filter,
+        group_by: &group_by_param,
+    }
+    .to_query_params();
+
     let tmpl = ManagedHostShow {
-        grouped_hosts: group_hosts(&hosts, &group_by),
+        grouped_hosts,
         active_group_by: GroupingKey::vec_to_params(&group_by),
         active_health_alerts_filter,
         active_maintenance_filter,
@@ -578,6 +613,7 @@ pub async fn show_html(
         mems,
         active_mem_filter,
         is_filtered,
+        page: PageContext::new(info, "/admin/managed-host").with_extra_params(extra_query_params),
     };
     (StatusCode::OK, Html(tmpl.render().unwrap())).into_response()
 }
@@ -643,13 +679,10 @@ pub async fn show_all_json(state: AxumState<Arc<Api>>) -> Response {
     (StatusCode::OK, Json(managed_hosts)).into_response()
 }
 
-/// Get all managed hosts, with expensive metadata like connected network devices, using information
-/// from site explorer, redfish, etc. This is a very expensive call and should be used only for
-/// cases which need all of this information.
 async fn fetch_managed_hosts_with_metadata(
     AxumState(api): AxumState<Arc<Api>>,
     include_history: bool,
-) -> eyre::Result<Vec<carbide_utils::ManagedHostOutput>> {
+) -> eyre::Result<Vec<carbide_rpc_utils::ManagedHostOutput>> {
     let machine_ids = api
         .find_machine_ids(tonic::Request::new(forgerpc::MachineSearchConfig {
             include_dpus: true,
@@ -672,13 +705,66 @@ async fn fetch_managed_hosts_with_metadata(
         });
         let next_machines = api.find_machines_by_ids(request).await?.into_inner();
 
-        all_machines.extend(next_machines.machines.into_iter());
+        all_machines.extend(next_machines.machines);
         offset += page_size;
     }
 
     let managed_host_metadata = ManagedHostMetadata::lookup_from_api(all_machines, api).await;
-    let managed_hosts = carbide_utils::get_managed_host_output(managed_host_metadata);
+    let managed_hosts = carbide_rpc_utils::get_managed_host_output(managed_host_metadata);
     Ok(managed_hosts)
+}
+
+struct ActiveFilters<'a> {
+    health_alerts: &'a str,
+    maintenance: &'a str,
+    vendor: &'a str,
+    model: &'a str,
+    state: &'a str,
+    gpu: &'a str,
+    ib: &'a str,
+    mem: isize,
+    time_in_state_above_sla: &'a str,
+    group_by: &'a str,
+}
+
+impl ActiveFilters<'_> {
+    fn to_query_params(&self) -> String {
+        let mut parts = Vec::new();
+        if self.health_alerts != "all" {
+            parts.push(format!("&health-alerts-filter={}", self.health_alerts));
+        }
+        if self.maintenance != "all" {
+            parts.push(format!("&maintenance-filter={}", self.maintenance));
+        }
+        if self.vendor != "all" {
+            parts.push(format!("&vendor-filter={}", self.vendor));
+        }
+        if self.model != "all" {
+            parts.push(format!("&model-filter={}", self.model));
+        }
+        if self.state != "all" {
+            parts.push(format!("&state-filter={}", self.state));
+        }
+        if self.gpu != "all" {
+            parts.push(format!("&gpu-filter={}", self.gpu));
+        }
+        if self.ib != "all" {
+            parts.push(format!("&ib-filter={}", self.ib));
+        }
+        if self.mem != -1 {
+            parts.push(format!("&mem-filter={}", self.mem));
+        }
+        if self.time_in_state_above_sla != "all" {
+            parts.push(format!(
+                "&time-in-state-above-sla-filter={}",
+                self.time_in_state_above_sla
+            ));
+        }
+        if self.group_by != "none" {
+            parts.push(format!("&group-by={}", self.group_by));
+        }
+        parts.join("")
+    }
 }
 
 /// View managed host details. This has been replaced by the Machine details page
@@ -721,3 +807,5 @@ fn mem_to_size(mem: &str) -> isize {
 fn short_state(s: &str) -> &str {
     s.split(' ').next().unwrap_or_default()
 }
+
+impl super::Base for ManagedHostShow {}

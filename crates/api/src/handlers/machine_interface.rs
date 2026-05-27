@@ -19,8 +19,10 @@ use std::net::IpAddr;
 use std::str::FromStr;
 
 use ::rpc::forge as rpc;
-use carbide_uuid::machine::MachineType;
+use db::WithTransaction;
+use futures_util::FutureExt;
 use itertools::Itertools;
+use model::machine_interface::InterfaceType;
 use tonic::{Request, Response, Status};
 
 use crate::CarbideError;
@@ -36,7 +38,7 @@ pub(crate) async fn find_interfaces(
 
     let rpc::InterfaceSearchQuery { id, ip } = request.into_inner();
 
-    let mut interfaces: Vec<rpc::MachineInterface> = match (id, ip) {
+    let interfaces: Vec<rpc::MachineInterface> = match (id, ip) {
         (Some(id), _) => vec![db::machine_interface::find_one(&mut txn, id).await?.into()],
         (None, Some(ip)) => match IpAddr::from_str(ip.as_ref()) {
             Ok(ip) => match db::machine_interface::find_by_ip(&mut txn, ip).await? {
@@ -64,38 +66,6 @@ pub(crate) async fn find_interfaces(
         },
     };
 
-    // Link BMC interface to its machine, for carbide-web and admin-cli.
-    // Don't link if the search returned multiple, in case perf is an issue.
-    if interfaces.len() == 1 {
-        let interface = interfaces.get_mut(0).unwrap();
-        let not_linked_yet = interface.machine_id.is_none();
-        let maybe_a_bmc_interface = interface.primary_interface && interface.address.len() == 1;
-        if not_linked_yet && maybe_a_bmc_interface {
-            let Some(ip) = interface.address.first() else {
-                return Err(CarbideError::Internal {
-                    message: "Impossible interface.address array length".into(),
-                }
-                .into());
-            };
-            match db::machine_topology::find_machine_id_by_bmc_ip(txn.as_pgconn(), ip).await {
-                Ok(Some(machine_id)) => {
-                    let rpc_machine_id = Some(machine_id);
-                    interface.is_bmc = Some(true);
-                    match machine_id.machine_type() {
-                        MachineType::Dpu => interface.attached_dpu_machine_id = rpc_machine_id,
-                        MachineType::Host | MachineType::PredictedHost => {
-                            interface.machine_id = rpc_machine_id
-                        }
-                    }
-                }
-                Ok(None) => {} // expected, not a BMC interface
-                Err(err) => {
-                    tracing::warn!(%err, %ip, "db::machine_topology::find_machine_id_by_bmc_ip error");
-                }
-            }
-        }
-    }
-
     txn.commit().await?;
 
     Ok(Response::new(rpc::InterfaceList { interfaces }))
@@ -118,6 +88,12 @@ pub(crate) async fn delete_interface(
 
     // There should not be any machine associated with this interface.
     if let Some(machine_id) = interface.machine_id {
+        if interface.interface_type == InterfaceType::Bmc {
+            return Err(CarbideError::InvalidArgument(format!(
+                "This looks like a BMC interface and attached with machine: {machine_id}. Delete that first."
+            ))
+            .into());
+        }
         return Err(CarbideError::InvalidArgument(format!(
             "Already a machine {machine_id} is attached to this interface. Delete that first."
         ))
@@ -169,5 +145,73 @@ pub(crate) async fn find_mac_address_by_bmc_ip(
     Ok(Response::new(rpc::MacAddressBmcIp {
         bmc_ip,
         mac_address: interface.mac_address.to_string(),
+    }))
+}
+
+pub(crate) async fn find_bmc_ips(
+    api: &Api,
+    request: Request<rpc::FindBmcIpsRequest>,
+) -> Result<Response<rpc::BmcIpList>, Status> {
+    use rpc::find_bmc_ips_request::LookupBy;
+
+    log_request_data(&request);
+
+    let req = request.into_inner();
+
+    let bmc_ips = match req.lookup_by {
+        Some(LookupBy::MacAddress(mac_address)) => {
+            db::machine_interface::lookup_bmc_ip_by_mac_address(
+                &api.database_connection,
+                mac_address.parse().map_err(|e| {
+                    CarbideError::InvalidArgument(format!("Invalid MAC address: {e}"))
+                })?,
+            )
+            .await?
+        }
+        Some(LookupBy::Serial(serial)) => {
+            // Get the machine ID for this serial
+            let machine_ids =
+                db::machine_topology::find_by_serial(&api.database_connection, &serial).await?;
+            if machine_ids.len() > 1 {
+                tracing::warn!(
+                    serial,
+                    "Multiple machines match serial number, cannot resolve to BMC IP"
+                );
+                return Ok(Response::new(rpc::BmcIpList::default()));
+            }
+            let Some(machine_id) = machine_ids.into_iter().next() else {
+                return Ok(Response::new(rpc::BmcIpList::default()));
+            };
+
+            // Get the machine topology for this machine
+            let Some(machine_topology) = api
+                .with_txn(|txn| {
+                    async move {
+                        db::machine_topology::find_latest_by_machine_ids(txn, &[machine_id]).await
+                    }
+                    .boxed()
+                })
+                .await??
+                .into_values()
+                .next()
+            else {
+                return Ok(Response::new(rpc::BmcIpList::default()));
+            };
+
+            // Get the BMC IP out of the machine topology
+            let bmc_ip = match machine_topology.topology.bmc_info.ip.map(|ip| ip.parse()) {
+                Some(Ok(ip)) => ip,
+                None | Some(Err(_)) => {
+                    return Ok(Response::new(rpc::BmcIpList::default()));
+                }
+            };
+
+            vec![bmc_ip]
+        }
+        None => return Err(CarbideError::MissingArgument("lookup_by").into()),
+    };
+
+    Ok(Response::new(rpc::BmcIpList {
+        bmc_ips: bmc_ips.into_iter().map(|ip| ip.to_string()).collect(),
     }))
 }

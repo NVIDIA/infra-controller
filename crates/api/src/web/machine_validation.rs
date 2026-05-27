@@ -18,13 +18,16 @@
 use std::sync::Arc;
 
 use askama::Template;
-use axum::extract::{Path as AxumPath, State as AxumState};
+use axum::extract::{Path as AxumPath, Query, State as AxumState};
 use axum::response::{Html, IntoResponse, Response};
+use carbide_uuid::machine_validation::MachineValidationId;
 use hyper::http::StatusCode;
 use rpc::forge::forge_server::Forge;
 use rpc::forge::{self as forgerpc};
 
+use super::Base;
 use super::machine::ValidationRun;
+use super::pagination::{self, PageContext, PaginationParams};
 use crate::api::Api;
 
 #[derive(Debug)]
@@ -100,14 +103,14 @@ use super::filters;
 #[template(path = "validation_result_details.html")]
 struct ValidationResultDetailDisplay {
     test_id: String,
-    validation_id: String,
+    validation_id: MachineValidationId,
     validation_results: Vec<ValidationResultDetail>,
 }
 
 #[derive(Template)]
 #[template(path = "validation_results.html")]
 struct ValidationResults {
-    validation_id: String,
+    validation_id: MachineValidationId,
     validation_results: Vec<ValidationResult>,
 }
 
@@ -115,6 +118,7 @@ struct ValidationResults {
 #[template(path = "validation_tests.html")]
 struct ValidateTests {
     validation_tests: Vec<ValidateTest>,
+    page: PageContext,
 }
 #[derive(Template)]
 #[template(path = "validation_test_details.html")]
@@ -126,11 +130,13 @@ struct ValidateTestDetailsDisplay {
 #[template(path = "validation.html")]
 struct ValidationRunDisplay {
     validation_runs: Vec<ValidationRun>,
+    page: PageContext,
 }
 #[derive(Template)]
 #[template(path = "validation_external_config.html")]
 struct ValidationExternalConfigs {
     validation_configs: Vec<ValidationExternalConfig>,
+    page: PageContext,
 }
 
 impl From<forgerpc::MachineValidationTest> for ValidateTest {
@@ -191,10 +197,18 @@ pub async fn results(
     AxumState(state): AxumState<Arc<Api>>,
     AxumPath(validation_id): AxumPath<String>,
 ) -> Response {
+    let validation_id: MachineValidationId = match validation_id.parse() {
+        Ok(id) => id,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("Invalid validation_id {validation_id}: {e}"),
+            )
+                .into_response();
+        }
+    };
     let request = tonic::Request::new(forgerpc::MachineValidationGetRequest {
-        validation_id: Some(rpc::common::Uuid {
-            value: validation_id.clone(),
-        }),
+        validation_id: Some(validation_id),
         include_history: false,
         machine_id: None,
     });
@@ -241,10 +255,18 @@ pub async fn result_details(
     AxumState(state): AxumState<Arc<Api>>,
     AxumPath((validation_id, test_id)): AxumPath<(String, String)>,
 ) -> Response {
+    let validation_id: MachineValidationId = match validation_id.parse() {
+        Ok(id) => id,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("Invalid validation_id {validation_id}: {e}"),
+            )
+                .into_response();
+        }
+    };
     let request = tonic::Request::new(forgerpc::MachineValidationGetRequest {
-        validation_id: Some(rpc::common::Uuid {
-            value: validation_id.clone(),
-        }),
+        validation_id: Some(validation_id),
         include_history: false,
         machine_id: None,
     });
@@ -292,7 +314,10 @@ pub async fn result_details(
     (StatusCode::OK, Html(tmpl.render().unwrap())).into_response()
 }
 
-pub async fn show_tests_html(AxumState(state): AxumState<Arc<Api>>) -> Response {
+pub async fn show_tests_html(
+    AxumState(state): AxumState<Arc<Api>>,
+    Query(params): Query<PaginationParams>,
+) -> Response {
     let validate_tests = match fetch_validation_tests(state, None).await {
         Ok(tests) => tests,
         Err(err) => {
@@ -305,8 +330,12 @@ pub async fn show_tests_html(AxumState(state): AxumState<Arc<Api>>) -> Response 
         }
     };
 
+    let all_tests: Vec<ValidateTest> = validate_tests.into_iter().map(ValidateTest::from).collect();
+    let (info, validation_tests) = pagination::paginate_vec(all_tests, &params);
+
     let tmpl = ValidateTests {
-        validation_tests: validate_tests.into_iter().map(ValidateTest::from).collect(),
+        validation_tests,
+        page: PageContext::new(info, "/admin/machinevalidation/tests"),
     };
 
     (StatusCode::OK, Html(tmpl.render().unwrap())).into_response()
@@ -353,14 +382,16 @@ async fn fetch_validation_tests(
         .map(|response| response.into_inner().tests)
 }
 
-pub async fn runs(AxumState(state): AxumState<Arc<Api>>) -> Response {
-    // Get validation results
+pub async fn runs(
+    AxumState(state): AxumState<Arc<Api>>,
+    Query(params): Query<PaginationParams>,
+) -> Response {
     let validation_request = tonic::Request::new(rpc::forge::MachineValidationRunListGetRequest {
         machine_id: None,
         include_history: false,
     });
 
-    let validation_runs = match state
+    let validation_runs: Vec<ValidationRun> = match state
         .get_machine_validation_runs(validation_request)
         .await
         .map(|response| response.into_inner())
@@ -384,22 +415,29 @@ pub async fn runs(AxumState(state): AxumState<Arc<Api>>) -> Response {
             .collect(),
         Err(err) => {
             tracing::warn!(%err,"get_machine_validation_runs failed");
-            Vec::new() // Empty validation results on error
+            Vec::new()
         }
     };
 
-    let tmpl = ValidationRunDisplay { validation_runs };
+    let (info, validation_runs) = pagination::paginate_vec(validation_runs, &params);
+
+    let tmpl = ValidationRunDisplay {
+        validation_runs,
+        page: PageContext::new(info, "/admin/machinevalidation/runs"),
+    };
 
     (StatusCode::OK, Html(tmpl.render().unwrap())).into_response()
 }
 
-pub async fn external_configs(AxumState(state): AxumState<Arc<Api>>) -> Response {
-    // Get validation results
+pub async fn external_configs(
+    AxumState(state): AxumState<Arc<Api>>,
+    Query(params): Query<PaginationParams>,
+) -> Response {
     let request = tonic::Request::new(rpc::forge::GetMachineValidationExternalConfigsRequest {
         names: Vec::new(),
     });
 
-    let validation_configs = match state
+    let validation_configs: Vec<ValidationExternalConfig> = match state
         .get_machine_validation_external_configs(request)
         .await
         .map(|response| response.into_inner())
@@ -416,11 +454,23 @@ pub async fn external_configs(AxumState(state): AxumState<Arc<Api>>) -> Response
             .collect(),
         Err(err) => {
             tracing::warn!(%err,"get_machine_validation_runs failed");
-            Vec::new() // Empty validation results on error
+            Vec::new()
         }
     };
 
-    let tmpl = ValidationExternalConfigs { validation_configs };
+    let (info, validation_configs) = pagination::paginate_vec(validation_configs, &params);
+
+    let tmpl = ValidationExternalConfigs {
+        validation_configs,
+        page: PageContext::new(info, "/admin/machinevalidation/external-configs"),
+    };
 
     (StatusCode::OK, Html(tmpl.render().unwrap())).into_response()
 }
+
+impl super::Base for ValidationResultDetailDisplay {}
+impl super::Base for ValidationResults {}
+impl super::Base for ValidateTests {}
+impl super::Base for ValidateTestDetailsDisplay {}
+impl super::Base for ValidationRunDisplay {}
+impl super::Base for ValidationExternalConfigs {}

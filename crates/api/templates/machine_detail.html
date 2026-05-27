@@ -152,6 +152,9 @@
 {% set bmc_action_redirect_to = Some(format!("/admin/machine/{}#bmc_info_view", self.id)) %}
 <table class="detailsview">
 	<tr><th>IP</th><td><a href="/admin/explored-endpoint/{{ bmc_ip }}">{{ bmc_ip }}</a></td></tr>
+	{% if let Some(machine_interface_id) = bmc_info.machine_interface_id %}
+	<tr><th>Machine Interface ID</th><td><a href="/admin/interface/{{ machine_interface_id }}">{{ machine_interface_id }}</a></td></tr>
+	{% endif %}
 	<tr><th>Port</th><td>{{ bmc_info.port|option_fmt }}</td></tr>
 	<tr><th>MAC Address</th><td>{{ bmc_info.mac|option_fmt }}</td></tr>
 	<tr><th>Version</th><td>{{ bmc_info.version|option_fmt }}</td></tr>
@@ -315,7 +318,6 @@ Missing BMC Data
 			<th>Device UID</th>
 			<th>Tray Index</th>
 			<th>Slot ID</th>
-			<th>NMX-M ID</th>
 		</tr>
 	</thead>
 	<tbody>
@@ -326,7 +328,6 @@ Missing BMC Data
 			<td>{{ gpu.guid }}</td>
 			<td>{{ gpu.tray_index }}</td>
 			<td>{{ gpu.slot_id }}</td>
-			<td>{{ gpu.nmx_m_id }}</td>
 		</tr>
 	{% endfor %}
 	</tbody>
@@ -417,7 +418,7 @@ Missing BMC Data
 
 
 <h3>History</h3>
-<a href="/admin/machine/{{ id }}/state-history">Open History on separate page</a>
+<a href="/admin/machine/{{ id }}/state-history">Open State History on separate page</a>
 {{ history|safe }}
 
 <script>

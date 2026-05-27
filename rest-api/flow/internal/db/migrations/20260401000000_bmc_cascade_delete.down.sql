@@ -1,0 +1,1 @@
+ALTER TABLE bmc DROP CONSTRAINT IF EXISTS fk_bmc_component;

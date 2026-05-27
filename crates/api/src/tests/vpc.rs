@@ -56,17 +56,18 @@ async fn create_vpc_for_tenant_without_profile(
         .tenant
         .unwrap();
 
-    // Try to request a VPC without sending a valid tenant org.
-    // This should fail.
+    // Try to request a VPC without sending a valid tenant org. Routing-
+    // profile validation lives behind the FNN-only path, so the request
+    // has to be an FNN VPC to exercise the "no tenant" branch.
     assert!(
         env.api
             .create_vpc(
-                VpcCreationRequest::builder("", "")
+                VpcCreationRequest::builder("")
                     .metadata(rpc::forge::Metadata {
                         name: "Forge".to_string(),
-                        description: "".to_string(),
-                        labels: Vec::new(),
+                        ..Default::default()
                     })
+                    .network_virtualization_type(rpc::forge::VpcVirtualizationType::Fnn as i32)
                     .routing_profile_type("PRIVILEGED_INTERNAL".to_string())
                     .tonic_request(),
             )
@@ -80,12 +81,12 @@ async fn create_vpc_for_tenant_without_profile(
     assert!(
         env.api
             .create_vpc(
-                VpcCreationRequest::builder("", tenant.organization_id)
+                VpcCreationRequest::builder(tenant.organization_id)
                     .metadata(rpc::forge::Metadata {
                         name: "Forge".to_string(),
-                        description: "".to_string(),
-                        labels: Vec::new(),
+                        ..Default::default()
                     })
+                    .network_virtualization_type(rpc::forge::VpcVirtualizationType::Fnn as i32)
                     .routing_profile_type("PRIVILEGED_INTERNAL".to_string())
                     .tonic_request(),
             )
@@ -122,6 +123,8 @@ async fn create_vpc(pool: sqlx::PgPool) -> Result<(), Box<dyn std::error::Error>
                         leak_tenant_host_routes_to_underlay: false,
                         tenant_leak_communities_accepted: false,
                         access_tier: 1,
+                        accepted_leaks_from_underlay: vec![],
+                        allowed_anycast_prefixes: vec![],
                     },
                 ),
                 (
@@ -134,9 +137,12 @@ async fn create_vpc(pool: sqlx::PgPool) -> Result<(), Box<dyn std::error::Error>
                         leak_tenant_host_routes_to_underlay: false,
                         tenant_leak_communities_accepted: false,
                         access_tier: 0,
+                        accepted_leaks_from_underlay: vec![],
+                        allowed_anycast_prefixes: vec![],
                     },
                 ),
             ]),
+            use_vpc_vrf_loopback: false,
         })),
     )
     .await;
@@ -164,11 +170,10 @@ async fn create_vpc(pool: sqlx::PgPool) -> Result<(), Box<dyn std::error::Error>
     assert!(
         env.api
             .create_vpc(
-                VpcCreationRequest::builder("", &tenant.organization_id)
+                VpcCreationRequest::builder(&tenant.organization_id)
                     .metadata(rpc::forge::Metadata {
                         name: "Forge".to_string(),
-                        description: "".to_string(),
-                        labels: Vec::new(),
+                        ..Default::default()
                     })
                     .vni(100u32)
                     .tonic_request(),
@@ -184,11 +189,10 @@ async fn create_vpc(pool: sqlx::PgPool) -> Result<(), Box<dyn std::error::Error>
     assert!(
         env.api
             .create_vpc(
-                VpcCreationRequest::builder("", &tenant.organization_id)
+                VpcCreationRequest::builder(&tenant.organization_id)
                     .metadata(rpc::forge::Metadata {
                         name: "Forge".to_string(),
-                        description: "".to_string(),
-                        labels: Vec::new(),
+                        ..Default::default()
                     })
                     .vni(20002u32)
                     .tonic_request(),
@@ -217,17 +221,19 @@ async fn create_vpc(pool: sqlx::PgPool) -> Result<(), Box<dyn std::error::Error>
         .tenant
         .unwrap();
 
-    // Try to request a broader routing profile for the VPC.
-    // This should fail.
+    // Try to request a broader routing profile for the VPC. Access-tier
+    // broadening checks live behind the routing-profile path, which is
+    // FNN-only -- the request has to be an FNN VPC to even reach that
+    // validation. This should fail.
     assert!(
         env.api
             .create_vpc(
-                VpcCreationRequest::builder("", &tenant.organization_id)
+                VpcCreationRequest::builder(&tenant.organization_id)
                     .metadata(rpc::forge::Metadata {
                         name: "Forge".to_string(),
-                        description: "".to_string(),
-                        labels: Vec::new(),
+                        ..Default::default()
                     })
+                    .network_virtualization_type(rpc::forge::VpcVirtualizationType::Fnn as i32)
                     .routing_profile_type("PRIVILEGED_INTERNAL".to_string())
                     .tonic_request(),
             )
@@ -242,12 +248,11 @@ async fn create_vpc(pool: sqlx::PgPool) -> Result<(), Box<dyn std::error::Error>
     let forge_vpc = env
         .api
         .create_vpc(
-            VpcCreationRequest::builder("", &tenant.organization_id)
+            VpcCreationRequest::builder(&tenant.organization_id)
                 .vni(60001u32)
                 .metadata(rpc::forge::Metadata {
                     name: "Forge_with_vni".to_string(),
-                    description: "".to_string(),
-                    labels: Vec::new(),
+                    ..Default::default()
                 })
                 .tonic_request(),
         )
@@ -265,12 +270,11 @@ async fn create_vpc(pool: sqlx::PgPool) -> Result<(), Box<dyn std::error::Error>
     let _ = env
         .api
         .create_vpc(
-            VpcCreationRequest::builder("", &tenant.organization_id)
+            VpcCreationRequest::builder(&tenant.organization_id)
                 .vni(60001u32)
                 .metadata(rpc::forge::Metadata {
                     name: "Forge_with_vni_dupe".to_string(),
-                    description: "".to_string(),
-                    labels: Vec::new(),
+                    ..Default::default()
                 })
                 .tonic_request(),
         )
@@ -292,11 +296,10 @@ async fn create_vpc(pool: sqlx::PgPool) -> Result<(), Box<dyn std::error::Error>
     let forge_vpc = env
         .api
         .create_vpc(
-            VpcCreationRequest::builder("", &tenant.organization_id)
+            VpcCreationRequest::builder(&tenant.organization_id)
                 .metadata(rpc::forge::Metadata {
                     name: "Forge".to_string(),
-                    description: "".to_string(),
-                    labels: Vec::new(),
+                    ..Default::default()
                 })
                 .tonic_request(),
         )
@@ -316,7 +319,7 @@ async fn create_vpc(pool: sqlx::PgPool) -> Result<(), Box<dyn std::error::Error>
     let no_org_vpc = env
         .api
         .create_vpc(
-            VpcCreationRequest::builder("", &tenant.organization_id)
+            VpcCreationRequest::builder(&tenant.organization_id)
                 .network_virtualization_type(rpc::forge::VpcVirtualizationType::from(
                     VpcVirtualizationType::EthernetVirtualizer,
                 ))
@@ -348,7 +351,6 @@ async fn create_vpc(pool: sqlx::PgPool) -> Result<(), Box<dyn std::error::Error>
         let invalid_updated_vpc = env
             .api
             .update_vpc(tonic::Request::new(rpc::forge::VpcUpdateRequest {
-                name: "".to_string(),
                 id: Some(no_org_vpc_id),
                 if_version_match: None,
                 metadata: Some(invalid_metadata.clone()),
@@ -561,15 +563,17 @@ async fn create_vpc_without_fnn_rejects_explicit_routing_profile(
         txn.commit().await?;
     };
 
-    // Requesting a VPC routing profile without FNN should fail early.
+    // Requesting a VPC routing profile on a non-FNN VPC type (default
+    // is ETV) should fail early at the API gate. The REST API enforces
+    // this upstream; carbide-core enforces it as defense-in-depth via
+    // `ensure_supports_routing_profiles`.
     assert!(
         env.api
             .create_vpc(
-                VpcCreationRequest::builder("", &tenant_organization_id)
+                VpcCreationRequest::builder(&tenant_organization_id)
                     .metadata(rpc::forge::Metadata {
                         name: "Forge".to_string(),
-                        description: "".to_string(),
-                        labels: Vec::new(),
+                        ..Default::default()
                     })
                     .routing_profile_type("PRIVILEGED_INTERNAL".to_string())
                     .tonic_request(),
@@ -577,7 +581,7 @@ async fn create_vpc_without_fnn_rejects_explicit_routing_profile(
             .await
             .unwrap_err()
             .message()
-            .contains("FNN configuration required to request routing-profile for VPCs")
+            .contains("do not support routing profiles")
     );
 
     Ok(())
@@ -590,7 +594,7 @@ async fn create_vpc_with_labels(pool: sqlx::PgPool) -> Result<(), Box<dyn std::e
     let forge_vpc = env
         .api
         .create_vpc(
-            VpcCreationRequest::builder("", "Forge_unit_tests")
+            VpcCreationRequest::builder("Forge_unit_tests")
                 .metadata(Metadata {
                     name: "test_VPC_with_labels".to_string(),
                     description: "this VPC must have labels.".to_string(),
@@ -702,7 +706,7 @@ async fn create_vpc_with_invalid_metadata(
         let result = env
             .api
             .create_vpc(
-                VpcCreationRequest::builder("", "Forge_unit_tests")
+                VpcCreationRequest::builder("Forge_unit_tests")
                     .metadata(invalid_metadata.clone())
                     .tonic_request(),
             )
@@ -720,60 +724,6 @@ async fn create_vpc_with_invalid_metadata(
             expected_err
         )
     }
-
-    Ok(())
-}
-
-#[crate::sqlx_test]
-async fn prevent_vpc_with_two_names(pool: sqlx::PgPool) -> Result<(), Box<dyn std::error::Error>> {
-    let env = create_test_env(pool).await;
-
-    let forge_vpc1 = env
-        .api
-        .create_vpc(
-            VpcCreationRequest::builder("vpc_name", "Forge_unit_tests")
-                .metadata(Metadata {
-                    name: "vpc_another_name".to_string(),
-                    description: "No description.".to_string(),
-                    ..Default::default()
-                })
-                .tonic_request(),
-        )
-        .await;
-
-    match forge_vpc1 {
-        Ok(..) => panic!("Expected VPC creation failure when two names are passed."),
-        Err(e) => {
-            assert_eq!(
-                e.message(),
-                "VPC name must be specified under metadata only."
-            );
-        }
-    };
-
-    let forge_vpc2 = env
-        .api
-        .create_vpc(
-            VpcCreationRequest::builder("vpc_name", "Forge_unit_tests")
-                .metadata(Metadata {
-                    description: "No description.".to_string(),
-                    ..Default::default()
-                })
-                .tonic_request(),
-        )
-        .await;
-
-    match forge_vpc2 {
-        Ok(..) => {
-            panic!("Expected VPC creation failure when metadata exists but vpc.name is not empty.")
-        }
-        Err(e) => {
-            assert_eq!(
-                e.message(),
-                "VPC name must be specified under metadata only."
-            );
-        }
-    };
 
     Ok(())
 }
@@ -809,7 +759,7 @@ async fn test_vpc_with_id(pool: sqlx::PgPool) -> Result<(), Box<dyn std::error::
     let forge_vpc = env
         .api
         .create_vpc(
-            VpcCreationRequest::builder("", "")
+            VpcCreationRequest::builder("")
                 .id(id)
                 .metadata(Metadata {
                     name: "Forge".to_string(),
@@ -829,7 +779,7 @@ async fn test_vpc_with_id(pool: sqlx::PgPool) -> Result<(), Box<dyn std::error::
 async fn vpc_deletion_is_idempotent(pool: sqlx::PgPool) -> Result<(), eyre::Report> {
     let env = create_test_env(pool).await;
 
-    let vpc_req = VpcCreationRequest::builder("", "test")
+    let vpc_req = VpcCreationRequest::builder("test")
         .metadata(Metadata {
             name: "test_vpc".to_string(),
             ..Default::default()
@@ -838,7 +788,7 @@ async fn vpc_deletion_is_idempotent(pool: sqlx::PgPool) -> Result<(), eyre::Repo
     let resp = env.api.create_vpc(vpc_req).await.unwrap().into_inner();
 
     let vpc_id = resp.id.unwrap();
-    assert_eq!(resp.name, "test_vpc");
+    assert_eq!(resp.metadata.unwrap().name, "test_vpc");
 
     let vpc_list = env
         .api
@@ -848,9 +798,12 @@ async fn vpc_deletion_is_idempotent(pool: sqlx::PgPool) -> Result<(), eyre::Repo
         .await
         .unwrap()
         .into_inner();
+
+    let vpc_name = vpc_list.vpcs[0].metadata.as_ref().unwrap().name.clone();
+
     assert_eq!(vpc_list.vpcs.len(), 1);
     assert_eq!(vpc_list.vpcs[0].id, Some(vpc_id));
-    assert_eq!(vpc_list.vpcs[0].name, "test_vpc");
+    assert_eq!(vpc_name, "test_vpc");
 
     // Delete the first time. Queries should now yield no results
     env.api
@@ -912,9 +865,112 @@ async fn create_admin_vpc(pool: sqlx::PgPool) -> Result<(), eyre::Report> {
         VpcVirtualizationType::Fnn
     );
 
-    let admin_segment = db::network_segment::admin(&mut txn).await?;
+    let admin_segments = db::network_segment::admin(&mut txn).await?;
 
-    assert_eq!(admin_vpc.id, admin_segment.vpc_id.unwrap());
+    for admin_segment in admin_segments {
+        assert_eq!(admin_vpc.id, admin_segment.config.vpc_id.unwrap());
+    }
+
+    Ok(())
+}
+
+#[crate::sqlx_test]
+async fn create_admin_vpc_updates_existing_admin_vpc_vni(
+    pool: sqlx::PgPool,
+) -> Result<(), eyre::Report> {
+    let env = create_test_env(pool).await;
+    let initial_vni = 10000;
+    let updated_vni = 10001;
+
+    // Create the initial admin VPC and verify the admin segments attach to it.
+    db_init::create_admin_vpc(&env.pool, Some(initial_vni)).await?;
+    let mut txn = env.pool.begin().await?;
+    let mut initial_admin_vpcs = db::vpc::find_by_vni(&mut txn, initial_vni as i32).await?;
+    assert_eq!(initial_admin_vpcs.len(), 1);
+    let initial_admin_vpc = initial_admin_vpcs.remove(0);
+    for admin_segment in db::network_segment::admin(&mut txn).await? {
+        assert_eq!(Some(initial_admin_vpc.id), admin_segment.config.vpc_id);
+    }
+    txn.commit().await?;
+
+    // Change the configured VNI and run startup reconciliation again.
+    db_init::create_admin_vpc(&env.pool, Some(updated_vni)).await?;
+
+    // Fetch from the DB to verify the existing admin VPC was updated in place.
+    let mut txn = env.pool.begin().await?;
+    let mut updated_admin_vpcs = db::vpc::find_by_vni(&mut txn, updated_vni as i32).await?;
+    assert_eq!(updated_admin_vpcs.len(), 1);
+    let updated_admin_vpc = updated_admin_vpcs.remove(0);
+    assert_eq!(updated_admin_vpc.id, initial_admin_vpc.id);
+    assert_eq!(updated_admin_vpc.vni, Some(updated_vni as i32));
+    assert_eq!(
+        updated_admin_vpc
+            .status
+            .as_ref()
+            .and_then(|status| status.vni),
+        Some(updated_vni as i32)
+    );
+    assert!(
+        db::vpc::find_by_vni(&mut txn, initial_vni as i32)
+            .await?
+            .is_empty()
+    );
+
+    // Verify reconciliation did not create a duplicate admin VPC row.
+    let admin_vpcs = db::vpc::find_by_name(&env.pool, "admin").await?;
+    assert_eq!(admin_vpcs.len(), 1);
+
+    // Verify every admin segment still points at the same reconciled VPC.
+    for admin_segment in db::network_segment::admin(&mut txn).await? {
+        assert_eq!(Some(updated_admin_vpc.id), admin_segment.config.vpc_id);
+    }
+
+    Ok(())
+}
+
+#[crate::sqlx_test]
+async fn create_admin_vpc_rejects_existing_tenant_vpc_vni(
+    pool: sqlx::PgPool,
+) -> Result<(), eyre::Report> {
+    let env = create_test_env(pool).await;
+    let vni = 60001;
+
+    // Create a tenant VPC with the same VNI before the admin VPC is seeded.
+    let tenant_vpc = env
+        .api
+        .create_vpc(
+            VpcCreationRequest::builder("tenant-admin-vni-conflict")
+                .vni(vni)
+                .metadata(rpc::forge::Metadata {
+                    name: "tenant-admin-vni-conflict".to_string(),
+                    ..Default::default()
+                })
+                .tonic_request(),
+        )
+        .await?
+        .into_inner();
+
+    // Verify the VNI actually persisted before running admin reconciliation.
+    let mut txn = env.pool.begin().await?;
+    let mut tenant_vpcs = db::vpc::find_by_vni(&mut txn, vni as i32).await?;
+    assert_eq!(tenant_vpcs.len(), 1);
+    assert_eq!(tenant_vpcs.remove(0).id, tenant_vpc.id.unwrap());
+    txn.commit().await?;
+
+    // Seeding the admin VPC must fail instead of adopting the tenant VPC.
+    let err = db_init::create_admin_vpc(&env.pool, Some(vni))
+        .await
+        .expect_err("admin VPC seeding should reject an already-used tenant VNI");
+    assert!(
+        err.to_string()
+            .contains("but no admin VPC is attached to admin network segments")
+    );
+
+    // Verify the admin segments remain unattached after the rejected seed.
+    let mut txn = env.pool.begin().await?;
+    for admin_segment in db::network_segment::admin(&mut txn).await? {
+        assert!(admin_segment.config.vpc_id.is_none());
+    }
 
     Ok(())
 }
@@ -937,7 +993,7 @@ async fn create_update_network_security_group_for_vpc(
     let _ = env
         .api
         .create_vpc(
-            VpcCreationRequest::builder("", default_tenant_org)
+            VpcCreationRequest::builder(default_tenant_org)
                 .network_security_group_id(bad_network_security_group_id)
                 .metadata(Metadata::new_with_default_name())
                 .tonic_request(),
@@ -949,7 +1005,7 @@ async fn create_update_network_security_group_for_vpc(
     let vpc = env
         .api
         .create_vpc(
-            VpcCreationRequest::builder("", default_tenant_org)
+            VpcCreationRequest::builder(default_tenant_org)
                 .network_security_group_id(good_network_security_group_id)
                 .metadata(Metadata::new_with_default_name())
                 .tonic_request(),
@@ -972,7 +1028,7 @@ async fn create_update_network_security_group_for_vpc(
     let _ = env
         .api
         .update_vpc(
-            VpcUpdateRequest::builder("")
+            VpcUpdateRequest::builder()
                 .set_id(vpc_id)
                 .network_security_group_id(bad_network_security_group_id)
                 .metadata(Metadata::new_with_default_name())
@@ -985,7 +1041,7 @@ async fn create_update_network_security_group_for_vpc(
     let vpc = env
         .api
         .update_vpc(
-            VpcUpdateRequest::builder("")
+            VpcUpdateRequest::builder()
                 .set_id(vpc_id)
                 .network_security_group_id(good_network_security_group_id)
                 .metadata(Metadata::new_with_default_name())
@@ -1007,7 +1063,7 @@ async fn create_update_network_security_group_for_vpc(
     let vpc = env
         .api
         .update_vpc(
-            VpcUpdateRequest::builder("")
+            VpcUpdateRequest::builder()
                 .set_id(vpc_id)
                 .metadata(Metadata::new_with_default_name())
                 .tonic_request(),
@@ -1036,7 +1092,11 @@ async fn test_increment_vpc_version_detects_concurrent_writes(
     let vpc_id: VpcId = env
         .api
         .create_vpc(
-            VpcCreationRequest::builder("vpc-bump", "2829bbe3-c169-4cd9-8b2a-19a8b1618a93")
+            VpcCreationRequest::builder("2829bbe3-c169-4cd9-8b2a-19a8b1618a93")
+                .metadata(Metadata {
+                    name: "vpc-bump".to_string(),
+                    ..Default::default()
+                })
                 .tonic_request(),
         )
         .await
@@ -1045,19 +1105,20 @@ async fn test_increment_vpc_version_detects_concurrent_writes(
         .id
         .unwrap();
 
-    let initial_version_nr = {
+    let initial_version = {
         let vpcs =
             db::vpc::find_by(&pool, ObjectColumnFilter::One(db::vpc::IdColumn, &vpc_id)).await?;
-        vpcs[0].version.version_nr()
+        vpcs[0].version
     };
+    let initial_version_nr = initial_version.version_nr();
 
-    // Open two transactions, have both read the current version, then race!
+    // Open two transactions, have both use the same expected version, then race!
     let pool_a = pool.clone();
     let pool_b = pool.clone();
     let (a, b) = tokio::join!(
         tokio::spawn(async move {
             let mut txn = pool_a.begin().await.unwrap();
-            let result = db::vpc::increment_vpc_version(&mut txn, vpc_id).await;
+            let result = db::vpc::increment_vpc_version(&mut txn, vpc_id, initial_version).await;
             if result.is_ok() {
                 txn.commit().await.unwrap();
             } else {
@@ -1067,7 +1128,7 @@ async fn test_increment_vpc_version_detects_concurrent_writes(
         }),
         tokio::spawn(async move {
             let mut txn = pool_b.begin().await.unwrap();
-            let result = db::vpc::increment_vpc_version(&mut txn, vpc_id).await;
+            let result = db::vpc::increment_vpc_version(&mut txn, vpc_id, initial_version).await;
             if result.is_ok() {
                 txn.commit().await.unwrap();
             } else {
@@ -1107,6 +1168,107 @@ async fn test_increment_vpc_version_detects_concurrent_writes(
         final_version_nr - initial_version_nr,
         1,
         "exactly one increment should have happened after the race"
+    );
+
+    Ok(())
+}
+
+#[crate::sqlx_test]
+async fn create_flat_vpc_succeeds_without_routing_profile(
+    pool: sqlx::PgPool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Flat VPCs are for zero-DPU hosts and don't have a Carbide-managed
+    // routing layer. The create handler should skip the FNN-flavored
+    // routing-profile validation entirely and still allocate a VNI.
+    let env = create_test_env(pool).await;
+
+    let tenant = env
+        .api
+        .create_tenant(tonic::Request::new(rpc::forge::CreateTenantRequest {
+            organization_id: "flat-tenant".to_string(),
+            routing_profile_type: None,
+            metadata: Some(rpc::forge::Metadata {
+                name: "flat-tenant".to_string(),
+                description: "".to_string(),
+                labels: vec![],
+            }),
+        }))
+        .await?
+        .into_inner()
+        .tenant
+        .unwrap();
+
+    let vpc = env
+        .api
+        .create_vpc(
+            VpcCreationRequest::builder(tenant.organization_id.clone())
+                .network_virtualization_type(rpc::forge::VpcVirtualizationType::Flat as i32)
+                .metadata(rpc::forge::Metadata {
+                    name: "flat".to_string(),
+                    ..Default::default()
+                })
+                .tonic_request(),
+        )
+        .await?
+        .into_inner();
+
+    assert_eq!(
+        vpc.network_virtualization_type,
+        Some(rpc::forge::VpcVirtualizationType::Flat as i32),
+    );
+    assert!(vpc.routing_profile_type.is_none());
+    assert!(
+        vpc.status.as_ref().and_then(|s| s.vni).is_some(),
+        "Flat VPCs still allocate a VNI for pluggable SDN hooks (e.g. switch-side VTEPs)",
+    );
+
+    Ok(())
+}
+
+#[crate::sqlx_test]
+async fn create_flat_vpc_rejects_routing_profile_type(
+    pool: sqlx::PgPool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Routing profile types are FNN-specific. Sending one on a Flat VPC
+    // create is contradictory and should be rejected up front.
+    let env = create_test_env(pool).await;
+
+    let tenant = env
+        .api
+        .create_tenant(tonic::Request::new(rpc::forge::CreateTenantRequest {
+            organization_id: "flat-tenant".to_string(),
+            routing_profile_type: None,
+            metadata: Some(rpc::forge::Metadata {
+                name: "flat-tenant".to_string(),
+                description: "".to_string(),
+                labels: vec![],
+            }),
+        }))
+        .await?
+        .into_inner()
+        .tenant
+        .unwrap();
+
+    let err = env
+        .api
+        .create_vpc(
+            VpcCreationRequest::builder(tenant.organization_id)
+                .network_virtualization_type(rpc::forge::VpcVirtualizationType::Flat as i32)
+                .routing_profile_type("EXTERNAL".to_string())
+                .metadata(rpc::forge::Metadata {
+                    name: "flat".to_string(),
+                    ..Default::default()
+                })
+                .tonic_request(),
+        )
+        .await
+        .expect_err("Flat VPC + routing_profile_type must be rejected");
+
+    assert_eq!(err.code(), tonic::Code::InvalidArgument, "got: {err}");
+    assert!(
+        err.message().contains("flat") && err.message().contains("routing_profile_type"),
+        "error should mention flat VPC and the routing_profile_type field, got: {}",
+        err.message()
     );
 
     Ok(())

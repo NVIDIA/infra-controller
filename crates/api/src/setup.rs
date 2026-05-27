@@ -14,24 +14,47 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
+use carbide_dpa_interface_controller::DpaInfo;
+use carbide_dpa_interface_controller::context::DpaInterfaceStateHandlerServices;
+use carbide_dpa_interface_controller::handler::DpaInterfaceStateHandler;
+use carbide_dpa_interface_controller::io::DpaInterfaceStateControllerIO;
 use carbide_firmware::FirmwareDownloader;
 use carbide_ib_fabric::IbFabricMonitor;
 use carbide_ib_fabric::ib::{self, IBFabricManager};
+use carbide_ib_partition_controller::context::IBPartitionStateHandlerServices;
+use carbide_ib_partition_controller::handler::IBPartitionStateHandler;
+use carbide_ib_partition_controller::io::IBPartitionStateControllerIO;
 use carbide_ipmi::IPMITool;
+use carbide_network_segment_controller::context::NetworkSegmentStateHandlerServices;
+use carbide_network_segment_controller::handler::NetworkSegmentStateHandler;
+use carbide_network_segment_controller::io::NetworkSegmentStateControllerIO;
 use carbide_nvlink_manager::NvlPartitionMonitor;
-use carbide_nvlink_manager::nvlink::{NmxmClientPool, NmxmClientPoolImpl};
+use carbide_power_shelf_controller::context::PowerShelfStateHandlerServices;
+use carbide_power_shelf_controller::handler::PowerShelfStateHandler;
+use carbide_power_shelf_controller::io::PowerShelfStateControllerIO;
 use carbide_preingestion_manager::PreingestionManager;
+use carbide_rack::bms_client::BmsDsxExchangeHandle;
+use carbide_rack_controller::config::RackConfig;
+use carbide_rack_controller::context::RackStateHandlerServices;
+use carbide_rack_controller::handler::RackStateHandler;
+use carbide_rack_controller::io::RackStateControllerIO;
 use carbide_redfish::libredfish::RedfishClientPool;
 use carbide_redfish::nv_redfish::NvRedfishClientPool;
 use carbide_site_explorer::SiteExplorer;
+use carbide_spdm_controller::context::SpdmStateHandlerServices;
+use carbide_spdm_controller::handler::SpdmAttestationStateHandler;
+use carbide_spdm_controller::io::SpdmStateControllerIO;
+use carbide_switch_controller::context::SwitchStateHandlerServices;
+use carbide_switch_controller::handler::SwitchStateHandler;
+use carbide_switch_controller::io::SwitchStateControllerIO;
 use carbide_utils::HostPortPair;
 use db::machine::update_dpu_asns;
 use db::resource_pool::DefineResourcePoolError;
@@ -47,6 +70,7 @@ use model::attestation::spdm::VerifierImpl;
 use model::expected_machine::ExpectedMachine;
 use model::ib::DEFAULT_IB_FABRIC_NAME;
 use model::machine::HostHealthConfig;
+use model::network_segment::NetworkDefinition;
 use model::resource_pool::{self, ResourcePoolDef};
 use model::route_server::RouteServerSourceType;
 use opentelemetry::metrics::Meter;
@@ -62,7 +86,7 @@ use tracing_log::AsLog as _;
 use crate::api::Api;
 use crate::api::metrics::ApiMetricsEmitter;
 use crate::cfg::file::{CarbideConfig, InitialObjectsConfig, ListenMode};
-use crate::dpa::handler::{DpaInfo, start_dpa_handler};
+use crate::dpa::handler::start_dpa_handler;
 use crate::dynamic_settings::DynamicSettings;
 use crate::errors::CarbideError;
 use crate::handlers::machine_validation::apply_config_on_startup;
@@ -74,28 +98,18 @@ use crate::logging::service_health_metrics::{
 use crate::machine_update_manager::MachineUpdateManager;
 use crate::measured_boot::metrics_collector::MeasuredBootMetricsCollector;
 use crate::mqtt_state_change_hook::hook::MqttStateChangeHook;
-use crate::rack::bms_client::BmsDsxExchangeHandle;
 use crate::scout_stream::ConnectionRegistry;
 use crate::state_controller::common_services::CommonStateHandlerServices;
 use crate::state_controller::controller::{Enqueuer, StateController};
-use crate::state_controller::dpa_interface::handler::DpaInterfaceStateHandler;
-use crate::state_controller::dpa_interface::io::DpaInterfaceStateControllerIO;
-use crate::state_controller::ib_partition::handler::IBPartitionStateHandler;
-use crate::state_controller::ib_partition::io::IBPartitionStateControllerIO;
+use crate::state_controller::machine::context::MachineStateHandlerServices;
 use crate::state_controller::machine::handler::MachineStateHandlerBuilder;
 use crate::state_controller::machine::io::MachineStateControllerIO;
-use crate::state_controller::network_segment::handler::NetworkSegmentStateHandler;
-use crate::state_controller::network_segment::io::NetworkSegmentStateControllerIO;
-use crate::state_controller::power_shelf::handler::PowerShelfStateHandler;
-use crate::state_controller::power_shelf::io::PowerShelfStateControllerIO;
-use crate::state_controller::rack::handler::RackStateHandler;
-use crate::state_controller::rack::io::RackStateControllerIO;
-use crate::state_controller::spdm::handler::SpdmAttestationStateHandler;
-use crate::state_controller::spdm::io::SpdmStateControllerIO;
 use crate::state_controller::state_change_emitter::StateChangeEmitterBuilder;
-use crate::state_controller::switch::handler::SwitchStateHandler;
-use crate::state_controller::switch::io::SwitchStateControllerIO;
 use crate::{attestation, db_init, ethernet_virtualization, listener};
+
+/// The resolved set of network declarations passed from `start_api` into
+/// `initialize_and_start_controllers`.
+pub(crate) type NetworkDefinitionSources<'a> = Cow<'a, HashMap<String, NetworkDefinition>>;
 
 /// Parse an `InitialObjectsConfig` file (the file pointed at by
 pub fn parse_initial_objects_config(path: &Path) -> eyre::Result<InitialObjectsConfig> {
@@ -126,6 +140,16 @@ fn all_configuration_files(carbide_config: &CarbideConfig) -> Vec<&Path> {
 fn pool_source(figment: Option<&Figment>, name: &str) -> String {
     figment
         .and_then(|f| f.find_metadata(&format!("pools.{name}")))
+        .and_then(|m| m.source.as_ref())
+        .map(|source| source.to_string())
+        .unwrap_or_else(|| "carbide-api config".to_string())
+}
+
+/// Given a figment and the name of a network definition, return the human-readable
+/// string describing where the network definition came from.
+fn network_source(figment: Option<&Figment>, name: &str) -> String {
+    figment
+        .and_then(|f| f.find_metadata(&format!("networks.{name}")))
         .and_then(|m| m.source.as_ref())
         .map(|source| source.to_string())
         .unwrap_or_else(|| "carbide-api config".to_string())
@@ -217,6 +241,90 @@ fn resolve_initial_pools(
     }
 }
 
+/// Determines the authoritative set of network definitions to reconcile
+/// against the database at startup, merging `InitialObjectsConfig.networks`
+/// with the legacy `CarbideConfig.networks` source.
+fn resolve_initial_networks<'a>(
+    carbide_config: &'a CarbideConfig,
+    initial_objects: Option<&'a InitialObjectsConfig>,
+) -> eyre::Result<NetworkDefinitionSources<'a>> {
+    let from_initial_objects = initial_objects.and_then(|io| io.networks.as_ref());
+    let from_carbide_config = carbide_config.networks.as_ref();
+
+    match (from_initial_objects, from_carbide_config) {
+        // No networks are defined anywhere — initial network creation is skipped.
+        (None, None) => Ok(Cow::Owned(HashMap::new())),
+        // Networks are defined in InitialObjectsConfig.networks
+        (Some(io), None) => Ok(Cow::Borrowed(io)),
+        // Networks are defined only in the legacy CarbideConfig.networks
+        (None, Some(cc)) => {
+            for name in cc.keys() {
+                let source = network_source(carbide_config.config_ctx.as_ref(), name);
+                tracing::warn!(
+                    network = %name,
+                    source = %source,
+                    "Network `{name}` is defined in {source}. Defining networks in {source} \
+                     is deprecated; move the definitions into `initial_objects_file`.",
+                );
+            }
+            Ok(Cow::Borrowed(cc))
+        }
+        // Networks are defined in both sources.
+        (Some(io), Some(cc)) => {
+            // detect conflicts.
+            let conflicts: Vec<&str> = cc
+                .iter()
+                .filter(|(name, legacy_def)| {
+                    io.get(name.as_str())
+                        .is_some_and(|new_def| new_def != *legacy_def)
+                })
+                .map(|(name, _)| name.as_str())
+                .collect();
+
+            if !conflicts.is_empty() {
+                // Each conflicting name is declared in both sources.
+                // Name them both so the operator knows which two files
+                // to compare.
+                let conflict_details: Vec<String> = conflicts
+                    .iter()
+                    .map(|name| {
+                        format!(
+                            "`{name}` (in initial_objects_file vs {})",
+                            network_source(carbide_config.config_ctx.as_ref(), name),
+                        )
+                    })
+                    .collect();
+                return Err(eyre::eyre!(
+                    "networks have conflicting definitions {conflict_details:?}. \
+                     Reconcile each network by removing it from one source.",
+                ));
+            }
+
+            // merge legacy-only entries into the result.
+            let mut merged = Cow::Borrowed(io);
+            for (name, legacy_def) in cc {
+                if !io.contains_key(name) {
+                    merged.to_mut().insert(name.clone(), legacy_def.clone());
+                }
+            }
+
+            // Every name in `cc` is still in the deprecated source —
+            // emit one warning per name regardless of whether it was a
+            // legacy-only entry or an identical overlap.
+            for name in cc.keys() {
+                let source = network_source(carbide_config.config_ctx.as_ref(), name);
+                tracing::warn!(
+                    network = %name,
+                    source = %source,
+                    "Network `{name}` is still defined in {source}. \
+                     Move it into initial_objects_file to silence this warning.",
+                );
+            }
+            Ok(merged)
+        }
+    }
+}
+
 pub fn parse_carbide_config(
     config_str: &Path,
     site_config_str: Option<&Path>,
@@ -273,6 +381,13 @@ pub fn parse_carbide_config(
                 .max_concurrent_machine_updates_absolute = config.max_concurrent_machine_updates
         }
     }
+
+    // Validate that admin-UI tool entries have unique names.
+    config.validate_web_ui_sidebar_tools()?;
+
+    // Publish the configured tool list to the web layer so the
+    // admin-UI sidebar and per-machine "Logs" deep link can read it.
+    crate::web::init_tools(config.web_ui_sidebar_tools.clone());
 
     // Validate that the firmware profile config keys match their inner
     // part_number and psid values. Mismatches are logged as warnings.
@@ -411,6 +526,12 @@ pub async fn start_api(
     //
     // Pool reconciliation specifically must happen before `create_common_pools` runs below, because
     // that call queries `resource_pool` and bails if any mandatory pool is missing or empty.
+    //
+    // Resolve initial networks up-front so any configuration conflicts surface
+    // before we touch the database. The actual reconcile/creation runs inside
+    // `initialize_and_start_controllers`.
+    let resolved_networks = resolve_initial_networks(&carbide_config, initial_objects.as_ref())?;
+
     if carbide_config.listen_only {
         tracing::info!(
             "Not populating resource pools or route_servers in database, as listen_only=true"
@@ -512,11 +633,14 @@ pub async fn start_api(
 
     let nvlink_config = carbide_config.nvlink_config.clone().unwrap_or_default();
 
-    let nmxm_client_pool =
-        libnmxm::NmxmClientPool::builder(nvlink_config.allow_insecure).build()?;
-    let nmxm_pool = NmxmClientPoolImpl::new(credential_manager.clone(), nmxm_client_pool);
-
-    let shared_nmxm_pool: Arc<dyn NmxmClientPool> = Arc::new(nmxm_pool);
+    let mut nmxc_builder = libnmxc::NmxcClientPool::builder();
+    if let Some(tls) = nmxc_tls_config_from_nvlink(&nvlink_config) {
+        nmxc_builder = nmxc_builder.tls(tls);
+    }
+    let nmxc_client_pool = nmxc_builder
+        .build()
+        .map_err(|e| eyre::eyre!("Failed to build NMX-C client pool: {e}"))?;
+    let shared_nmxc_pool: Arc<dyn libnmxc::NmxcPool> = Arc::new(nmxc_client_pool);
 
     // Create DPF SDK and initialize CRs if enabled
     // If we end up having static DPUDeployments, we could move the static CRs outside of the API.
@@ -536,7 +660,6 @@ pub async fn start_api(
             crate::dpf_services::dpu_agent_service(&mandatory_services.dpu_agent),
             crate::dpf_services::fmds_service(&mandatory_services.fmds),
             crate::dpf_services::otelcol_service(&mandatory_services.otel),
-            crate::dpf_services::otel_agent_service(&mandatory_services.otel_agent),
         ];
 
         // This is just temparary code until we make v2 only option. (just 2 weeks)
@@ -572,14 +695,16 @@ pub async fn start_api(
             cd_config,
             rms_client.clone(),
             Some(db_pool.clone()),
+            Some(shared_redfish_pool.clone()),
         )
         .await
         {
             Ok(cm) => {
                 tracing::info!(
-                    "Component manager configured (nv_switch={}, power_shelf={})",
+                    "Component manager configured (nv_switch={}, power_shelf={}, compute_tray={})",
                     cm.nv_switch.name(),
-                    cm.power_shelf.name()
+                    cm.power_shelf.name(),
+                    cm.compute_tray.name()
                 );
                 Some(cm)
             }
@@ -611,7 +736,7 @@ pub async fn start_api(
         runtime_config: carbide_config.clone(),
         scout_stream_registry: ConnectionRegistry::new(),
         rms_client: rms_client.clone(),
-        nmxm_pool: shared_nmxm_pool,
+        nmxc_client_pool: shared_nmxc_pool.clone(),
         work_lock_manager_handle,
         dpf_sdk: dpf_sdk.clone(),
         machine_state_handler_enqueuer: Enqueuer::new(db_pool),
@@ -628,6 +753,7 @@ pub async fn start_api(
             api_service.clone(),
             meter.clone(),
             ipmi_tool.clone(),
+            resolved_networks,
             cancel_token.clone(),
         )
         .await?;
@@ -662,11 +788,12 @@ pub async fn start_api(
 ///
 /// All background tasks will be spawned into `join_set`, which can be awaited with
 /// [`JoinSet::join_all`] to wait for them to complete.
-pub async fn initialize_and_start_controllers(
+pub async fn initialize_and_start_controllers<'a>(
     join_set: &mut JoinSet<()>,
     api_service: Arc<Api>,
     meter: Meter,
     ipmi_tool: Arc<dyn IPMITool>,
+    initial_networks: NetworkDefinitionSources<'a>,
     cancel_token: CancellationToken,
 ) -> eyre::Result<()> {
     let Api {
@@ -676,7 +803,6 @@ pub async fn initialize_and_start_controllers(
         database_connection: db_pool,
         ib_fabric_manager,
         redfish_pool: shared_redfish_pool,
-        nmxm_pool: shared_nmxm_pool,
         work_lock_manager_handle,
         rms_client,
         dpf_sdk,
@@ -709,7 +835,7 @@ pub async fn initialize_and_start_controllers(
                 tracing::error!("expected_machines.json file exists, but unable to parse expected_machines file, nothing was written to db, bailing: {err}.");
             })?;
         let mut txn = Transaction::begin(db_pool).await?;
-        db::expected_machine::create_missing_from(&mut txn, &expected_machines)
+        crate::handlers::expected_machine::create_missing_from(&mut txn, &expected_machines)
             .await
             .inspect_err(|err| {
                 tracing::error!(
@@ -769,8 +895,8 @@ pub async fn initialize_and_start_controllers(
         resource_pool_stats: common_pools.pool_stats.clone(),
     });
 
-    if let Some(networks) = carbide_config.networks.as_ref() {
-        db_init::create_initial_networks(&api_service, db_pool, networks).await?;
+    if !initial_networks.is_empty() {
+        db_init::create_initial_networks(&api_service, db_pool, &initial_networks).await?;
     }
 
     if let Some(fnn_config) = carbide_config.fnn.as_ref()
@@ -840,10 +966,15 @@ pub async fn initialize_and_start_controllers(
                 }
             };
 
+            // Suffix the broker-level client identifier so multiple replicas
+            // (or a new pod coming up while the old one is still terminating)
+            // do not race for the same MQTT session and ping-pong each other
+            // off the broker.
+            let client_id = mqttea::unique_client_id("carbide-dsx-exchange-event-bus");
             let client = mqttea::MqtteaClient::new(
                 &config.mqtt_endpoint,
                 config.mqtt_broker_port,
-                "carbide-dsx-exchange-event-bus",
+                &client_id,
                 Some(options),
             )
             .map_err(|e| eyre::eyre!("Failed to create DSX Exchange Event Bus MQTT client: {e}"))
@@ -879,6 +1010,7 @@ pub async fn initialize_and_start_controllers(
                 client,
                 join_set,
                 config.publish_timeout,
+                config.topic_prefix.clone(),
                 config.queue_capacity,
                 &meter,
                 cancel_token.clone(),
@@ -912,7 +1044,7 @@ pub async fn initialize_and_start_controllers(
                 );
                 let rms_api_config = librms::client::RmsApiConfig::new(url, &rms_client_config);
                 Arc::new(librms::RackManagerApi::new(&rms_api_config))
-                    as Arc<dyn crate::rack::rms_client::SwitchSystemImageRmsClient>
+                    as Arc<dyn carbide_rack::rms_client::SwitchSystemImageRmsClient>
             }),
         credential_manager: credential_manager.clone(),
     });
@@ -932,7 +1064,19 @@ pub async fn initialize_and_start_controllers(
         .database(db_pool.clone(), work_lock_manager_handle.clone())
         .meter("carbide_machines", meter.clone())
         .processor_id(state_controller_id.clone())
-        .services(handler_services.clone())
+        .services(
+            MachineStateHandlerServices {
+                db_pool: handler_services.db_pool.clone(),
+                db_reader: handler_services.db_reader.clone(),
+                redfish_client_pool: handler_services.redfish_client_pool.clone(),
+                ipmi_tool: handler_services.ipmi_tool.clone(),
+                site_config: handler_services
+                    .site_config
+                    .machine_state_handler_site_config()
+                    .into(),
+            }
+            .into(),
+        )
         .iteration_config((&carbide_config.machine_state_controller.controller).into())
         .state_handler(Arc::new(
             MachineStateHandlerBuilder::builder()
@@ -1002,7 +1146,12 @@ pub async fn initialize_and_start_controllers(
         .database(db_pool.clone(), work_lock_manager_handle.clone())
         .meter("carbide_network_segments", meter.clone())
         .processor_id(state_controller_id.clone())
-        .services(handler_services.clone());
+        .services(
+            NetworkSegmentStateHandlerServices {
+                db_pool: handler_services.db_pool.clone(),
+            }
+            .into(),
+        );
     ns_builder
         .iteration_config((&carbide_config.network_segment_state_controller.controller).into())
         .state_handler(Arc::new(NetworkSegmentStateHandler::new(
@@ -1021,9 +1170,17 @@ pub async fn initialize_and_start_controllers(
             .database(db_pool.clone(), work_lock_manager_handle.clone())
             .meter("carbide_dpa_interfaces", meter.clone())
             .processor_id(state_controller_id.clone())
-            .services(handler_services.clone())
+            .services(
+                DpaInterfaceStateHandlerServices {
+                    db_pool: handler_services.db_pool.clone(),
+                    db_reader: handler_services.db_reader.clone(),
+                    dpa_info: handler_services.dpa_info.clone(),
+                    hb_interval: handler_services.site_config.get_hb_interval(),
+                }
+                .into(),
+            )
             .iteration_config((&carbide_config.dpa_interface_state_controller.controller).into())
-            .state_handler(Arc::new(DpaInterfaceStateHandler::new()))
+            .state_handler(Arc::new(DpaInterfaceStateHandler {}))
             .build_and_spawn(join_set, cancel_token.clone())
             .expect("Unable to build DpaInterfaceStateController");
     }
@@ -1031,7 +1188,7 @@ pub async fn initialize_and_start_controllers(
     if carbide_config.spdm.enabled {
         let Some(nras_config) = carbide_config.spdm.nras_config.clone() else {
             return Err(eyre::eyre!(
-                "SPDm attestation is enabled but NRAS Config is missing!!"
+                "SPDM attestation is enabled but NRAS Config is missing!!"
             ));
         };
 
@@ -1041,7 +1198,13 @@ pub async fn initialize_and_start_controllers(
             .database(db_pool.clone(), work_lock_manager_handle.clone())
             .meter("carbide_spdm_attestation", meter.clone())
             .processor_id(state_controller_id.clone())
-            .services(handler_services.clone())
+            .services(
+                SpdmStateHandlerServices {
+                    db_pool: handler_services.db_pool.clone(),
+                    redfish_client_pool: handler_services.redfish_client_pool.clone(),
+                }
+                .into(),
+            )
             .iteration_config((&carbide_config.spdm_state_controller.controller).into())
             .state_handler(Arc::new(SpdmAttestationStateHandler::new(
                 verifier,
@@ -1055,7 +1218,14 @@ pub async fn initialize_and_start_controllers(
         .database(db_pool.clone(), work_lock_manager_handle.clone())
         .meter("carbide_ib_partitions", meter.clone())
         .processor_id(state_controller_id.clone())
-        .services(handler_services.clone())
+        .services(
+            IBPartitionStateHandlerServices {
+                db_pool: handler_services.db_pool.clone(),
+                ib_fabric_manager: handler_services.ib_fabric_manager.clone(),
+                ib_pools: handler_services.ib_pools.clone(),
+            }
+            .into(),
+        )
         .iteration_config((&carbide_config.ib_partition_state_controller.controller).into())
         .state_handler(Arc::new(IBPartitionStateHandler::default()))
         .build_and_spawn(join_set, cancel_token.clone())
@@ -1065,7 +1235,14 @@ pub async fn initialize_and_start_controllers(
         .database(db_pool.clone(), work_lock_manager_handle.clone())
         .meter("carbide_power_shelves", meter.clone())
         .processor_id(state_controller_id.clone())
-        .services(handler_services.clone())
+        .services(
+            PowerShelfStateHandlerServices {
+                db_pool: handler_services.db_pool.clone(),
+                rms_client: handler_services.rms_client.clone(),
+                credential_manager: handler_services.credential_manager.clone(),
+            }
+            .into(),
+        )
         .iteration_config((&carbide_config.power_shelf_state_controller.controller).into())
         .state_handler(Arc::new(PowerShelfStateHandler::default()))
         .build_and_spawn(join_set, cancel_token.clone())
@@ -1075,7 +1252,26 @@ pub async fn initialize_and_start_controllers(
         .database(db_pool.clone(), work_lock_manager_handle.clone())
         .meter("carbide_racks", meter.clone())
         .processor_id(state_controller_id.clone())
-        .services(handler_services.clone())
+        .services(
+            RackStateHandlerServices {
+                db_pool: handler_services.db_pool.clone(),
+                rms_client: handler_services.rms_client.clone(),
+                site_config: RackConfig {
+                    rms: handler_services.site_config.rms.clone(),
+                    rack_validation_config: handler_services
+                        .site_config
+                        .rack_validation_config
+                        .clone(),
+                    rack_profiles: handler_services.site_config.rack_profiles.clone(),
+                }
+                .into(),
+                switch_system_image_rms_client: handler_services
+                    .switch_system_image_rms_client
+                    .clone(),
+                credential_manager: handler_services.credential_manager.clone(),
+            }
+            .into(),
+        )
         .state_handler(Arc::new(RackStateHandler::default()))
         .build_and_spawn(join_set, cancel_token.clone())
         .expect("Unable to build RackStateController");
@@ -1084,7 +1280,14 @@ pub async fn initialize_and_start_controllers(
         .database(db_pool.clone(), work_lock_manager_handle.clone())
         .meter("carbide_switches", meter.clone())
         .processor_id(state_controller_id.clone())
-        .services(handler_services.clone())
+        .services(
+            SwitchStateHandlerServices {
+                db_pool: handler_services.db_pool.clone(),
+                rms_client: handler_services.rms_client.clone(),
+                credential_manager: handler_services.credential_manager.clone(),
+            }
+            .into(),
+        )
         .iteration_config((&carbide_config.switch_state_controller.controller).into())
         .state_handler(Arc::new(SwitchStateHandler::default()))
         .build_and_spawn(join_set, cancel_token.clone())
@@ -1106,7 +1309,7 @@ pub async fn initialize_and_start_controllers(
 
     NvlPartitionMonitor::new(
         db_pool.clone(),
-        shared_nmxm_pool.clone(),
+        api_service.nmxc_client_pool.clone(),
         meter.clone(),
         carbide_config.nvlink_config.clone().unwrap_or_default(),
         carbide_config.host_health,
@@ -1132,6 +1335,7 @@ pub async fn initialize_and_start_controllers(
         carbide_config.clone(),
         meter.clone(),
         work_lock_manager_handle.clone(),
+        dpf_sdk.clone(),
     )
     .start(join_set, cancel_token.clone())?;
 
@@ -1173,18 +1377,56 @@ pub async fn initialize_and_start_controllers(
     Ok(())
 }
 
+fn nmxc_tls_config_from_nvlink(
+    cfg: &carbide_nvlink_manager::config::NvLinkConfig,
+) -> Option<libnmxc::NmxcTlsConfig> {
+    let ca = cfg.nmx_c_tls_ca_cert_path.as_ref().map(PathBuf::from);
+    let client_cert = cfg.nmx_c_tls_client_cert_path.as_ref().map(PathBuf::from);
+    let client_key = cfg.nmx_c_tls_client_key_path.as_ref().map(PathBuf::from);
+    if ca.is_none()
+        && client_cert.is_none()
+        && client_key.is_none()
+        && cfg.nmx_c_tls_authority.is_none()
+    {
+        return None;
+    }
+    Some(libnmxc::NmxcTlsConfig {
+        ca_cert_path: ca,
+        client_cert_path: client_cert,
+        client_key_path: client_key,
+        authority: cfg.nmx_c_tls_authority.clone(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
 
     use figment::Figment;
     use figment::providers::{Format, Toml};
+    use model::network_segment::{NetworkDefinition, NetworkDefinitionSegmentType};
     use model::resource_pool::ResourcePoolType;
     use model::resource_pool::define::ResourcePoolDef;
 
-    use super::resolve_initial_pools;
+    use super::{resolve_initial_networks, resolve_initial_pools};
     use crate::cfg::file::{CarbideConfig, InitialObjectsConfig};
 
+    fn carbide_with_networks(
+        networks: Option<HashMap<String, NetworkDefinition>>,
+    ) -> CarbideConfig {
+        let mut cfg: CarbideConfig = Figment::new()
+            .merge(Toml::string(
+                r#"
+               database_url = "postgres://test"
+               listen = "[::]:1081"
+               asn = 1
+            "#,
+            ))
+            .extract()
+            .expect("Unable to extract config");
+        cfg.networks = networks;
+        cfg
+    }
     // Builds a `CarbideConfig` from the smallest valid TOML and overrides
     // the `pools` field. `resolve_initial_pools` only reads `.pools`, so
     // the rest of the config can be defaulted.
@@ -1203,6 +1445,20 @@ mod tests {
         cfg
     }
 
+    fn network_definition(
+        prefix: &str,
+        segment_type: NetworkDefinitionSegmentType,
+    ) -> NetworkDefinition {
+        NetworkDefinition {
+            segment_type,
+            prefix: prefix.to_string(),
+            gateway: "".to_string(),
+            mtu: 0,
+            reserve_first: 0,
+            allocation_strategy: Default::default(),
+        }
+    }
+
     fn ipv4_pool(prefix: &str) -> ResourcePoolDef {
         ResourcePoolDef {
             ranges: Vec::new(),
@@ -1212,6 +1468,12 @@ mod tests {
         }
     }
 
+    fn network_map(entries: &[(&str, NetworkDefinition)]) -> HashMap<String, NetworkDefinition> {
+        entries
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
+    }
     fn pool_map(entries: &[(&str, ResourcePoolDef)]) -> HashMap<String, ResourcePoolDef> {
         entries
             .iter()
@@ -1219,15 +1481,23 @@ mod tests {
             .collect()
     }
 
-    fn initial_objects(entries: &[(&str, ResourcePoolDef)]) -> InitialObjectsConfig {
+    fn initial_objects_networks(entries: &[(&str, NetworkDefinition)]) -> InitialObjectsConfig {
+        InitialObjectsConfig {
+            pools: None,
+            networks: Some(network_map(entries)),
+        }
+    }
+
+    fn initial_objects_pools(entries: &[(&str, ResourcePoolDef)]) -> InitialObjectsConfig {
         InitialObjectsConfig {
             pools: Some(pool_map(entries)),
+            networks: None,
         }
     }
 
     // neither source declares pools — operator misconfiguration.
     #[test]
-    fn no_sources_errors() {
+    fn no_pool_sources_errors() {
         let cfg = carbide_with_pools(None);
         let err =
             resolve_initial_pools(&cfg, None).expect_err("missing pools must surface as an error");
@@ -1241,7 +1511,7 @@ mod tests {
     #[test]
     fn initial_objects_only_succeeds() {
         let cfg = carbide_with_pools(None);
-        let io = initial_objects(&[("lo-ip", ipv4_pool("10.0.0.0/24"))]);
+        let io = initial_objects_pools(&[("lo-ip", ipv4_pool("10.0.0.0/24"))]);
 
         let resolved =
             resolve_initial_pools(&cfg, Some(&io)).expect("InitialObjectsConfig-only must succeed");
@@ -1267,7 +1537,7 @@ mod tests {
     #[test]
     fn disjoint_union_returns_all_pools() {
         let cfg = carbide_with_pools(Some(pool_map(&[("legacy-only", ipv4_pool("10.0.1.0/24"))])));
-        let io = initial_objects(&[("new-only", ipv4_pool("10.0.2.0/24"))]);
+        let io = initial_objects_pools(&[("new-only", ipv4_pool("10.0.2.0/24"))]);
 
         let resolved = resolve_initial_pools(&cfg, Some(&io)).expect("disjoint union must succeed");
 
@@ -1282,7 +1552,7 @@ mod tests {
     fn overlap_identical_succeeds() {
         let pool = ipv4_pool("10.0.0.0/24");
         let cfg = carbide_with_pools(Some(pool_map(&[("lo-ip", pool.clone())])));
-        let io = initial_objects(&[("lo-ip", pool.clone())]);
+        let io = initial_objects_pools(&[("lo-ip", pool.clone())]);
 
         let resolved = resolve_initial_pools(&cfg, Some(&io)).expect("identical defs must succeed");
 
@@ -1295,7 +1565,7 @@ mod tests {
     #[test]
     fn overlap_conflict_errors() {
         let cfg = carbide_with_pools(Some(pool_map(&[("lo-ip", ipv4_pool("10.0.0.0/24"))])));
-        let io = initial_objects(&[("lo-ip", ipv4_pool("10.0.0.0/16"))]);
+        let io = initial_objects_pools(&[("lo-ip", ipv4_pool("10.0.0.0/16"))]);
 
         let err = resolve_initial_pools(&cfg, Some(&io)).expect_err("conflicting defs must error");
 
@@ -1313,12 +1583,156 @@ mod tests {
             ("alpha", ipv4_pool("10.0.0.0/24")),
             ("beta", ipv4_pool("10.0.1.0/24")),
         ])));
-        let io = initial_objects(&[
+        let io = initial_objects_pools(&[
             ("alpha", ipv4_pool("10.0.0.0/16")),
             ("beta", ipv4_pool("10.0.1.0/16")),
         ]);
 
         let err = resolve_initial_pools(&cfg, Some(&io)).expect_err("any conflict must error");
+        let msg = err.to_string();
+
+        assert!(msg.contains("alpha"), "expected `alpha` in {msg}");
+        assert!(msg.contains("beta"), "expected `beta` in {msg}");
+    }
+
+    // neither source declares networks — operator misconfiguration.
+    #[test]
+    fn no_network_sources_returns_empty() {
+        let cfg = carbide_with_networks(None);
+        let resolved =
+            resolve_initial_networks(&cfg, None).expect("missing networks must not be an error");
+        assert!(
+            resolved.is_empty(),
+            "no declared networks should produce an empty map"
+        );
+    }
+
+    // only `InitialObjectsConfig.pools` declares pools
+    #[test]
+    fn initial_objects_networks_only_succeeds() {
+        let cfg = carbide_with_networks(None);
+        let io = initial_objects_networks(&[(
+            "network1",
+            network_definition("10.0.0.0/24", NetworkDefinitionSegmentType::Admin),
+        )]);
+
+        let resolved = resolve_initial_networks(&cfg, Some(&io))
+            .expect("InitialObjectsConfig-only must succeed");
+
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(
+            resolved.get("network1"),
+            Some(&network_definition(
+                "10.0.0.0/24",
+                NetworkDefinitionSegmentType::Admin
+            ))
+        );
+    }
+
+    // only legacy `CarbideConfig.networks` declares networks
+    #[test]
+    fn legacy_only_returns_legacy_networks() {
+        let cfg = carbide_with_networks(Some(network_map(&[(
+            "network1",
+            network_definition("10.0.0.0/24", NetworkDefinitionSegmentType::Admin),
+        )])));
+
+        let resolved = resolve_initial_networks(&cfg, None).expect("legacy-only must succeed");
+
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(
+            resolved.get("network1"),
+            Some(&network_definition(
+                "10.0.0.0/24",
+                NetworkDefinitionSegmentType::Admin
+            ))
+        );
+    }
+
+    // both sources declare networks but with different names
+    // Resolver returns the union; emits a deprecation warning naming the still-legacy entries.
+    #[test]
+    fn disjoint_union_returns_all_networks() {
+        let cfg = carbide_with_networks(Some(network_map(&[(
+            "legacy-only",
+            network_definition("10.0.1.0/24", NetworkDefinitionSegmentType::Admin),
+        )])));
+        let io = initial_objects_networks(&[(
+            "new-only",
+            network_definition("10.0.2.0/24", NetworkDefinitionSegmentType::Admin),
+        )]);
+
+        let resolved =
+            resolve_initial_networks(&cfg, Some(&io)).expect("disjoint union must succeed");
+
+        assert_eq!(resolved.len(), 2);
+        assert!(resolved.contains_key("legacy-only"));
+        assert!(resolved.contains_key("new-only"));
+    }
+
+    // both sources declare the same network with identical definitions —
+    // Resolver dedupes silently; the still-legacy entry is included in the deprecation warning.
+    #[test]
+    fn overlap_networks_identical_succeeds() {
+        let pool = network_definition("10.0.0.0/24", NetworkDefinitionSegmentType::Admin);
+        let cfg = carbide_with_networks(Some(network_map(&[("network1", pool.clone())])));
+        let io = initial_objects_networks(&[("network1", pool.clone())]);
+
+        let resolved =
+            resolve_initial_networks(&cfg, Some(&io)).expect("identical defs must succeed");
+
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved.get("network1"), Some(&pool));
+    }
+
+    // both sources declare the same network name but with different definitions —
+    // Resolver must fail loudly so the bad state is fixed before reconcile runs.
+    #[test]
+    fn overlap_networks_conflict_errors() {
+        let cfg = carbide_with_networks(Some(network_map(&[(
+            "network1",
+            network_definition("10.0.0.0/24", NetworkDefinitionSegmentType::Admin),
+        )])));
+        let io = initial_objects_networks(&[(
+            "network1",
+            network_definition("10.0.0.0/16", NetworkDefinitionSegmentType::Admin),
+        )]);
+
+        let err =
+            resolve_initial_networks(&cfg, Some(&io)).expect_err("conflicting defs must error");
+
+        assert!(
+            err.to_string().contains("network1"),
+            "error message should name the conflicting network: {err}"
+        );
+    }
+
+    // every overlap is a conflict — the resolver collects all
+    // bad names so the operator can fixe them
+    #[test]
+    fn collects_all_conflict_network_names() {
+        let cfg = carbide_with_networks(Some(network_map(&[
+            (
+                "alpha",
+                network_definition("10.0.0.0/24", NetworkDefinitionSegmentType::Admin),
+            ),
+            (
+                "beta",
+                network_definition("10.0.1.0/24", NetworkDefinitionSegmentType::Admin),
+            ),
+        ])));
+        let io = initial_objects_networks(&[
+            (
+                "alpha",
+                network_definition("10.0.0.0/16", NetworkDefinitionSegmentType::Admin),
+            ),
+            (
+                "beta",
+                network_definition("10.0.1.0/16", NetworkDefinitionSegmentType::Admin),
+            ),
+        ]);
+
+        let err = resolve_initial_networks(&cfg, Some(&io)).expect_err("any conflict must error");
         let msg = err.to_string();
 
         assert!(msg.contains("alpha"), "expected `alpha` in {msg}");

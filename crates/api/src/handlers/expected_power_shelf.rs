@@ -23,9 +23,7 @@ use tonic::{Request, Response, Status};
 
 use crate::CarbideError;
 use crate::api::Api;
-use crate::handlers::machine_interface_address::{
-    preallocate_machine_interface, update_preallocated_machine_interface,
-};
+use crate::handlers::machine_interface_address::update_preallocated_machine_interface;
 
 pub async fn add_expected_power_shelf(
     api: &Api,
@@ -46,10 +44,6 @@ pub async fn add_expected_power_shelf(
         .map_err(|e| CarbideError::Internal {
             message: format!("Database error: {}", e),
         })?;
-
-    if let Some(bmc_ip) = power_shelf.bmc_ip_address {
-        preallocate_machine_interface(&mut txn, power_shelf.bmc_mac_address, bmc_ip).await?;
-    }
 
     db_expected_power_shelf::create(&mut txn, power_shelf)
         .await

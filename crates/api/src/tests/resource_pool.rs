@@ -17,6 +17,7 @@
 
 use std::collections::HashSet;
 use std::net::Ipv4Addr;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use common::api_fixtures::create_test_env;
@@ -24,8 +25,9 @@ use model::resource_pool::common::VPC_VNI;
 use model::resource_pool::{
     OwnerType, ResourcePool, ResourcePoolError, ResourcePoolStats as St, ValueType,
 };
+use rpc::Metadata;
 use rpc::forge::forge_server::Forge;
-use sqlx::migrate::MigrateDatabase;
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 
 use crate::tests;
 use crate::tests::common;
@@ -387,7 +389,11 @@ async fn test_vpc_assign_after_delete(db_pool: sqlx::PgPool) -> Result<(), eyre:
     txn.commit().await?;
 
     // CreateVpc rpc call
-    let vpc_req = VpcCreationRequest::builder("test_vpc_assign_after_delete_1", "test")
+    let vpc_req = VpcCreationRequest::builder("test")
+        .metadata(Metadata {
+            name: "test_vpc_assign_after_delete_1".to_string(),
+            ..Default::default()
+        })
         .network_virtualization_type(rpc::forge::VpcVirtualizationType::EthernetVirtualizer)
         .tonic_request();
     let vpc1 = env.api.create_vpc(vpc_req).await.unwrap().into_inner();
@@ -430,7 +436,12 @@ async fn test_vpc_assign_after_delete(db_pool: sqlx::PgPool) -> Result<(), eyre:
     txn.commit().await?;
 
     // CreateVpc
-    let vpc_req = VpcCreationRequest::builder("test_vpc_assign_after_delete_2", "test")
+    let vpc_req = VpcCreationRequest::builder("test")
+        .metadata(Metadata {
+            name: "test_vpc_assign_after_delete_2".to_string(),
+            description: "".to_string(),
+            labels: vec![],
+        })
         .network_virtualization_type(rpc::forge::VpcVirtualizationType::EthernetVirtualizer)
         .tonic_request();
     let vpc2 = env.api.create_vpc(vpc_req).await.unwrap().into_inner();
@@ -565,12 +576,18 @@ async fn test_parallel() -> Result<(), eyre::Report> {
     // ResourcePool.name is varchar(32), so keep the DB name short.
     let short_id = &uuid::Uuid::new_v4().simple().to_string()[..8];
     let db_name = format!("test_par_{short_id}");
-    let db_url = format!("{base_url}/{db_name}");
+    let base_options = PgConnectOptions::from_str(&base_url)?;
 
-    let admin = sqlx::Pool::<sqlx::postgres::Postgres>::connect(&base_url).await?;
+    let admin = PgPoolOptions::new()
+        .connect_with(base_options.clone())
+        .await?;
 
-    sqlx::Postgres::create_database(&db_url).await?;
-    let db_pool = sqlx::Pool::<sqlx::postgres::Postgres>::connect(&db_url).await?;
+    sqlx::query(&format!("CREATE DATABASE \"{db_name}\""))
+        .execute(&admin)
+        .await?;
+    let db_pool = PgPoolOptions::new()
+        .connect_with(base_options.database(&db_name))
+        .await?;
     tests::MIGRATOR.run(&db_pool).await?;
 
     let mut txn = db_pool.begin().await?;

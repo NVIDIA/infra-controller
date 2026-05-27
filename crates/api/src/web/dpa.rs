@@ -26,8 +26,8 @@ use rpc::forge as forgerpc;
 use rpc::forge::forge_server::Forge;
 use uuid::Uuid;
 
-use super::filters;
 use super::state_history::StateHistoryTable;
+use super::{Base, filters};
 use crate::api::Api;
 
 #[derive(Template)]
@@ -85,11 +85,11 @@ async fn fetch_dpas(api: Arc<Api>) -> Result<Vec<forgerpc::DpaInterface>, tonic:
             .await
             .map(|response| response.into_inner())?;
 
-        dpas.extend(next_dpas.interfaces.into_iter());
+        dpas.extend(next_dpas.interfaces);
         offset += page_size;
     }
 
-    dpas.sort_unstable_by(|dpa1, dpa2| dpa1.id.cmp(&dpa2.id));
+    dpas.sort_unstable_by_key(|dpa1| dpa1.id);
 
     Ok(dpas)
 }
@@ -168,3 +168,6 @@ pub async fn detail(
     let tmpl: DpaDetail = dpa.into();
     (StatusCode::OK, Html(tmpl.render().unwrap())).into_response()
 }
+
+impl super::Base for DpaShow {}
+impl super::Base for DpaDetail {}

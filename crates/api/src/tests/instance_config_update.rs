@@ -82,7 +82,6 @@ async fn test_update_instance_config(_: PgPoolOptions, options: PgConnectOptions
         variant: Some(rpc::forge::instance_operating_system_config::Variant::Ipxe(
             rpc::forge::InlineIpxe {
                 ipxe_script: "SomeRandomiPxe1".to_string(),
-                user_data: Some("SomeRandomData1".to_string()),
             },
         )),
     };
@@ -131,7 +130,6 @@ async fn test_update_instance_config(_: PgPoolOptions, options: PgConnectOptions
         variant: Some(rpc::forge::instance_operating_system_config::Variant::Ipxe(
             rpc::forge::InlineIpxe {
                 ipxe_script: "SomeRandomiPxe2".to_string(),
-                user_data: Some("SomeRandomData2".to_string()),
             },
         )),
     };
@@ -233,7 +231,6 @@ async fn test_update_instance_config(_: PgPoolOptions, options: PgConnectOptions
         variant: Some(rpc::forge::instance_operating_system_config::Variant::Ipxe(
             rpc::forge::InlineIpxe {
                 ipxe_script: "SomeRandomiPxe3".to_string(),
-                user_data: Some("SomeRandomData3".to_string()),
             },
         )),
     };
@@ -337,7 +334,6 @@ async fn test_reject_invalid_instance_config_updates(_: PgPoolOptions, options: 
         variant: Some(rpc::forge::instance_operating_system_config::Variant::Ipxe(
             rpc::forge::InlineIpxe {
                 ipxe_script: "SomeRandomiPxe1".to_string(),
-                user_data: Some("SomeRandomData1".to_string()),
             },
         )),
     };
@@ -373,7 +369,6 @@ async fn test_reject_invalid_instance_config_updates(_: PgPoolOptions, options: 
         variant: Some(rpc::forge::instance_operating_system_config::Variant::Ipxe(
             rpc::forge::InlineIpxe {
                 ipxe_script: "".to_string(),
-                user_data: Some("SomeRandomData2".to_string()),
             },
         )),
     };
@@ -603,7 +598,6 @@ async fn test_update_instance_config_vpc_prefix_no_network_update(
         variant: Some(rpc::forge::instance_operating_system_config::Variant::Ipxe(
             rpc::forge::InlineIpxe {
                 ipxe_script: "SomeRandomiPxe1".to_string(),
-                user_data: Some("SomeRandomData1".to_string()),
             },
         )),
     };
@@ -612,7 +606,6 @@ async fn test_update_instance_config_vpc_prefix_no_network_update(
     let new_vpc_prefix = rpc::forge::VpcPrefixCreationRequest {
         id: None,
         prefix: String::new(),
-        name: String::new(),
         vpc_id: Some(vpc_id),
         config: Some(rpc::forge::VpcPrefixConfig {
             prefix: ip_prefix.into(),
@@ -737,7 +730,6 @@ async fn test_update_instance_config_vpc_prefix_network_update(
         variant: Some(rpc::forge::instance_operating_system_config::Variant::Ipxe(
             rpc::forge::InlineIpxe {
                 ipxe_script: "SomeRandomiPxe1".to_string(),
-                user_data: Some("SomeRandomData1".to_string()),
             },
         )),
     };
@@ -746,7 +738,6 @@ async fn test_update_instance_config_vpc_prefix_network_update(
     let new_vpc_prefix = rpc::forge::VpcPrefixCreationRequest {
         id: None,
         prefix: String::new(),
-        name: String::new(),
         vpc_id: Some(vpc_id),
         config: Some(rpc::forge::VpcPrefixConfig {
             prefix: ip_prefix.into(),
@@ -779,6 +770,7 @@ async fn test_update_instance_config_vpc_prefix_network_update(
             ip_address: None,
             ipv6_interface_config: None,
         }],
+        auto: false,
     };
 
     let initial_config = rpc::InstanceConfig {
@@ -841,6 +833,7 @@ async fn test_update_instance_config_vpc_prefix_network_update(
                 ipv6_interface_config: None,
             },
         ],
+        auto: false,
     };
     let mut updated_config_1 = initial_config.clone();
     updated_config_1.network = Some(network);
@@ -896,6 +889,7 @@ async fn test_update_instance_config_vpc_prefix_network_update(
             ip_address: None,
             ipv6_interface_config: None,
         }],
+        auto: false,
     };
     let mut updated_config_1 = initial_config.clone();
     updated_config_1.network = Some(network);
@@ -939,7 +933,6 @@ async fn test_update_instance_config_vpc_prefix_network_update_post_instance_del
         variant: Some(rpc::forge::instance_operating_system_config::Variant::Ipxe(
             rpc::forge::InlineIpxe {
                 ipxe_script: "SomeRandomiPxe1".to_string(),
-                user_data: Some("SomeRandomData1".to_string()),
             },
         )),
     };
@@ -948,7 +941,6 @@ async fn test_update_instance_config_vpc_prefix_network_update_post_instance_del
     let new_vpc_prefix = rpc::forge::VpcPrefixCreationRequest {
         id: None,
         prefix: String::new(),
-        name: String::new(),
         vpc_id: Some(vpc_id),
         config: Some(rpc::forge::VpcPrefixConfig {
             prefix: ip_prefix.into(),
@@ -981,6 +973,7 @@ async fn test_update_instance_config_vpc_prefix_network_update_post_instance_del
             ip_address: None,
             ipv6_interface_config: None,
         }],
+        auto: false,
     };
 
     let initial_config = rpc::InstanceConfig {
@@ -1048,6 +1041,7 @@ async fn test_update_instance_config_vpc_prefix_network_update_post_instance_del
                 ipv6_interface_config: None,
             },
         ],
+        auto: false,
     };
     let mut updated_config_1 = initial_config.clone();
     updated_config_1.network = Some(network);
@@ -1092,7 +1086,6 @@ async fn test_update_instance_config_vpc_prefix_network_update_multidpu(
         variant: Some(rpc::forge::instance_operating_system_config::Variant::Ipxe(
             rpc::forge::InlineIpxe {
                 ipxe_script: "SomeRandomiPxe1".to_string(),
-                user_data: Some("SomeRandomData1".to_string()),
             },
         )),
     };
@@ -1101,7 +1094,6 @@ async fn test_update_instance_config_vpc_prefix_network_update_multidpu(
     let new_vpc_prefix = rpc::forge::VpcPrefixCreationRequest {
         id: None,
         prefix: String::new(),
-        name: String::new(),
         vpc_id: Some(vpc_id),
         config: Some(rpc::forge::VpcPrefixConfig {
             prefix: ip_prefix.into(),
@@ -1134,6 +1126,7 @@ async fn test_update_instance_config_vpc_prefix_network_update_multidpu(
             ip_address: None,
             ipv6_interface_config: None,
         }],
+        auto: false,
     };
 
     let initial_config = rpc::InstanceConfig {
@@ -1196,6 +1189,7 @@ async fn test_update_instance_config_vpc_prefix_network_update_multidpu(
                 ipv6_interface_config: None,
             },
         ],
+        auto: false,
     };
     let mut updated_config_1 = initial_config.clone();
     updated_config_1.network = Some(network);
@@ -1257,7 +1251,6 @@ async fn test_update_instance_config_vpc_prefix_network_update_multidpu_differen
         variant: Some(rpc::forge::instance_operating_system_config::Variant::Ipxe(
             rpc::forge::InlineIpxe {
                 ipxe_script: "SomeRandomiPxe1".to_string(),
-                user_data: Some("SomeRandomData1".to_string()),
             },
         )),
     };
@@ -1267,7 +1260,6 @@ async fn test_update_instance_config_vpc_prefix_network_update_multidpu_differen
     let new_vpc_prefix = rpc::forge::VpcPrefixCreationRequest {
         id: None,
         prefix: String::new(),
-        name: String::new(),
         vpc_id: Some(vpc_id),
         config: Some(rpc::forge::VpcPrefixConfig {
             prefix: ip_prefix.into(),
@@ -1293,7 +1285,6 @@ async fn test_update_instance_config_vpc_prefix_network_update_multidpu_differen
     let new_vpc_prefix1 = rpc::forge::VpcPrefixCreationRequest {
         id: None,
         prefix: String::new(),
-        name: String::new(),
         vpc_id: Some(vpc_id),
         config: Some(rpc::forge::VpcPrefixConfig {
             prefix: ip_prefix1.into(),
@@ -1326,6 +1317,7 @@ async fn test_update_instance_config_vpc_prefix_network_update_multidpu_differen
             ip_address: None,
             ipv6_interface_config: None,
         }],
+        auto: false,
     };
 
     let initial_config = rpc::InstanceConfig {
@@ -1388,6 +1380,7 @@ async fn test_update_instance_config_vpc_prefix_network_update_multidpu_differen
                 ipv6_interface_config: None,
             },
         ],
+        auto: false,
     };
     let mut updated_config_1 = initial_config.clone();
     updated_config_1.network = Some(network);
@@ -1449,7 +1442,6 @@ async fn test_update_instance_config_vpc_prefix_network_update_different_prefix_
         variant: Some(rpc::forge::instance_operating_system_config::Variant::Ipxe(
             rpc::forge::InlineIpxe {
                 ipxe_script: "SomeRandomiPxe1".to_string(),
-                user_data: Some("SomeRandomData1".to_string()),
             },
         )),
     };
@@ -1460,7 +1452,6 @@ async fn test_update_instance_config_vpc_prefix_network_update_different_prefix_
     let new_vpc_prefix = rpc::forge::VpcPrefixCreationRequest {
         id: None,
         prefix: String::new(),
-        name: String::new(),
         vpc_id: Some(vpc_id),
         config: Some(rpc::forge::VpcPrefixConfig {
             prefix: ip_prefix.into(),
@@ -1503,6 +1494,7 @@ async fn test_update_instance_config_vpc_prefix_network_update_different_prefix_
                             ip_address: Some("5.5.5.1".to_string()),
                             ipv6_interface_config: None,
                         }],
+                        auto: false,
                     }),
                     infiniband: None,
                     network_security_group_id: None,
@@ -1540,6 +1532,7 @@ async fn test_update_instance_config_vpc_prefix_network_update_different_prefix_
                             ip_address: Some("192.1.4.0".to_string()),
                             ipv6_interface_config: None,
                         }],
+                        auto: false,
                     }),
                     infiniband: None,
                     network_security_group_id: None,
@@ -1579,6 +1572,7 @@ async fn test_update_instance_config_vpc_prefix_network_update_different_prefix_
                             ip_address: Some(expected_ip.to_string()),
                             ipv6_interface_config: None,
                         }],
+                        auto: false,
                     }),
                     infiniband: None,
                     network_security_group_id: None,
@@ -1653,7 +1647,6 @@ async fn test_update_instance_config_vpc_prefix_network_update_different_prefix_
     let new_vpc_prefix1 = rpc::forge::VpcPrefixCreationRequest {
         id: None,
         prefix: String::new(),
-        name: String::new(),
         vpc_id: Some(vpc_id),
         config: Some(rpc::forge::VpcPrefixConfig {
             prefix: ip_prefix1.into(),
@@ -1712,6 +1705,7 @@ async fn test_update_instance_config_vpc_prefix_network_update_different_prefix_
                                 ipv6_interface_config: None,
                             },
                         ],
+                        auto: false,
                     }),
                     infiniband: None,
                     network_security_group_id: None,
@@ -1766,6 +1760,7 @@ async fn test_update_instance_config_vpc_prefix_network_update_different_prefix_
                                 ipv6_interface_config: None,
                             },
                         ],
+                        auto: false,
                     }),
                     infiniband: None,
                     network_security_group_id: None,
@@ -1820,6 +1815,7 @@ async fn test_update_instance_config_vpc_prefix_network_update_different_prefix_
                                 ipv6_interface_config: None,
                             },
                         ],
+                        auto: false,
                     }),
                     infiniband: None,
                     network_security_group_id: None,

@@ -1,3 +1,20 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 use std::net::IpAddr;
 
 use async_trait::async_trait;
@@ -7,9 +24,9 @@ use config_version::ConfigVersion;
 use health_report::{HealthReport, HealthReportApplyMode};
 use model::machine::{MachineLastRebootRequested, MachineLastRebootRequestedMode};
 use sqlx::PgTransaction;
+use state_controller::state_handler::StateHandlerError;
 
 use crate::state_controller::db_write_batch::WriteOp;
-use crate::state_controller::state_handler::StateHandlerError;
 
 /// A deferred-write operation for use in [`MachineStateHandler`].
 ///
@@ -65,8 +82,8 @@ pub enum MachineWriteOp {
         verified: Option<bool>,
         attempts: i32,
     },
-    UpdateFirmwareVersionByBmcAddress {
-        bmc_address: IpAddr,
+    UpdateFirmwareVersionByMachineId {
+        machine_id: MachineId,
         bmc_version: String,
         bios_version: String,
     },
@@ -158,14 +175,14 @@ impl WriteOp for MachineWriteOp {
                 )
                 .await?
             }
-            UpdateFirmwareVersionByBmcAddress {
-                bmc_address,
+            UpdateFirmwareVersionByMachineId {
+                machine_id,
                 bmc_version,
                 bios_version,
             } => {
-                db::machine_topology::update_firmware_version_by_bmc_address(
+                db::machine_topology::update_firmware_version_by_machine_id(
                     txn,
-                    &bmc_address,
+                    &machine_id,
                     &bmc_version,
                     &bios_version,
                 )

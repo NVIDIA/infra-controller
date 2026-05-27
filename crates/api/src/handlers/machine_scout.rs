@@ -15,12 +15,13 @@
  * limitations under the License.
  */
 use ::rpc::forge::ForgeAgentControlResponse;
+use ::rpc::model::machine::get_action_for_dpu_state;
 use ::rpc::{forge as rpc, forge_agent_control_response as fac};
 use model::machine::machine_search_config::MachineSearchConfig;
 use model::machine::{
-    BomValidating, CleanupState, FailureCause, FailureDetails, FailureSource, HostReprovisionState,
-    InstanceState, MachineState, MachineValidatingState, ManagedHostState, MeasuringState,
-    ValidationState, get_action_for_dpu_state,
+    BomValidating, CleanupContext, CleanupState, FailureCause, FailureDetails, FailureSource,
+    HostReprovisionState, InstanceState, MachineState, MachineValidatingState, ManagedHostState,
+    MeasuringState, StateMachineArea, ValidationState,
 };
 use model::machine_validation::{MachineValidationState, MachineValidationStatus};
 use tonic::{Request, Response, Status};
@@ -31,8 +32,8 @@ use crate::api::{Api, log_request_data};
 use crate::compat::BuildAndFillLegacyFields;
 use crate::handlers::utils::convert_and_log_machine_id;
 
-// Transitions the machine to Ready state.
-// Called by 'forge-scout discovery' once cleanup succeeds.
+// Records Scout cleanup success/failure and wakes the host state controller.
+// The state controller decides whether cleanup returns to discovery or deprovision flow.
 pub(crate) async fn cleanup_machine_completed(
     api: &Api,
     request: Request<rpc::MachineCleanupInfo>,
@@ -49,34 +50,66 @@ pub(crate) async fn cleanup_machine_completed(
         .load_machine(&machine_id, MachineSearchConfig::default())
         .await?;
 
+    let cleanup_error = [
+        ("NVMe", cleanup_info.nvme.as_ref()),
+        ("HDD/SAS", cleanup_info.hdd.as_ref()),
+    ]
+    .into_iter()
+    .find_map(|(label, result)| {
+        result.and_then(|result| {
+            (rpc::machine_cleanup_info::CleanupResult::Error as i32 == result.result)
+                .then(|| format!("{label} cleanup failed: {}", result.message))
+        })
+    });
+
     // Check if cleanup failed
-    if let Some(ref nvme_result) = cleanup_info.nvme
-        && rpc::machine_cleanup_info::CleanupResult::Error as i32 == nvme_result.result
-    {
-        // NVME Cleanup failed. Move machine to failed state.
+    if let Some(err) = cleanup_error {
+        // Storage cleanup failed. Move machine to failed state.
         tracing::warn!(
             machine_id = %machine_id,
-            error = %nvme_result.message,
-            "NVMe cleanup failed"
+            error = %err,
+            "Storage cleanup failed"
         );
+        let failure_source = match machine.current_state() {
+            ManagedHostState::WaitingForCleanup {
+                cleanup_context: CleanupContext::InitialDiscovery,
+                ..
+            } => FailureSource::StateMachineArea(StateMachineArea::HostInit),
+            // Preserve the original HostInit context across cleanup retries so recovery returns to
+            // HostInit/WaitingForDiscovery instead of the deprovision cleanup flow.
+            ManagedHostState::Failed {
+                details:
+                    FailureDetails {
+                        cause: FailureCause::NVMECleanFailed { .. },
+                        source: FailureSource::StateMachineArea(StateMachineArea::HostInit),
+                        ..
+                    },
+                ..
+            } => FailureSource::StateMachineArea(StateMachineArea::HostInit),
+            _ => FailureSource::Scout,
+        };
         db::machine::update_failure_details(
             &machine,
             &mut txn,
             FailureDetails {
-                cause: FailureCause::NVMECleanFailed {
-                    err: nvme_result.message.to_string(),
-                },
+                cause: FailureCause::NVMECleanFailed { err },
                 failed_at: chrono::Utc::now(),
-                source: FailureSource::Scout,
+                source: failure_source,
             },
         )
         .await?;
     } else {
-        // Cleanup succeeded or was skipped (nvme field not present means scout skipped it)
+        // Cleanup succeeded or was skipped (field not present means scout skipped it)
         if cleanup_info.nvme.is_none() {
             tracing::info!(
                 machine_id = %machine_id,
                 "NVMe cleanup skipped by scout (likely due to safety check)"
+            );
+        }
+        if cleanup_info.hdd.is_none() {
+            tracing::info!(
+                machine_id = %machine_id,
+                "HDD/SAS cleanup skipped by scout (likely due to safety check)"
             );
         }
         // Update cleanup time on success
@@ -194,9 +227,7 @@ pub(crate) async fn forge_agent_control(
                         Action::MachineValidation(fac::MachineValidation {
                             is_enabled: true,
                             context: context.clone(),
-                            validation_id: Some(::rpc::Uuid {
-                                value: id.to_string(),
-                            }),
+                            validation_id: Some(*id),
                             filter: Some(machine_validation.filter.unwrap_or_default().into()),
                         }),
                         Some(txn),
@@ -209,8 +240,15 @@ pub(crate) async fn forge_agent_control(
             }
             ManagedHostState::HostInit {
                 machine_state: MachineState::WaitingForDiscovery,
+            } => {
+                if host_machine.last_cleanup_time.is_some() {
+                    (Action::discovery(), Some(txn))
+                } else {
+                    tracing::info!("Waiting for initial storage cleanup before host discovery");
+                    (Action::retry(), Some(txn))
+                }
             }
-            | ManagedHostState::Failed {
+            ManagedHostState::Failed {
                 details:
                     FailureDetails {
                         cause: FailureCause::Discovery { .. },
@@ -228,6 +266,7 @@ pub(crate) async fn forge_agent_control(
             } => (Action::measure(), Some(txn)),
             ManagedHostState::WaitingForCleanup {
                 cleanup_state: CleanupState::HostCleanup { .. },
+                ..
             }
             | ManagedHostState::Failed {
                 details:

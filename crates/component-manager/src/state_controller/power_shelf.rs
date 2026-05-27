@@ -191,6 +191,7 @@ impl PowerShelfManager for StateControllerPowerShelf {
             MaintenanceActivity::FirmwareUpgrade {
                 firmware_version,
                 components: vec![],
+                force_update: false,
             },
         )
         .await
@@ -223,6 +224,7 @@ fn unknown_mac_result(pmc_mac: MacAddress) -> PowerShelfComponentResult {
 mod tests {
     use std::sync::Mutex;
 
+    use forge_secrets::credentials::Credentials;
     use model::rack::{FirmwareUpgradeState, RackMaintenanceState};
 
     use super::*;
@@ -301,6 +303,10 @@ mod tests {
             pmc_ip: "10.0.0.1".parse().unwrap(),
             pmc_mac: mac.parse().unwrap(),
             pmc_vendor: PowerShelfVendor::Liteon,
+            pmc_credentials: Credentials::UsernamePassword {
+                username: "admin".into(),
+                password: "pass".into(),
+            },
         }
     }
 

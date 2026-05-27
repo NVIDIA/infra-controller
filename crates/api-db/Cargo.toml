@@ -29,8 +29,7 @@ name = "db"
 # [local-dependencies]
 # DO NOT PUT DEPENDENCIES OTHER THAN LOCAL DEPS HERE, THEY SHOULD ALL HAVE 'path =' IN THEM.
 config-version = { path = "../config-version", features = ["sqlx"] }
-carbide-host-support = { path = "../host-support", default-features = false }
-carbide-libmlx = { path = "../libmlx" }
+carbide-libmlx-model = { path = "../libmlx-model" }
 carbide-network = { path = "../network", features = ["sqlx"] }
 carbide-version = { path = "../version" }
 carbide-health-report = { path = "../health-report" }
@@ -52,7 +51,6 @@ futures-util = { workspace = true }
 ipnetwork = { workspace = true, features = ["serde"] }
 itertools = { workspace = true }
 lazy_static = { workspace = true }
-libredfish = { workspace = true }
 mac_address = { workspace = true }
 names = { default-features = false, workspace = true }
 octseq = { workspace = true }
@@ -75,7 +73,6 @@ thiserror = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
-toml = { workspace = true }
 tonic = { workspace = true }
 tracing = { workspace = true }
 uuid = { features = ["v4", "serde"], workspace = true }
@@ -92,7 +89,7 @@ carbide-secrets = { path = "../secrets" }
 lazy_static = { workspace = true }
 carbide-macros = { path = "../macros" }
 carbide-sqlx-testing = { path = "../sqlx-testing" }
-tracing-subscriber = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
 ctor = { workspace = true }
 
 [lints]

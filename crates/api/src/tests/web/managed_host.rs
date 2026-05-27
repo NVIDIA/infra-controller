@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 use axum::body::Body;
-use carbide_utils::ManagedHostOutput;
+use carbide_rpc_utils::ManagedHostOutput;
 use db::managed_host;
 use http_body_util::BodyExt;
 use hyper::http::StatusCode;
@@ -63,9 +63,17 @@ async fn test_ok(pool: sqlx::PgPool) {
     let host = hosts.first().unwrap();
     assert_eq!(host.dpus.len(), 1, "Host should have 1 dpu");
     let dpu = host.dpus.first().unwrap();
+    assert!(
+        !host.discovery_info.network_interfaces.is_empty(),
+        "Host discovery info should be populated and non-default"
+    );
     assert_ne!(
         dpu.machine_id, host.machine_id,
         "DPU should not have the same machine ID as the host"
+    );
+    assert!(
+        !dpu.discovery_info.network_interfaces.is_empty(),
+        "DPU discovery info should be populated and non-default"
     );
 }
 

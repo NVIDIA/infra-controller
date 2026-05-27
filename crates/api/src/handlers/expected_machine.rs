@@ -25,9 +25,7 @@ use uuid::Uuid;
 
 use crate::CarbideError;
 use crate::api::{Api, log_request_data};
-use crate::handlers::machine_interface_address::{
-    preallocate_machine_interface, update_preallocated_machine_interface,
-};
+use crate::handlers::machine_interface_address::update_preallocated_machine_interface;
 
 lazy_static! {
     // Verify what serial is alphanumeric string with, allows dashes '-' and underscores '_'
@@ -64,9 +62,7 @@ pub(crate) async fn get(
     Ok(tonic::Response::new(response))
 }
 
-/// Adds an expected machine. When `bmc_ip_address` is present, pre-allocates a `machine_interface`
-/// for that BMC MAC and IP (shared helper with expected switches / power shelves) so discovery can
-/// proceed without waiting on DHCP.
+/// Adds an expected machine.
 pub(crate) async fn add(
     api: &Api,
     request: tonic::Request<rpc::ExpectedMachine>,
@@ -110,30 +106,64 @@ pub(crate) async fn add(
         data: db_data,
     };
 
-    validate_at_most_one_primary_host_nic(&machine.data.host_nics)?;
+    validate_expected_machine_for_insert(&machine)?;
 
     let mut txn = api.txn_begin().await?;
-
-    // Pre-allocate BMC interface if bmc_ip_address is set.
-    if let Some(bmc_ip) = machine.data.bmc_ip_address {
-        preallocate_machine_interface(&mut txn, machine.bmc_mac_address, bmc_ip).await?;
-    }
-
-    // Pre-allocate machine interfaces for host NICs with fixed IPs.
-    for nic in &machine.data.host_nics {
-        if let Some(ref ip_str) = nic.fixed_ip {
-            let ip: std::net::IpAddr = ip_str.parse().map_err(|_| {
-                CarbideError::InvalidArgument(format!("invalid fixed_ip: {ip_str}"))
-            })?;
-            preallocate_machine_interface(&mut txn, nic.mac_address, ip).await?;
-        }
-    }
-
     db::expected_machine::create(&mut txn, machine).await?;
 
     txn.commit().await?;
 
     Ok(tonic::Response::new(()))
+}
+
+/// Validate the ExpectedMachine payload prior to insert.
+/// Shared between the `add` gRPC handler and the
+/// `expected_machines.json` import flow.
+pub(crate) fn validate_expected_machine_for_insert(
+    machine: &ExpectedMachine,
+) -> Result<(), CarbideError> {
+    validate_at_most_one_primary_host_nic(&machine.data.host_nics)?;
+
+    for nic in &machine.data.host_nics {
+        if let Some(ref ip_str) = nic.fixed_ip {
+            let _: std::net::IpAddr = ip_str.parse().map_err(|_| {
+                CarbideError::InvalidArgument(format!("invalid fixed_ip: {ip_str}"))
+            })?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Create missing expected_machines that aren't already in the database,
+/// calling `validate_expected_machine_for_insert` for each new entry. This is currently
+/// purely used by the expected_machines.json import path only, but lives
+/// here so it can re-leverage `validate_expected_machine_for_insert` and share the
+/// same validation codepath as the API handler.
+pub(crate) async fn create_missing_from(
+    txn: &mut sqlx::PgConnection,
+    expected_machines: &[ExpectedMachine],
+) -> Result<(), CarbideError> {
+    let existing_macs: std::collections::HashSet<String> =
+        db::expected_machine::find_all(&mut *txn)
+            .await?
+            .into_iter()
+            .map(|m| m.bmc_mac_address.to_string())
+            .collect();
+
+    for expected_machine in expected_machines {
+        if existing_macs.contains(&expected_machine.bmc_mac_address.to_string()) {
+            tracing::debug!(
+                "Not overwriting expected-machine with mac_addr: {}",
+                expected_machine.bmc_mac_address
+            );
+            continue;
+        }
+        validate_expected_machine_for_insert(expected_machine)?;
+        db::expected_machine::create(&mut *txn, expected_machine.clone()).await?;
+    }
+
+    Ok(())
 }
 
 /// Deletes an expected machine by id or BMC MAC.
@@ -394,10 +424,7 @@ async fn create_expected_machine(
         data: db_data,
     };
 
-    if let Some(bmc_ip) = expected_machine.data.bmc_ip_address {
-        preallocate_machine_interface(txn, expected_machine.bmc_mac_address, bmc_ip).await?;
-    }
-
+    validate_expected_machine_for_insert(&expected_machine)?;
     db::expected_machine::create(txn, expected_machine).await?;
 
     Ok(())

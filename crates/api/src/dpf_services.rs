@@ -21,13 +21,16 @@ use std::collections::BTreeMap;
 use std::fmt::Write;
 
 use carbide_dpf::sdk::build_dpu_interfaces_vec;
-use carbide_dpf::types::{DHCP_SERVER_SERVICE_NAME, DOCA_HBN_SERVICE_NAME, FMDS_SERVICE_NAME};
+use carbide_dpf::types::{
+    DHCP_SERVER_SERVICE_NAME, DOCA_HBN_SERVICE_NAME, DPU_AGENT_SERVICE_NAME, FMDS_SERVICE_NAME,
+    OTEL_COLLECTOR_SERVICE_NAME,
+};
 use carbide_dpf::{
     ConfigPortsServiceType, ServiceConfigPort, ServiceConfigPortProtocol, ServiceDefinition,
     ServiceInterface, ServiceNAD, ServiceNADResourceType,
 };
 
-use crate::cfg::file::DpfServiceConfig;
+use crate::cfg::file::{DEFAULT_DPF_IMAGE_PULL_SECRET, DpfServiceConfig};
 
 /// Default DOCA helm registry (DPUServiceTemplate source.repoURL).
 pub const DEFAULT_DOCA_HELM_REGISTRY: &str = "https://helm.ngc.nvidia.com/nvidia/doca";
@@ -49,7 +52,7 @@ pub const DOCA_HBN_SERVICE_IMAGE_TAG: &str = "3.2.1-doca3.2.1";
 pub const DOCA_HBN_SERVICE_NETWORK: &str = "mybrhbn";
 
 /// DHCP Service Definitions
-pub const DHCP_SERVER_SERVICE_HELM_NAME: &str = "carbide-dhcp-server";
+pub const DHCP_SERVER_SERVICE_HELM_NAME: &str = "nico-dhcp-server";
 pub const DHCP_SERVER_SERVICE_NAD_NAME: &str = "mybrsfc-dhcp";
 pub const DHCP_SERVER_SERVICE_MTU: i64 = 1500;
 pub const DHCP_SERVER_SERVICE_IMAGE_NAME: &str = "forge-dhcp-server";
@@ -60,25 +63,18 @@ pub const DTS_SERVICE_HELM_NAME: &str = "doca-telemetry";
 pub const DTS_SERVICE_HELM_VERSION: &str = "1.22.1";
 
 // DPU Agent Service Definitions
-pub const DPU_AGENT_SERVICE_NAME: &str = "carbide-dpu-agent";
-pub const DPU_AGENT_SERVICE_HELM_NAME: &str = "carbide-dpu-agent";
+pub const DPU_AGENT_SERVICE_HELM_NAME: &str = "nico-dpu-agent";
 pub const DPU_AGENT_SERVICE_IMAGE_NAME: &str = "forge-dpu-agent";
 
 /// FMDS Agent Service Definitions
-pub const FMDS_SERVICE_HELM_NAME: &str = "carbide-fmds";
+pub const FMDS_SERVICE_HELM_NAME: &str = "nico-fmds";
 pub const FMDS_SERVICE_IMAGE_NAME: &str = "carbide-fmds";
 pub const FMDS_SERVICE_NAD_NAME: &str = "mybrsfc-fmds";
 pub const FMDS_SERVICE_MTU: i64 = 1500;
 
 /// OTel Collector Service Definitions
-pub const OTEL_COLLECTOR_SERVICE_NAME: &str = "carbide-otelcol";
-pub const OTEL_COLLECTOR_SERVICE_HELM_NAME: &str = "carbide-otelcol";
+pub const OTEL_COLLECTOR_SERVICE_HELM_NAME: &str = "nico-otelcol";
 pub const OTEL_COLLECTOR_SERVICE_IMAGE_NAME: &str = "otelcol-contrib";
-
-/// OTel Agent Service Definitions
-pub const OTEL_SERVICE_NAME: &str = "forge-dpu-otel-agent";
-pub const OTEL_SERVICE_HELM_NAME: &str = "forge-dpu-otel-agent";
-pub const OTEL_SERVICE_IMAGE_NAME: &str = "forge-dpu-otel-agent";
 
 /// Compile-time helm version (set by CI via VERSION env var). Empty on PR/fork builds.
 pub(crate) const COMPILE_TIME_HELM_VERSION: &str = match option_env!("CARBIDE_BUILD_HELM_VERSION") {
@@ -151,6 +147,7 @@ pub(crate) fn default_dts_service() -> DpfServiceConfig {
         helm_version: DTS_SERVICE_HELM_VERSION.to_string(),
         docker_repo_url: String::new(),
         docker_image_tag: String::new(),
+        docker_image_pull_secret: DEFAULT_DPF_IMAGE_PULL_SECRET.to_string(),
     }
 }
 
@@ -162,6 +159,7 @@ pub(crate) fn default_doca_hbn_service() -> DpfServiceConfig {
         helm_version: DOCA_HBN_SERVICE_HELM_VERSION.to_string(),
         docker_repo_url: format!("{DEFAULT_DOCA_IMAGE_REGISTRY}/{DOCA_HBN_SERVICE_IMAGE_NAME}"),
         docker_image_tag: DOCA_HBN_SERVICE_IMAGE_TAG.to_string(),
+        docker_image_pull_secret: DEFAULT_DPF_IMAGE_PULL_SECRET.to_string(),
     }
 }
 
@@ -173,6 +171,7 @@ pub(crate) fn default_dpu_agent_service() -> DpfServiceConfig {
         helm_version: COMPILE_TIME_HELM_VERSION.to_string(),
         docker_repo_url: format!("{DEFAULT_CARBIDE_IMAGE_REGISTRY}/{DPU_AGENT_SERVICE_IMAGE_NAME}"),
         docker_image_tag: COMPILE_TIME_IMAGE_TAG.to_string(),
+        docker_image_pull_secret: DEFAULT_DPF_IMAGE_PULL_SECRET.to_string(),
     }
 }
 
@@ -186,6 +185,7 @@ pub(crate) fn default_dhcp_server_service() -> DpfServiceConfig {
             "{DEFAULT_CARBIDE_IMAGE_REGISTRY}/{DHCP_SERVER_SERVICE_IMAGE_NAME}"
         ),
         docker_image_tag: COMPILE_TIME_IMAGE_TAG.to_string(),
+        docker_image_pull_secret: DEFAULT_DPF_IMAGE_PULL_SECRET.to_string(),
     }
 }
 
@@ -197,6 +197,7 @@ pub(crate) fn default_fmds_service() -> DpfServiceConfig {
         helm_version: COMPILE_TIME_HELM_VERSION.to_string(),
         docker_repo_url: format!("{DEFAULT_CARBIDE_IMAGE_REGISTRY}/{FMDS_SERVICE_IMAGE_NAME}"),
         docker_image_tag: COMPILE_TIME_IMAGE_TAG.to_string(),
+        docker_image_pull_secret: DEFAULT_DPF_IMAGE_PULL_SECRET.to_string(),
     }
 }
 
@@ -210,17 +211,7 @@ pub(crate) fn default_otelcol_service() -> DpfServiceConfig {
             "{DEFAULT_CARBIDE_IMAGE_REGISTRY}/{OTEL_COLLECTOR_SERVICE_IMAGE_NAME}"
         ),
         docker_image_tag: COMPILE_TIME_IMAGE_TAG.to_string(),
-    }
-}
-
-pub(crate) fn default_otel_agent_service() -> DpfServiceConfig {
-    DpfServiceConfig {
-        name: OTEL_SERVICE_NAME.to_string(),
-        helm_repo_url: DEFAULT_CARBIDE_HELM_REGISTRY.to_string(),
-        helm_chart: OTEL_SERVICE_HELM_NAME.to_string(),
-        helm_version: COMPILE_TIME_HELM_VERSION.to_string(),
-        docker_repo_url: format!("{DEFAULT_CARBIDE_IMAGE_REGISTRY}/{OTEL_SERVICE_IMAGE_NAME}"),
-        docker_image_tag: COMPILE_TIME_IMAGE_TAG.to_string(),
+        docker_image_pull_secret: DEFAULT_DPF_IMAGE_PULL_SECRET.to_string(),
     }
 }
 
@@ -246,7 +237,7 @@ pub fn doca_hbn_service(cfg: &DpfServiceConfig) -> ServiceDefinition {
                         "secretKey": "password",
                     },
                 },
-            },
+            }
         })),
 
         config_values: Some(serde_json::json!({
@@ -276,11 +267,11 @@ pub fn dts_service(cfg: &DpfServiceConfig) -> ServiceDefinition {
         })),
         config_ports: Some(vec![ServiceConfigPort {
             name: "httpserverport".to_string(),
-            port: 9100,
+            port: 9189,
             protocol: ServiceConfigPortProtocol::Tcp,
             node_port: None,
         }]),
-        config_ports_service_type: Some(ConfigPortsServiceType::None),
+        config_ports_service_type: Some(ConfigPortsServiceType::ClusterIp),
         ..ServiceDefinition::new(
             &cfg.name,
             &cfg.helm_repo_url,
@@ -305,7 +296,7 @@ pub fn dpu_agent_service(cfg: &DpfServiceConfig) -> ServiceDefinition {
             },
             "imagePullSecrets": [
                 {
-                    "name": "dpf-pull-secret"
+                    "name": cfg.docker_image_pull_secret
                 }
             ]
         })),
@@ -344,7 +335,7 @@ pub fn dhcp_server_service(cfg: &DpfServiceConfig) -> ServiceDefinition {
             },
             "imagePullSecrets": [
                 {
-                    "name": "dpf-pull-secret"
+                    "name": cfg.docker_image_pull_secret
                 }
             ]
         })),
@@ -380,7 +371,7 @@ pub fn fmds_service(cfg: &DpfServiceConfig) -> ServiceDefinition {
             },
             "imagePullSecrets": [
                 {
-                    "name": "dpf-pull-secret"
+                    "name": cfg.docker_image_pull_secret
                 }
             ]
         })),
@@ -410,52 +401,23 @@ pub fn fmds_service(cfg: &DpfServiceConfig) -> ServiceDefinition {
 pub fn otelcol_service(cfg: &DpfServiceConfig) -> ServiceDefinition {
     ServiceDefinition {
         helm_values: Some(serde_json::json!({
-            "exposedPorts": { "ports": { "prometheus": true } },
             "image": {
                 "repository": cfg.docker_repo_url,
                 "tag": cfg.docker_image_tag,
             },
             "imagePullSecrets": [
                 {
-                    "name": "dpf-pull-secret"
+                    "name": cfg.docker_image_pull_secret
                 }
             ]
         })),
         service_daemon_set_annotations: Some(BTreeMap::new()),
-        config_ports: Some(vec![ServiceConfigPort {
-            name: "prometheus".to_string(),
-            port: 9999,
-            protocol: ServiceConfigPortProtocol::Tcp,
-            node_port: None,
-        }]),
-        config_ports_service_type: Some(ConfigPortsServiceType::None),
-        ..ServiceDefinition::new(
-            &cfg.name,
-            &cfg.helm_repo_url,
-            &cfg.helm_chart,
-            &cfg.helm_version,
-        )
-    }
-}
-
-/// OTel service definition.
-pub fn otel_agent_service(cfg: &DpfServiceConfig) -> ServiceDefinition {
-    ServiceDefinition {
-        helm_values: Some(serde_json::json!({
-            "image": {
-                "repository": cfg.docker_repo_url,
-                "tag": cfg.docker_image_tag,
-            },
-            "imagePullSecrets": [
-                {
-                    "name": "dpf-pull-secret"
-                }
-            ]
+        config_values: Some(serde_json::json!({
+            "nico_dpu_agent": "{{ (index .Services \"carbide-dpu-agent\").Name }}",
+            "nico_fmds": "{{ (index .Services \"carbide-fmds\").Name }}",
+            "nico_dts": "{{ (index .Services \"dts\").Name }}"
         })),
-        service_daemon_set_annotations: Some(BTreeMap::new()),
 
-        config_ports: None,
-        config_ports_service_type: Some(ConfigPortsServiceType::None),
         ..ServiceDefinition::new(
             &cfg.name,
             &cfg.helm_repo_url,

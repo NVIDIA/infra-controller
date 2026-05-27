@@ -1,0 +1,43 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: "PR Title Checker"
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+jobs:
+  title-check:
+    name: Check PR Title
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Format
+        env:
+            # Pass the PR title to an environment variable for secure handling in bash
+            PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+            # Define your required regex pattern here
+            # This example enforces "Type(scope): Description", following Conventional Commits
+            PATTERN="^(feat|fix|docs|version|refactor|chore|ci): [A-Z].{20,}$"
+
+            if [[ "$PR_TITLE" =~ $PATTERN ]]; then
+                echo "PR title format is valid."
+            else
+                echo "Error: PR title format is invalid. Start with a category followed by colon and a capitalized sentence of at least 20 characters."
+                echo "Required format: (feat|fix|docs|version|refactor|chore|ci): [A-Z].{19,}"
+                echo "Example: feat: Add login functionality"
+                exit 1
+            fi
