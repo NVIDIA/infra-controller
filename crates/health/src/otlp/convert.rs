@@ -204,7 +204,7 @@ mod tests {
     use mac_address::MacAddress;
 
     use super::*;
-    use crate::endpoint::{BmcAddr, EndpointMetadata, MachineData, SwitchData};
+    use crate::endpoint::{BmcAddr, EndpointMetadata, MachineData, SwitchData, SwitchEndpointRole};
     use crate::sink::{
         Classification, HealthReport, HealthReportAlert, LogRecord, Probe, ReportSource,
     };
@@ -302,6 +302,9 @@ mod tests {
                 serial: "SN-SWITCH-001".to_string(),
                 slot_number: Some(7),
                 tray_index: Some(3),
+                endpoint_role: SwitchEndpointRole::Host,
+                is_primary: false,
+                nmxt_enabled: false,
             })),
             rack_id: None,
         };

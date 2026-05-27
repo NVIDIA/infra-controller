@@ -52,7 +52,6 @@ use state_controller::state_handler::{
     StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
 
-use crate::rack as carbide_rack;
 use crate::state_controller::rack as carbide_rack_controller;
 
 /// Strips all `rv.*` metadata labels from every machine in the rack.
@@ -2192,7 +2191,6 @@ mod tests {
         next_state_after_configure, next_state_after_firmware, next_state_after_nvos,
         profile_hardware_type_or_any,
     };
-    use crate::rack as carbide_rack;
 
     fn test_machine_id(seed: u8) -> MachineId {
         let mut hash = [0u8; 32];

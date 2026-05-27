@@ -19,6 +19,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bms_dsx_exchange::{BmsDsxExchangePublisher, Publication, PublisherConfig, SourceUpdate};
+use carbide_mqtt_common::hook::MqttPublisher;
+use carbide_mqtt_common::metrics::MqttHookMetrics;
 use carbide_uuid::rack::RackId;
 use chrono::Utc;
 use db::db_read::PgPoolReader;
@@ -32,9 +34,6 @@ use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tokio::time::{Instant, timeout_at};
 use tokio_util::sync::CancellationToken;
-
-use crate::mqtt_state_change_hook::hook::MqttPublisher;
-use crate::mqtt_state_change_hook::metrics::MqttHookMetrics;
 
 const METADATA_SUBSCRIPTION: &str = "BMS/v1/PUB/Metadata/#";
 const METADATA_PATTERN: &str = "^BMS/v1/PUB/Metadata/.*$";
@@ -295,7 +294,7 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl MqttPublisher for Arc<RecordingPublisher> {
+    impl MqttPublisher for RecordingPublisher {
         async fn publish(&self, topic: &str, payload: Vec<u8>) -> Result<(), MqtteaClientError> {
             self.published.lock().await.push((
                 topic.to_string(),

@@ -958,10 +958,6 @@ impl SiteExplorer {
             }
 
             if ep.report.is_dpu() {
-                // Ignore the DPU if we are using the host NIC instead of the DPU NIC.
-                if self.config.force_dpu_nic_mode.load(Ordering::Relaxed) {
-                    continue;
-                }
                 if self.can_ingest_dpu_endpoint(metrics, &ep).await? {
                     explored_dpus.insert(ep.address, ep);
                 }
@@ -982,16 +978,14 @@ impl SiteExplorer {
     ) -> SiteExplorerResult<Vec<(ExploredManagedHost, EndpointExplorationReport)>> {
         // Per-host DPU-mode resolution. Precedence:
         //   1. Per-host `ExpectedMachine.dpu_mode` (NicMode / NoDpu wins).
-        //   2. Site-level default `SiteExplorerConfig.dpu_mode`.
-        //   3. Legacy site-wide `force_dpu_nic_mode` flag (deprecated,
-        //      preserved as a fallback for not too much longer).
-        let site_default_mode = self.config.dpu_mode;
-        let site_force_nic_mode = self.config.force_dpu_nic_mode.load(Ordering::Relaxed);
+        //   2. Site-wide `SiteExplorerConfig.dpu_mode` setting.
+        //   3. Otherwise: `DpuMode::DpuMode` (the absolute default).
+        let site_dpu_mode = self.config.dpu_mode;
         let effective_mode = |host_bmc_ip: &IpAddr| -> DpuMode {
             let declared = expected_explored_endpoint_index
                 .matched_expected_machine(host_bmc_ip)
                 .map(|em| em.data.dpu_mode);
-            DpuMode::resolve(declared, site_default_mode, site_force_nic_mode)
+            DpuMode::resolve(declared, site_dpu_mode)
         };
         // Match HOST and DPU using SerialNumber.
         // Compare DPU system.serial_number with HOST chassis.network_adapters[].serial_number

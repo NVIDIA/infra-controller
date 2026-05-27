@@ -16,7 +16,8 @@
  */
 
 use forge_secrets::credentials::{
-    BgpCredentialType, CredentialKey, CredentialReader, CredentialType, Credentials,
+    BgpCredentialType, CredentialKey, CredentialReader, CredentialType, CredentialWriter,
+    Credentials,
 };
 use rpc::forge::forge_server::Forge;
 use rpc::forge::{
@@ -26,6 +27,7 @@ use tonic::Code;
 
 use crate::handlers::credential::MAX_BGP_PASSWORD_LENGTH;
 use crate::tests::common::api_fixtures::create_test_env;
+use crate::tests::common::api_fixtures::site_explorer::new_switch;
 
 #[crate::sqlx_test]
 async fn test_create_host_uefi_credential_when_missing(pool: sqlx::PgPool) {
@@ -242,4 +244,47 @@ async fn test_create_bgp_credential_validates_max_password_length(pool: sqlx::Pg
             password: "a".repeat(MAX_BGP_PASSWORD_LENGTH),
         })
     );
+}
+
+#[crate::sqlx_test]
+async fn test_get_switch_nvos_credentials(pool: sqlx::PgPool) -> eyre::Result<()> {
+    let env = create_test_env(pool).await;
+    let switch_id = new_switch(&env, Some("Switch1".to_string()), None).await?;
+    let bmc_mac_address = db::switch::find_switch_endpoints_by_ids(&env.pool, &[switch_id])
+        .await?
+        .first()
+        .expect("switch endpoint row")
+        .bmc_mac;
+
+    env.test_credential_manager
+        .set_credentials(
+            &CredentialKey::SwitchNvosAdmin { bmc_mac_address },
+            &Credentials::UsernamePassword {
+                username: "nvos-admin".to_string(),
+                password: "nvos-secret".to_string(),
+            },
+        )
+        .await?;
+
+    let response = env
+        .api
+        .get_switch_nvos_credentials(tonic::Request::new(
+            rpc::forge::GetSwitchNvosCredentialsRequest {
+                switch_id: Some(switch_id),
+            },
+        ))
+        .await?
+        .into_inner();
+
+    let credentials = response.credentials.expect("credentials");
+    let Some(rpc::forge::bmc_credentials::Type::UsernamePassword(username_password)) =
+        credentials.r#type
+    else {
+        panic!("expected username/password credentials");
+    };
+
+    assert_eq!(username_password.username, "nvos-admin");
+    assert_eq!(username_password.password, "nvos-secret");
+
+    Ok(())
 }

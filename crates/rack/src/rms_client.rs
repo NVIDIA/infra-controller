@@ -47,7 +47,7 @@ impl SwitchSystemImageRmsClient for librms::RackManagerApi {
     }
 }
 
-#[cfg(test)]
+#[cfg(feature = "test-support")]
 pub mod test_support {
     use std::collections::{HashMap, VecDeque};
     use std::sync::Arc;

@@ -30,6 +30,7 @@ use model::machine::{
 
 use super::state_handler::StateHandlerError;
 
+pub mod config;
 pub mod context;
 pub mod handler;
 pub mod io;
