@@ -31,6 +31,7 @@ use ::rpc::protos::dns::{
 };
 use ::rpc::protos::{measured_boot as measured_boot_pb, mlx_device as mlx_device_pb};
 use carbide_ib_fabric::ib::IBFabricManager;
+use carbide_rack::bms_client::BmsDsxExchangeHandle;
 use carbide_redfish::libredfish::RedfishClientPool;
 use carbide_site_explorer::EndpointExplorer;
 use carbide_uuid::machine::{MachineId, MachineInterfaceId};
@@ -55,7 +56,6 @@ use crate::dpf::DpfOperations;
 use crate::dynamic_settings::DynamicSettings;
 use crate::ethernet_virtualization::EthVirtData;
 use crate::logging::log_limiter::LogLimiter;
-use crate::rack::bms_client::BmsDsxExchangeHandle;
 use crate::scout_stream::ConnectionRegistry;
 use crate::state_controller::controller::Enqueuer;
 use crate::state_controller::machine::io::MachineStateControllerIO;
@@ -897,6 +897,13 @@ impl Forge for Api {
         request: Request<rpc::GetBmcCredentialsRequest>,
     ) -> Result<Response<rpc::GetBmcCredentialsResponse>, Status> {
         crate::handlers::credential::get_bmc_credentals(self, request).await
+    }
+
+    async fn get_switch_nvos_credentials(
+        &self,
+        request: Request<rpc::GetSwitchNvosCredentialsRequest>,
+    ) -> Result<Response<rpc::GetBmcCredentialsResponse>, Status> {
+        crate::handlers::credential::get_switch_nvos_credentials(self, request).await
     }
 
     /// Network status of each managed host, as reported by forge-dpu-agent.

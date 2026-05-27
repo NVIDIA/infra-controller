@@ -206,7 +206,7 @@ async fn fetch_nvos_credentials(
     }
 }
 
-pub(crate) fn build_new_node_info(
+pub fn build_new_node_info(
     rack_id: &RackId,
     device: &FirmwareUpgradeDeviceInfo,
     node_type: rms::NodeType,

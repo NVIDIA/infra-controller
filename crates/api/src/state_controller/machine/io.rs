@@ -30,8 +30,8 @@ use model::machine::{
     SpdmMeasuringState, ValidationState,
 };
 use sqlx::PgConnection;
+use state_controller::io::StateControllerIO;
 
-use crate::state_controller::io::StateControllerIO;
 use crate::state_controller::machine::context::MachineStateHandlerContextObjects;
 use crate::state_controller::machine::metrics::MachineMetricsEmitter;
 

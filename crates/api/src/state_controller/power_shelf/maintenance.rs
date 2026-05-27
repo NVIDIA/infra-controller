@@ -17,6 +17,7 @@
 
 //! Handler for PowerShelfControllerState::Maintenance.
 
+use carbide_rack::rack_manager_error;
 use carbide_uuid::power_shelf::PowerShelfId;
 use db::power_shelf as db_power_shelf;
 use forge_secrets::credentials::{
@@ -30,7 +31,6 @@ use state_controller::state_handler::{
     StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
 
-use crate::rack::rack_manager_error;
 use crate::state_controller::power_shelf::context::PowerShelfStateHandlerContextObjects;
 
 /// Default BMC HTTPS port used when populating `rms::BmcEndpoint` for power

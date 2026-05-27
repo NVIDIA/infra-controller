@@ -23,12 +23,12 @@ use model::power_manager::{
     get_updated_power_options_for_desired_on_state_off,
     update_power_options_for_desired_on_state_on,
 };
+use state_controller::state_handler::{StateHandlerContext, StateHandlerError};
 
 use crate::state_controller::machine::context::MachineStateHandlerContextObjects;
 use crate::state_controller::machine::handler::{
     PowerOptionConfig, handler_host_power_control, host_power_state,
 };
-use crate::state_controller::state_handler::{StateHandlerContext, StateHandlerError};
 
 // If power state is Paused and Reset, state machine can't take any decision on it.
 // Ignore power manager with a log and moved to state machine.

@@ -28,7 +28,6 @@ use model::switch::{FabricManagerState, FabricManagerStatus};
 use serde::Deserialize;
 use sqlx::PgConnection;
 
-use crate::rack as carbide_rack;
 use crate::state_controller::rack as carbide_rack_controller;
 
 pub(super) fn validate_switch_inventory_for_nmx_cluster(

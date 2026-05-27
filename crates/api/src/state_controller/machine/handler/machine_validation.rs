@@ -20,15 +20,16 @@ use model::machine::{
     ValidationState,
 };
 use model::machine_validation::{MachineValidationState, MachineValidationStatus};
+use state_controller::state_handler::{
+    StateHandlerContext, StateHandlerError, StateHandlerOutcome,
+};
 
 use super::{HostHandlerParams, is_machine_validation_requested, machine_validation_completed};
-use crate::state_controller::common_services::CommonStateHandlerServices;
-use crate::state_controller::machine::context::MachineStateHandlerContextObjects;
+use crate::state_controller::machine::context::{
+    MachineStateHandlerContextObjects, MachineStateHandlerServices,
+};
 use crate::state_controller::machine::handler::{
     handler_host_power_control, rebooted, trigger_reboot_if_needed,
-};
-use crate::state_controller::state_handler::{
-    StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
 
 pub(crate) async fn handle_machine_validation_state(
@@ -166,7 +167,7 @@ pub(crate) async fn handle_machine_validation_state(
 }
 
 pub(crate) async fn handle_machine_validation_requested(
-    services: &CommonStateHandlerServices,
+    services: &MachineStateHandlerServices,
     mh_snapshot: &ManagedHostStateSnapshot,
     clear_failure_details: bool,
 ) -> Result<Option<StateHandlerOutcome<ManagedHostState>>, StateHandlerError> {

@@ -25,7 +25,6 @@ use librms::RmsApi;
 use sqlx::PgPool;
 use state_controller::state_handler::StateHandlerContextObjects;
 
-use crate::rack as carbide_rack;
 use crate::state_controller::rack as carbide_rack_controller;
 
 pub struct RackStateHandlerContextObjects {}
