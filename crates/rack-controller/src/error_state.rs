@@ -26,7 +26,7 @@ use state_controller::state_handler::{
     StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
 
-use crate::state_controller::rack as carbide_rack_controller;
+use crate as carbide_rack_controller;
 
 pub async fn handle_error(
     id: &RackId,

@@ -1193,6 +1193,7 @@ dependencies = [
  "carbide-preingestion-manager",
  "carbide-prost-builder",
  "carbide-rack",
+ "carbide-rack-controller",
  "carbide-redfish",
  "carbide-rpc",
  "carbide-rpc-utils",
@@ -2430,6 +2431,33 @@ dependencies = [
  "state-controller",
  "tokio",
  "tokio-util",
+ "tonic",
+ "tracing",
+]
+
+[[package]]
+name = "carbide-rack-controller"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "carbide-api-db",
+ "carbide-api-model",
+ "carbide-health-metrics",
+ "carbide-rack",
+ "carbide-secrets",
+ "carbide-utils",
+ "carbide-uuid",
+ "chrono",
+ "config-version",
+ "duration-str",
+ "eyre",
+ "librms",
+ "mac_address",
+ "opentelemetry",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "state-controller",
  "tonic",
  "tracing",
 ]

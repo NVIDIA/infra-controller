@@ -52,7 +52,7 @@ use state_controller::state_handler::{
     StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
 
-use crate::state_controller::rack as carbide_rack_controller;
+use crate as carbide_rack_controller;
 
 /// Strips all `rv.*` metadata labels from every machine in the rack.
 ///
@@ -1039,7 +1039,7 @@ async fn rms_get_nvos_update_status(
     Ok(updated)
 }
 
-pub(crate) fn apply_nvos_job_status_response(
+pub fn apply_nvos_job_status_response(
     switch: &mut NvosUpdateSwitchStatus,
     job_id: &str,
     response: Result<rms::GetSwitchSystemImageJobStatusResponse, tonic::Status>,

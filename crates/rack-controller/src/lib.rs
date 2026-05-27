@@ -17,7 +17,6 @@
 
 //! State Controller implementation for Racks.
 
-use carbide_rack_controller::context::RackStateHandlerContextObjects;
 use carbide_uuid::rack::{RackId, RackProfileId};
 use db::machine;
 use model::machine::Machine;
@@ -27,7 +26,7 @@ use model::rack_type::{RackCapabilitiesSet, RackProfile};
 use sqlx::PgConnection;
 use state_controller::state_handler::{StateHandlerContext, StateHandlerError};
 
-use crate::state_controller::rack as carbide_rack_controller;
+use crate::context::RackStateHandlerContextObjects;
 
 pub mod config;
 pub mod context;

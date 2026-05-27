@@ -31,7 +31,7 @@ use model::rack::{
 use sqlx::PgConnection;
 use state_controller::io::StateControllerIO;
 
-use crate::state_controller::rack as carbide_rack_controller;
+use crate as carbide_rack_controller;
 
 /// State Controller IO implementation for Racks
 #[derive(Default, Debug)]

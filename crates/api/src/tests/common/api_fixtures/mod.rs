@@ -40,6 +40,10 @@ use carbide_nvlink_manager::NvlPartitionMonitor;
 use carbide_nvlink_manager::config::NvLinkConfig;
 use carbide_nvlink_manager::nvlink::test_support::NmxcSimClient;
 use carbide_rack::rms_client::test_support::RmsSim;
+use carbide_rack_controller::config::{RackConfig, RackValidationConfig, RmsConfig};
+use carbide_rack_controller::context::RackStateHandlerServices;
+use carbide_rack_controller::handler::RackStateHandler;
+use carbide_rack_controller::io::RackStateControllerIO;
 use carbide_redfish::libredfish::test_support::{RedfishSim, RedfishSimTestOverrides};
 use carbide_site_explorer::SiteExplorer;
 use carbide_site_explorer::config::{SiteExplorerConfig, SiteExplorerExploreMode};
@@ -138,10 +142,6 @@ use crate::state_controller::machine::io::MachineStateControllerIO;
 use crate::state_controller::power_shelf::context::PowerShelfStateHandlerServices;
 use crate::state_controller::power_shelf::handler::PowerShelfStateHandler;
 use crate::state_controller::power_shelf::io::PowerShelfStateControllerIO;
-use crate::state_controller::rack::config::{RackConfig, RackValidationConfig, RmsConfig};
-use crate::state_controller::rack::context::RackStateHandlerServices;
-use crate::state_controller::rack::handler::RackStateHandler;
-use crate::state_controller::rack::io::RackStateControllerIO;
 use crate::state_controller::state_handler::{
     StateHandler, StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
