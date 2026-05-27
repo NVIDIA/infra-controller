@@ -26,14 +26,14 @@ use state_controller::state_handler::{
 };
 use tracing::instrument;
 
-use crate::state_controller::power_shelf::configuring::handle_configuring;
-use crate::state_controller::power_shelf::context::PowerShelfStateHandlerContextObjects;
-use crate::state_controller::power_shelf::deleting::handle_deleting;
-use crate::state_controller::power_shelf::error_state::handle_error;
-use crate::state_controller::power_shelf::fetching_data::handle_fetching_data;
-use crate::state_controller::power_shelf::initializing::handle_initializing;
-use crate::state_controller::power_shelf::maintenance::handle_maintenance;
-use crate::state_controller::power_shelf::ready::handle_ready;
+use crate::configuring::handle_configuring;
+use crate::context::PowerShelfStateHandlerContextObjects;
+use crate::deleting::handle_deleting;
+use crate::error_state::handle_error;
+use crate::fetching_data::handle_fetching_data;
+use crate::initializing::handle_initializing;
+use crate::maintenance::handle_maintenance;
+use crate::ready::handle_ready;
 
 /// The actual PowerShelf State handler (structure mirrors SwitchStateHandler).
 #[derive(Debug, Default, Clone)]

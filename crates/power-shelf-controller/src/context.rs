@@ -15,10 +15,26 @@
  * limitations under the License.
  */
 
-use carbide_dpf::DpfError;
+use std::sync::Arc;
 
-use crate::state_controller::state_handler::{ExternalServiceError, StateHandlerError};
+use forge_secrets::credentials::CredentialManager;
+use librms::RmsApi;
+use sqlx::PgPool;
+use state_controller::state_handler::StateHandlerContextObjects;
 
-pub(crate) fn dpf_error(error: DpfError) -> StateHandlerError {
-    ExternalServiceError::with_source("dpf", "", error.to_string(), "dpf_error", error).into()
+use crate::metrics::PowerShelfMetrics;
+
+pub struct PowerShelfStateHandlerContextObjects {}
+
+#[derive(Clone)]
+pub struct PowerShelfStateHandlerServices {
+    pub db_pool: PgPool,
+    /// Rack Manager Service client
+    pub rms_client: Option<Arc<dyn RmsApi>>,
+    pub credential_manager: Arc<dyn CredentialManager>,
+}
+
+impl StateHandlerContextObjects for PowerShelfStateHandlerContextObjects {
+    type ObjectMetrics = PowerShelfMetrics;
+    type Services = PowerShelfStateHandlerServices;
 }

@@ -28,8 +28,8 @@ use model::{DeletedFilter, StateSla};
 use sqlx::PgConnection;
 use state_controller::io::StateControllerIO;
 
-use crate::state_controller::power_shelf::context::PowerShelfStateHandlerContextObjects;
-use crate::state_controller::power_shelf::metrics::PowerShelfMetricsEmitter;
+use crate::context::PowerShelfStateHandlerContextObjects;
+use crate::metrics::PowerShelfMetricsEmitter;
 
 /// State Controller IO implementation for PowerShelves
 #[derive(Default, Debug)]
