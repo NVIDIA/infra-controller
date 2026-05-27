@@ -16,6 +16,7 @@
  */
 
 pub mod api_server;
+pub mod dhcp;
 pub mod domain;
 pub mod grpcurl;
 pub mod instance;
@@ -23,7 +24,9 @@ pub mod machine;
 pub mod machine_a_tron;
 pub mod metrics;
 pub mod mock_rms;
+pub mod power_shelf;
 pub mod subnet;
+pub mod switch;
 pub mod tenant;
 pub mod utils;
 pub mod vault;

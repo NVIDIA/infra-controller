@@ -71,6 +71,26 @@ async fn test_bmc((router, state): (axum::Router, BmcState)) -> TestBmcHandle {
     }
 }
 
+/// Build a BMC mock router (and its state) for a host-type machine, ready to be
+/// registered in a shared [`CombinedServer`](crate::CombinedServer) registry under
+/// the BMC's IP address. Uses no-op power callbacks and leaves Redfish auth disabled,
+/// matching the `*_bmc` helpers below.
+///
+/// Integration tests use this to drive discovery of non-machine BMCs -- such as
+/// LITE-ON power shelves or NVIDIA switches -- through the real site explorer, where
+/// the test owns the shared registry and inserts the returned router itself.
+pub fn host_bmc_router(
+    host_info: HostMachineInfo,
+    mat_host_id: String,
+) -> (axum::Router, BmcState) {
+    machine_router(
+        MachineInfo::Host(host_info),
+        Arc::new(NoopCallbacks),
+        mat_host_id,
+        false,
+    )
+}
+
 pub async fn wiwynn_gb200_bmc() -> TestBmcHandle {
     test_bmc(machine_router(
         MachineInfo::Host(HostMachineInfo::new(

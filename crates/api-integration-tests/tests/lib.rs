@@ -24,8 +24,8 @@ use std::time::{self, Duration};
 use ::carbide_utils::HostPortPair;
 use ::machine_a_tron::{BmcMockRegistry, HostMachineHandle, MachineATronConfig, MachineConfig};
 use api_test_helper::{
-    IntegrationTestEnvironment, domain, instance, machine, metrics, subnet, tenant, utils, vpc,
-    vpc_prefix,
+    IntegrationTestEnvironment, dhcp, domain, instance, machine, metrics, power_shelf, subnet,
+    switch, tenant, utils, vpc, vpc_prefix,
 };
 use bmc_mock::{HostHardwareType, ListenerOrAddress};
 use eyre::ContextCompat;
@@ -192,6 +192,8 @@ async fn test_integration() -> eyre::Result<()> {
             Ipv4Addr::new(172, 20, 0, 2),
         )
         .boxed(),
+        test_power_shelf_discovery(&test_env, &bmc_address_registry).boxed(),
+        test_switch_discovery(&test_env, &bmc_address_registry).boxed(),
     ]);
 
     tokio::select! {
@@ -932,6 +934,87 @@ where
     assert_eq!(results.len(), host_count as usize);
 
     results.into_iter().try_collect()
+}
+
+/// Discover a LITE-ON power shelf BMC through the full site-explorer flow.
+///
+/// LITE-ON power shelves don't expose vendor details in their Redfish service root,
+/// so the explorer has to fall back to an authenticated Chassis probe to identify
+/// them. On a brand-new shelf there are no credentials in Vault yet, so it falls back
+/// to the expected power shelf's credentials (the fix from PR #842). We assert the
+/// expected power shelf ends up linked to a managed PowerShelf that we can fetch back.
+async fn test_power_shelf_discovery(
+    test_env: &IntegrationTestEnvironment,
+    bmc_mock_registry: &BmcMockRegistry,
+) -> eyre::Result<()> {
+    let addrs = &test_env.carbide_api_addrs;
+
+    // HostMachineInfo::new assigns this shelf a unique BMC MAC and serial number.
+    let host_info = bmc_mock::HostMachineInfo::new(HostHardwareType::LiteOnPowerShelf, vec![]);
+    let bmc_mac = host_info.bmc_mac_address.to_string();
+    let serial = host_info.serial.clone();
+    let (router, _) =
+        bmc_mock::test_support::host_bmc_router(host_info, format!("ps-test-{bmc_mac}"));
+
+    // The explorer matches a discovered BMC to this expected entry by MAC address.
+    power_shelf::add_expected(addrs, &bmc_mac, "root", "password", &serial).await?;
+    tracing::info!(%bmc_mac, "Registered expected power shelf");
+
+    // Announce the BMC via DHCP on the underlay relay, then publish its mock at the
+    // assigned IP so the shared bmc-mock server routes the explorer's probes to it.
+    let assigned_ip = dhcp::discover(addrs, &bmc_mac, "172.20.1.1").await?;
+    tracing::info!(%bmc_mac, %assigned_ip, "Power shelf BMC announced; registering mock");
+    bmc_mock_registry.write().await.insert(assigned_ip, router);
+
+    // Wait for the explorer to link the expected shelf to a managed PowerShelf, then
+    // confirm that PowerShelf is retrievable by its id.
+    let power_shelf_id = power_shelf::wait_for_linked(addrs, &bmc_mac).await?;
+    let found_id = power_shelf::find_by_id(addrs, &power_shelf_id).await?;
+    assert_eq!(
+        found_id, power_shelf_id,
+        "FindPowerShelvesByIds should return the linked power shelf"
+    );
+
+    tracing::info!(%bmc_mac, %power_shelf_id, "Power shelf discovery test passed");
+    Ok(())
+}
+
+/// Discover an NVIDIA switch BMC (ND5200_LD) through the full site-explorer flow,
+/// asserting the expected switch ends up linked to a managed Switch we can fetch back.
+async fn test_switch_discovery(
+    test_env: &IntegrationTestEnvironment,
+    bmc_mock_registry: &BmcMockRegistry,
+) -> eyre::Result<()> {
+    let addrs = &test_env.carbide_api_addrs;
+
+    // HostMachineInfo::new assigns this switch a unique BMC MAC and serial number.
+    let host_info = bmc_mock::HostMachineInfo::new(HostHardwareType::NvidiaSwitchNd5200Ld, vec![]);
+    let bmc_mac = host_info.bmc_mac_address.to_string();
+    let serial = host_info.serial.clone();
+    let (router, _) =
+        bmc_mock::test_support::host_bmc_router(host_info, format!("sw-test-{bmc_mac}"));
+
+    // The explorer matches a discovered BMC to this expected entry by MAC address.
+    switch::add_expected(addrs, &bmc_mac, "root", "password", &serial).await?;
+    tracing::info!(%bmc_mac, "Registered expected switch");
+
+    // Announce the BMC via DHCP on the underlay relay, then publish its mock at the
+    // assigned IP so the shared bmc-mock server routes the explorer's probes to it.
+    let assigned_ip = dhcp::discover(addrs, &bmc_mac, "172.20.1.1").await?;
+    tracing::info!(%bmc_mac, %assigned_ip, "Switch BMC announced; registering mock");
+    bmc_mock_registry.write().await.insert(assigned_ip, router);
+
+    // Wait for the explorer to link the expected switch to a managed Switch, then
+    // confirm that Switch is retrievable by its id.
+    let switch_id = switch::wait_for_linked(addrs, &bmc_mac).await?;
+    let found_id = switch::find_by_id(addrs, &switch_id).await?;
+    assert_eq!(
+        found_id, switch_id,
+        "FindSwitchesByIds should return the linked switch"
+    );
+
+    tracing::info!(%bmc_mac, %switch_id, "Switch discovery test passed");
+    Ok(())
 }
 
 // Get the current number of rows in the dns_records view,
