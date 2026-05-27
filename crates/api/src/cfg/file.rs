@@ -2352,6 +2352,8 @@ mod tests {
             dpu_up_threshold: Duration::weeks(1),
             scout_reporting_timeout: Duration::minutes(5),
             uefi_boot_wait: Duration::minutes(5),
+            max_bios_config_retries: 3,
+            polling_bios_setup_stuck_threshold: Duration::minutes(15),
         };
 
         let config_str = serde_json::to_string(&input).unwrap();
@@ -2395,6 +2397,8 @@ mod tests {
                 dpu_up_threshold: Duration::weeks(1),
                 scout_reporting_timeout: Duration::minutes(5),
                 uefi_boot_wait: Duration::minutes(5),
+                max_bios_config_retries: 3,
+                polling_bios_setup_stuck_threshold: Duration::minutes(15),
             }
         );
     }
@@ -2415,6 +2419,8 @@ mod tests {
                 dpu_up_threshold: Duration::weeks(1),
                 scout_reporting_timeout: Duration::minutes(5),
                 uefi_boot_wait: Duration::minutes(5),
+                max_bios_config_retries: 3,
+                polling_bios_setup_stuck_threshold: Duration::minutes(15),
             }
         );
     }
@@ -2707,6 +2713,8 @@ mod tests {
                 dpu_up_threshold: Duration::minutes(77),
                 scout_reporting_timeout: Duration::minutes(5),
                 uefi_boot_wait: Duration::minutes(5),
+                max_bios_config_retries: 3,
+                polling_bios_setup_stuck_threshold: Duration::minutes(15),
             }
         );
         assert_eq!(
@@ -2892,6 +2900,8 @@ mod tests {
                 dpu_up_threshold: Duration::minutes(33),
                 scout_reporting_timeout: Duration::minutes(20),
                 uefi_boot_wait: Duration::minutes(5),
+                max_bios_config_retries: 3,
+                polling_bios_setup_stuck_threshold: Duration::minutes(15),
             }
         );
         assert_eq!(
@@ -3201,6 +3211,8 @@ mod tests {
                 dpu_up_threshold: Duration::minutes(77),
                 scout_reporting_timeout: Duration::minutes(20),
                 uefi_boot_wait: Duration::minutes(5),
+                max_bios_config_retries: 3,
+                polling_bios_setup_stuck_threshold: Duration::minutes(15),
             }
         );
         assert_eq!(

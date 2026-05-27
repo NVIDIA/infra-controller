@@ -4952,11 +4952,11 @@ impl StateHandler for HostMachineStateHandler {
                         .services
                         .create_redfish_client_from_machine(&mh_snapshot.host_snapshot)
                         .await?;
-
                     match advance_polling_bios_setup(
                         redfish_client.as_ref(),
                         mh_snapshot,
                         *retry_count,
+                        &ctx.services.site_config.machine_state_controller,
                     )
                     .await?
                     {
@@ -10085,8 +10085,13 @@ async fn handle_instance_host_platform_config(
                 },
             };
 
-            match advance_polling_bios_setup(redfish_client.as_ref(), mh_snapshot, retry_count)
-                .await?
+            match advance_polling_bios_setup(
+                redfish_client.as_ref(),
+                mh_snapshot,
+                retry_count,
+                &ctx.services.site_config.machine_state_controller,
+            )
+            .await?
             {
                 PollingBiosSetupOutcome::Verified => next_instance_state,
                 PollingBiosSetupOutcome::EnterRecovery(bios_config_info) => {

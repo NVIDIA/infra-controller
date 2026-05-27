@@ -17,6 +17,7 @@
 
 //! BIOS configuration: machine_setup, Dell job wait/recovery, and PollingBiosSetup escalation.
 
+use carbide_redfish::libredfish::error::state_handler_redfish_error as redfish_error;
 use chrono::Utc;
 use eyre::eyre;
 use libredfish::{Redfish, SystemPowerControl};
@@ -28,7 +29,7 @@ use super::{
     ReachabilityParams, RebootStatus, call_machine_setup_and_handle_no_dpu_error,
     handler_host_power_control, trigger_reboot_if_needed,
 };
-use crate::state_controller::external_service_error::redfish_error;
+use crate::state_controller::machine::config::MachineStateControllerConfig;
 use crate::state_controller::machine::context::MachineStateHandlerContextObjects;
 use crate::state_controller::state_handler::{
     StateHandlerContext, StateHandlerError, StateHandlerOutcome,
@@ -80,16 +81,6 @@ impl From<BiosRecoveryAttemptOutcome> for BiosConfigJobAdvanceOutcome {
         }
     }
 }
-
-/// Max configure_host_bios retry cycles through HandleBiosJobFailure recovery (matches boot-order retry budget).
-const MAX_BIOS_CONFIG_RETRIES: u32 = 3;
-
-/// How long PollingBiosSetup may sit on Ok(false) before escalating into HandleBiosJobFailure recovery.
-///
-/// From `machine_state_history` (4 sites, ~4500 samples): HostInit/PollingBiosSetup usually
-/// finishes within ~11 min p95; wedged hosts sit 90+ min. 15 min keeps the first recovery attempt
-/// inside the 30-min HOST_INIT SLA.
-const POLLING_BIOS_SETUP_STUCK_THRESHOLD: chrono::Duration = chrono::Duration::minutes(15);
 
 pub(super) async fn configure_host_bios(
     ctx: &mut StateHandlerContext<'_, MachineStateHandlerContextObjects>,
@@ -168,6 +159,7 @@ pub(super) async fn advance_bios_config_job(
     mh_snapshot: &ManagedHostStateSnapshot,
     info: BiosConfigInfo,
 ) -> Result<BiosConfigJobAdvanceOutcome, StateHandlerError> {
+    let machine_controller_config = &ctx.services.site_config.machine_state_controller;
     match info.bios_config_state {
         BiosConfigState::WaitForBiosJobScheduled => {
             let job_id = info.bios_job_id.as_ref().ok_or_else(|| {
@@ -190,9 +182,13 @@ pub(super) async fn advance_bios_config_job(
                     %failure,
                     "transitioning to HandleBiosJobFailure (power cycle + BMC reset)"
                 );
-                return Ok(
-                    try_bios_recovery_attempt(info.retry_count, info.bios_job_id, failure)?.into(),
-                );
+                return Ok(try_bios_recovery_attempt(
+                    machine_controller_config,
+                    info.retry_count,
+                    info.bios_job_id,
+                    failure,
+                )?
+                .into());
             }
             if !matches!(job_state, libredfish::JobState::Scheduled) {
                 return Err(StateHandlerError::GenericError(eyre!(
@@ -243,6 +239,7 @@ pub(super) async fn advance_bios_config_job(
                         "transitioning to HandleBiosJobFailure (power cycle + BMC reset)"
                     );
                     return Ok(try_bios_recovery_attempt(
+                        machine_controller_config,
                         info.retry_count,
                         info.bios_job_id,
                         failure,
@@ -262,10 +259,13 @@ pub(super) async fn advance_bios_config_job(
                         %failure,
                         "transitioning to HandleBiosJobFailure (power cycle + BMC reset)"
                     );
-                    Ok(
-                        try_bios_recovery_attempt(info.retry_count, info.bios_job_id, failure)?
-                            .into(),
-                    )
+                    Ok(try_bios_recovery_attempt(
+                        machine_controller_config,
+                        info.retry_count,
+                        info.bios_job_id,
+                        failure,
+                    )?
+                    .into())
                 }
                 _ => Err(StateHandlerError::GenericError(eyre!(
                     "waiting for BIOS job {:#?} to complete; current state: {job_state:#?}",
@@ -351,20 +351,22 @@ pub(super) async fn advance_bios_config_job(
 
 /// Enter HandleBiosJobFailure recovery, or move to Failed when budget is exhausted.
 fn try_bios_recovery_attempt(
+    machine_controller_config: &MachineStateControllerConfig,
     retry_count: u32,
     bios_job_id: Option<String>,
     failure: String,
 ) -> Result<BiosRecoveryAttemptOutcome, StateHandlerError> {
-    if retry_count >= MAX_BIOS_CONFIG_RETRIES {
+    if retry_count >= machine_controller_config.max_bios_config_retries {
         tracing::warn!(
             retry_count,
-            max_retries = MAX_BIOS_CONFIG_RETRIES,
+            max_retries = machine_controller_config.max_bios_config_retries,
             %failure,
             "BIOS recovery budget exhausted; moving host to Failed for manual remediation"
         );
         return Ok(BiosRecoveryAttemptOutcome::Failed {
             failure: format!(
-                "{failure} (automated BIOS recovery exhausted after {MAX_BIOS_CONFIG_RETRIES} attempts)"
+                "{failure} (automated BIOS recovery exhausted after {} attempts)",
+                machine_controller_config.max_bios_config_retries
             ),
         });
     }
@@ -382,6 +384,7 @@ pub(super) async fn advance_polling_bios_setup(
     redfish_client: &dyn Redfish,
     mh_snapshot: &ManagedHostStateSnapshot,
     retry_count: u32,
+    machine_controller_config: &MachineStateControllerConfig,
 ) -> Result<PollingBiosSetupOutcome, StateHandlerError> {
     let boot_interface_mac = mh_snapshot.boot_interface_mac().map(|m| m.to_string());
     let stuck_for = mh_snapshot.host_snapshot.state.version.since_state_change();
@@ -395,7 +398,11 @@ pub(super) async fn advance_polling_bios_setup(
             Ok(PollingBiosSetupOutcome::Verified)
         }
         Ok(false) => {
-            if let Some(outcome) = escalate_stuck_polling_bios_setup(retry_count, stuck_for)? {
+            if let Some(outcome) = escalate_stuck_polling_bios_setup(
+                machine_controller_config,
+                retry_count,
+                stuck_for,
+            )? {
                 return Ok(outcome);
             }
             Ok(PollingBiosSetupOutcome::Wait(format!(
@@ -415,10 +422,11 @@ pub(super) async fn advance_polling_bios_setup(
 }
 
 fn escalate_stuck_polling_bios_setup(
+    machine_controller_config: &MachineStateControllerConfig,
     retry_count: u32,
     stuck_for: chrono::Duration,
 ) -> Result<Option<PollingBiosSetupOutcome>, StateHandlerError> {
-    if stuck_for <= POLLING_BIOS_SETUP_STUCK_THRESHOLD {
+    if stuck_for <= machine_controller_config.polling_bios_setup_stuck_threshold {
         return Ok(None);
     }
 
@@ -434,7 +442,7 @@ fn escalate_stuck_polling_bios_setup(
     );
 
     Ok(Some(
-        match try_bios_recovery_attempt(retry_count, None, failure)? {
+        match try_bios_recovery_attempt(machine_controller_config, retry_count, None, failure)? {
             BiosRecoveryAttemptOutcome::Continue(info) => {
                 PollingBiosSetupOutcome::EnterRecovery(info)
             }
@@ -480,16 +488,27 @@ mod tests {
 
     #[test]
     fn escalate_stuck_polling_bios_setup_not_triggered_before_threshold() {
-        let result = escalate_stuck_polling_bios_setup(0, chrono::Duration::minutes(10)).unwrap();
+        let machine_controller_config = MachineStateControllerConfig::default();
+        let result = escalate_stuck_polling_bios_setup(
+            &machine_controller_config,
+            0,
+            chrono::Duration::minutes(10),
+        )
+        .unwrap();
 
         assert!(result.is_none());
     }
 
     #[test]
     fn escalate_stuck_polling_bios_setup_enters_handle_bios_job_failure_when_stuck() {
-        let info = escalate_stuck_polling_bios_setup(0, chrono::Duration::minutes(16))
-            .unwrap()
-            .expect("recovery should be triggered");
+        let machine_controller_config = MachineStateControllerConfig::default();
+        let info = escalate_stuck_polling_bios_setup(
+            &machine_controller_config,
+            0,
+            chrono::Duration::minutes(16),
+        )
+        .unwrap()
+        .expect("recovery should be triggered");
         let PollingBiosSetupOutcome::EnterRecovery(info) = info else {
             panic!("expected EnterRecovery");
         };
@@ -506,8 +525,10 @@ mod tests {
 
     #[test]
     fn escalate_stuck_polling_bios_setup_respects_shared_retry_budget() {
+        let machine_controller_config = MachineStateControllerConfig::default();
         let result = escalate_stuck_polling_bios_setup(
-            MAX_BIOS_CONFIG_RETRIES,
+            &machine_controller_config,
+            machine_controller_config.max_bios_config_retries,
             chrono::Duration::minutes(20),
         )
         .unwrap()
@@ -518,8 +539,10 @@ mod tests {
 
     #[test]
     fn try_bios_recovery_attempt_fails_when_budget_exhausted() {
+        let machine_controller_config = MachineStateControllerConfig::default();
         let result = try_bios_recovery_attempt(
-            MAX_BIOS_CONFIG_RETRIES,
+            &machine_controller_config,
+            machine_controller_config.max_bios_config_retries,
             Some("job-1".to_string()),
             "job failed".to_string(),
         )
@@ -530,8 +553,10 @@ mod tests {
 
     #[test]
     fn escalate_stuck_polling_bios_setup_allows_last_budgeted_attempt() {
+        let machine_controller_config = MachineStateControllerConfig::default();
         let outcome = escalate_stuck_polling_bios_setup(
-            MAX_BIOS_CONFIG_RETRIES - 1,
+            &machine_controller_config,
+            machine_controller_config.max_bios_config_retries - 1,
             chrono::Duration::minutes(20),
         )
         .unwrap()
@@ -540,6 +565,9 @@ mod tests {
         let PollingBiosSetupOutcome::EnterRecovery(info) = outcome else {
             panic!("expected EnterRecovery");
         };
-        assert_eq!(info.retry_count, MAX_BIOS_CONFIG_RETRIES);
+        assert_eq!(
+            info.retry_count,
+            machine_controller_config.max_bios_config_retries
+        );
     }
 }

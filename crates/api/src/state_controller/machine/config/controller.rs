@@ -70,6 +70,17 @@ pub struct MachineStateControllerConfig {
         serialize_with = "as_duration"
     )]
     pub uefi_boot_wait: Duration,
+    /// Max configure_host_bios retry cycles through HandleBiosJobFailure recovery.
+    #[serde(default = "MachineStateControllerConfig::max_bios_config_retries_default")]
+    pub max_bios_config_retries: u32,
+    /// How long PollingBiosSetup may sit on Ok(false) before escalating into
+    /// HandleBiosJobFailure recovery.
+    #[serde(
+        default = "MachineStateControllerConfig::polling_bios_setup_stuck_threshold_default",
+        deserialize_with = "deserialize_duration_chrono",
+        serialize_with = "as_duration"
+    )]
+    pub polling_bios_setup_stuck_threshold: Duration,
 }
 
 impl MachineStateControllerConfig {
@@ -96,6 +107,14 @@ impl MachineStateControllerConfig {
     pub fn uefi_boot_wait_default() -> Duration {
         Duration::minutes(5)
     }
+
+    pub fn max_bios_config_retries_default() -> u32 {
+        3
+    }
+
+    pub fn polling_bios_setup_stuck_threshold_default() -> Duration {
+        Duration::minutes(15)
+    }
 }
 
 impl Default for MachineStateControllerConfig {
@@ -109,6 +128,10 @@ impl Default for MachineStateControllerConfig {
             scout_reporting_timeout: MachineStateControllerConfig::scout_reporting_timeout_default(
             ),
             uefi_boot_wait: MachineStateControllerConfig::uefi_boot_wait_default(),
+            max_bios_config_retries: MachineStateControllerConfig::max_bios_config_retries_default(
+            ),
+            polling_bios_setup_stuck_threshold:
+                MachineStateControllerConfig::polling_bios_setup_stuck_threshold_default(),
         }
     }
 }
