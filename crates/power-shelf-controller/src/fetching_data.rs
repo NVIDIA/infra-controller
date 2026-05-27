@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-//! Handler for PowerShelfControllerState::Initializing.
+//! Handler for PowerShelfControllerState::FetchingData.
 
 use carbide_uuid::power_shelf::PowerShelfId;
 use model::power_shelf::{PowerShelf, PowerShelfControllerState};
@@ -23,24 +23,23 @@ use state_controller::state_handler::{
     StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
 
-use crate::state_controller::power_shelf::context::PowerShelfStateHandlerContextObjects;
+use crate::context::PowerShelfStateHandlerContextObjects;
 
-/// Handles the Initializing state for a power shelf.
+/// Handles the FetchingData state for a power shelf.
 ///
-/// TODO: Implement real initialization logic. This would typically involve:
-/// 1. Validating the PowerShelf configuration
-/// 2. Allocating resources
-/// 3. Setting up the PowerShelf in the power management system
-pub async fn handle_initializing(
+/// TODO: Implement real fetching logic. This would typically involve:
+/// 1. Fetching data from the PowerShelf
+/// 2. Updating the PowerShelf status
+pub async fn handle_fetching_data(
     power_shelf_id: &PowerShelfId,
     _state: &mut PowerShelf,
     _ctx: &mut StateHandlerContext<'_, PowerShelfStateHandlerContextObjects>,
 ) -> Result<StateHandlerOutcome<PowerShelfControllerState>, StateHandlerError> {
     tracing::info!(
-        "PowerShelf {} initializing, transitioning to FetchingData",
+        "Fetching PowerShelf {} data, transitioning to Configuring",
         power_shelf_id
     );
     Ok(StateHandlerOutcome::transition(
-        PowerShelfControllerState::FetchingData,
+        PowerShelfControllerState::Configuring,
     ))
 }

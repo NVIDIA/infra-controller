@@ -1190,6 +1190,7 @@ dependencies = [
  "carbide-network",
  "carbide-network-segment-controller",
  "carbide-nvlink-manager",
+ "carbide-power-shelf-controller",
  "carbide-preingestion-manager",
  "carbide-prost-builder",
  "carbide-rack",
@@ -2338,6 +2339,28 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "carbide-power-shelf-controller"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "carbide-api-db",
+ "carbide-api-model",
+ "carbide-health-metrics",
+ "carbide-rack",
+ "carbide-secrets",
+ "carbide-utils",
+ "carbide-uuid",
+ "config-version",
+ "eyre",
+ "librms",
+ "mac_address",
+ "opentelemetry",
+ "sqlx",
+ "state-controller",
+ "tracing",
 ]
 
 [[package]]

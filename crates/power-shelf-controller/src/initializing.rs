@@ -15,29 +15,32 @@
  * limitations under the License.
  */
 
-//! Handler for PowerShelfControllerState::Deleting.
+//! Handler for PowerShelfControllerState::Initializing.
 
 use carbide_uuid::power_shelf::PowerShelfId;
-use db::power_shelf as db_power_shelf;
 use model::power_shelf::{PowerShelf, PowerShelfControllerState};
 use state_controller::state_handler::{
     StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
 
-use crate::state_controller::power_shelf::context::PowerShelfStateHandlerContextObjects;
+use crate::context::PowerShelfStateHandlerContextObjects;
 
-/// Handles the Deleting state for a power shelf.
+/// Handles the Initializing state for a power shelf.
 ///
-/// TODO: Implement full deletion logic (verify the shelf is not in use,
-/// safely shut it down, release allocated resources). For now this just
-/// deletes the row from the database.
-pub async fn handle_deleting(
+/// TODO: Implement real initialization logic. This would typically involve:
+/// 1. Validating the PowerShelf configuration
+/// 2. Allocating resources
+/// 3. Setting up the PowerShelf in the power management system
+pub async fn handle_initializing(
     power_shelf_id: &PowerShelfId,
     _state: &mut PowerShelf,
-    ctx: &mut StateHandlerContext<'_, PowerShelfStateHandlerContextObjects>,
+    _ctx: &mut StateHandlerContext<'_, PowerShelfStateHandlerContextObjects>,
 ) -> Result<StateHandlerOutcome<PowerShelfControllerState>, StateHandlerError> {
-    tracing::info!("Deleting PowerShelf {}", power_shelf_id);
-    let mut txn = ctx.services.db_pool.begin().await?;
-    db_power_shelf::final_delete(*power_shelf_id, &mut txn).await?;
-    Ok(StateHandlerOutcome::deleted().with_txn(txn))
+    tracing::info!(
+        "PowerShelf {} initializing, transitioning to FetchingData",
+        power_shelf_id
+    );
+    Ok(StateHandlerOutcome::transition(
+        PowerShelfControllerState::FetchingData,
+    ))
 }

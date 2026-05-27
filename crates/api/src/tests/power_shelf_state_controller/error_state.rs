@@ -19,6 +19,11 @@
 
 use std::sync::Arc;
 
+use carbide_power_shelf_controller::context::{
+    PowerShelfStateHandlerContextObjects, PowerShelfStateHandlerServices,
+};
+use carbide_power_shelf_controller::handler::PowerShelfStateHandler;
+use carbide_power_shelf_controller::metrics::PowerShelfMetrics;
 use carbide_uuid::power_shelf::PowerShelfId;
 use db::power_shelf as db_power_shelf;
 use forge_secrets::credentials::TestCredentialManager;
@@ -26,11 +31,6 @@ use model::power_shelf::{PowerShelf, PowerShelfControllerState, PowerShelfMainte
 use sqlx::PgConnection;
 
 use crate::state_controller::db_write_batch::DbWriteBatch;
-use crate::state_controller::power_shelf::context::{
-    PowerShelfStateHandlerContextObjects, PowerShelfStateHandlerServices,
-};
-use crate::state_controller::power_shelf::handler::PowerShelfStateHandler;
-use crate::state_controller::power_shelf::metrics::PowerShelfMetrics;
 use crate::state_controller::state_handler::{
     StateHandler, StateHandlerContext, StateHandlerOutcome,
 };

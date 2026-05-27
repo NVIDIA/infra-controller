@@ -450,10 +450,8 @@ fn build_switch_device_info_request(
     }
 }
 
-#[cfg(not(test))]
 const NMX_CONFIGURE_RMS_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
-#[cfg(not(test))]
 fn build_nmx_configure_rms_client(rms_config: &RmsConfig) -> Option<librms::RackManagerApi> {
     let url = rms_config
         .api_url
@@ -468,11 +466,6 @@ fn build_nmx_configure_rms_client(rms_config: &RmsConfig) -> Option<librms::Rack
     rms_client_config.connect_timeout = Some(NMX_CONFIGURE_RMS_CONNECT_TIMEOUT);
     let rms_api_config = librms::client::RmsApiConfig::new(url, &rms_client_config);
     Some(librms::RackManagerApi::new(&rms_api_config))
-}
-
-#[cfg(test)]
-fn build_nmx_configure_rms_client(_rms_config: &RmsConfig) -> Option<librms::RackManagerApi> {
-    None
 }
 
 fn rms_component_filters_from_components(

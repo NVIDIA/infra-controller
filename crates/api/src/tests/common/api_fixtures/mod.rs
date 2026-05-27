@@ -39,6 +39,9 @@ use carbide_network_segment_controller::io::NetworkSegmentStateControllerIO;
 use carbide_nvlink_manager::NvlPartitionMonitor;
 use carbide_nvlink_manager::config::NvLinkConfig;
 use carbide_nvlink_manager::nvlink::test_support::NmxcSimClient;
+use carbide_power_shelf_controller::context::PowerShelfStateHandlerServices;
+use carbide_power_shelf_controller::handler::PowerShelfStateHandler;
+use carbide_power_shelf_controller::io::PowerShelfStateControllerIO;
 use carbide_rack::rms_client::test_support::RmsSim;
 use carbide_rack_controller::config::{RackConfig, RackValidationConfig, RmsConfig};
 use carbide_rack_controller::context::RackStateHandlerServices;
@@ -139,9 +142,6 @@ use crate::state_controller::machine::handler::{
     MachineStateHandler, MachineStateHandlerBuilder, PowerOptionConfig, ReachabilityParams,
 };
 use crate::state_controller::machine::io::MachineStateControllerIO;
-use crate::state_controller::power_shelf::context::PowerShelfStateHandlerServices;
-use crate::state_controller::power_shelf::handler::PowerShelfStateHandler;
-use crate::state_controller::power_shelf::io::PowerShelfStateControllerIO;
 use crate::state_controller::state_handler::{
     StateHandler, StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
@@ -1324,12 +1324,7 @@ pub fn get_config() -> CarbideConfig {
         }),
         mlxconfig_profiles: None,
         rack_management_enabled: false,
-        rms: RmsConfig {
-            api_url: Some(
-                SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080).to_string(),
-            ),
-            ..Default::default()
-        },
+        rms: RmsConfig::default(),
         rack_profiles: Default::default(),
         spdm_state_controller: SpdmStateControllerConfig {
             controller: StateControllerConfig::default(),

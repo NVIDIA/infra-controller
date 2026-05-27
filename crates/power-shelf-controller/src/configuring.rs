@@ -23,7 +23,7 @@ use state_controller::state_handler::{
     StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
 
-use crate::state_controller::power_shelf::context::PowerShelfStateHandlerContextObjects;
+use crate::context::PowerShelfStateHandlerContextObjects;
 
 /// Handles the Configuring state for a power shelf.
 ///

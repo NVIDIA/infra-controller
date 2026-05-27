@@ -31,7 +31,7 @@ use state_controller::state_handler::{
     StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
 
-use crate::state_controller::power_shelf::context::PowerShelfStateHandlerContextObjects;
+use crate::context::PowerShelfStateHandlerContextObjects;
 
 /// Default BMC HTTPS port used when populating `rms::BmcEndpoint` for power
 /// shelves. Mirrors the value used by `crate::rack::firmware_update`.

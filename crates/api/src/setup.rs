@@ -37,6 +37,9 @@ use carbide_network_segment_controller::context::NetworkSegmentStateHandlerServi
 use carbide_network_segment_controller::handler::NetworkSegmentStateHandler;
 use carbide_network_segment_controller::io::NetworkSegmentStateControllerIO;
 use carbide_nvlink_manager::NvlPartitionMonitor;
+use carbide_power_shelf_controller::context::PowerShelfStateHandlerServices;
+use carbide_power_shelf_controller::handler::PowerShelfStateHandler;
+use carbide_power_shelf_controller::io::PowerShelfStateControllerIO;
 use carbide_preingestion_manager::PreingestionManager;
 use carbide_rack::bms_client::BmsDsxExchangeHandle;
 use carbide_rack_controller::config::RackConfig;
@@ -101,9 +104,6 @@ use crate::state_controller::controller::{Enqueuer, StateController};
 use crate::state_controller::machine::context::MachineStateHandlerServices;
 use crate::state_controller::machine::handler::MachineStateHandlerBuilder;
 use crate::state_controller::machine::io::MachineStateControllerIO;
-use crate::state_controller::power_shelf::context::PowerShelfStateHandlerServices;
-use crate::state_controller::power_shelf::handler::PowerShelfStateHandler;
-use crate::state_controller::power_shelf::io::PowerShelfStateControllerIO;
 use crate::state_controller::state_change_emitter::StateChangeEmitterBuilder;
 use crate::{attestation, db_init, ethernet_virtualization, listener};
 

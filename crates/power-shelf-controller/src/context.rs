@@ -22,7 +22,7 @@ use librms::RmsApi;
 use sqlx::PgPool;
 use state_controller::state_handler::StateHandlerContextObjects;
 
-use crate::state_controller::power_shelf::metrics::PowerShelfMetrics;
+use crate::metrics::PowerShelfMetrics;
 
 pub struct PowerShelfStateHandlerContextObjects {}
 

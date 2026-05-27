@@ -42,6 +42,7 @@ carbide-mqtt-common = { path = "../mqtt-common" }
 carbide-network = { path = "../network", features = ["sqlx"] }
 carbide-rack = { path = "../rack" }
 carbide-rack-controller = { path = "../rack-controller" }
+carbide-power-shelf-controller = { path = "../power-shelf-controller" }
 carbide-secrets = { path = "../secrets" }
 carbide-version = { path = "../version" }
 carbide-firmware = { path = "../firmware" }

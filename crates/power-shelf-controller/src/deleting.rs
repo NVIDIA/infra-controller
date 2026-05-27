@@ -15,31 +15,29 @@
  * limitations under the License.
  */
 
-//! Handler for PowerShelfControllerState::FetchingData.
+//! Handler for PowerShelfControllerState::Deleting.
 
 use carbide_uuid::power_shelf::PowerShelfId;
+use db::power_shelf as db_power_shelf;
 use model::power_shelf::{PowerShelf, PowerShelfControllerState};
 use state_controller::state_handler::{
     StateHandlerContext, StateHandlerError, StateHandlerOutcome,
 };
 
-use crate::state_controller::power_shelf::context::PowerShelfStateHandlerContextObjects;
+use crate::context::PowerShelfStateHandlerContextObjects;
 
-/// Handles the FetchingData state for a power shelf.
+/// Handles the Deleting state for a power shelf.
 ///
-/// TODO: Implement real fetching logic. This would typically involve:
-/// 1. Fetching data from the PowerShelf
-/// 2. Updating the PowerShelf status
-pub async fn handle_fetching_data(
+/// TODO: Implement full deletion logic (verify the shelf is not in use,
+/// safely shut it down, release allocated resources). For now this just
+/// deletes the row from the database.
+pub async fn handle_deleting(
     power_shelf_id: &PowerShelfId,
     _state: &mut PowerShelf,
-    _ctx: &mut StateHandlerContext<'_, PowerShelfStateHandlerContextObjects>,
+    ctx: &mut StateHandlerContext<'_, PowerShelfStateHandlerContextObjects>,
 ) -> Result<StateHandlerOutcome<PowerShelfControllerState>, StateHandlerError> {
-    tracing::info!(
-        "Fetching PowerShelf {} data, transitioning to Configuring",
-        power_shelf_id
-    );
-    Ok(StateHandlerOutcome::transition(
-        PowerShelfControllerState::Configuring,
-    ))
+    tracing::info!("Deleting PowerShelf {}", power_shelf_id);
+    let mut txn = ctx.services.db_pool.begin().await?;
+    db_power_shelf::final_delete(*power_shelf_id, &mut txn).await?;
+    Ok(StateHandlerOutcome::deleted().with_txn(txn))
 }
