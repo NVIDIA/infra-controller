@@ -900,6 +900,13 @@ impl Forge for Api {
         crate::handlers::credential::get_bmc_credentals(self, request).await
     }
 
+    async fn get_switch_nvos_credentials(
+        &self,
+        request: Request<rpc::GetSwitchNvosCredentialsRequest>,
+    ) -> Result<Response<rpc::GetBmcCredentialsResponse>, Status> {
+        crate::handlers::credential::get_switch_nvos_credentials(self, request).await
+    }
+
     /// Network status of each managed host, as reported by forge-dpu-agent.
     /// For use by forge-admin-cli
     ///
@@ -1509,62 +1516,6 @@ impl Forge for Api {
         request: Request<rpc::BatchExpectedMachineOperationRequest>,
     ) -> Result<Response<rpc::BatchExpectedMachineOperationResponse>, Status> {
         crate::handlers::expected_machine::update_expected_machines(self, request).await
-    }
-
-    async fn create_rack_firmware(
-        &self,
-        request: tonic::Request<rpc::RackFirmwareCreateRequest>,
-    ) -> Result<Response<rpc::RackFirmware>, tonic::Status> {
-        crate::handlers::rack_firmware::create(self, request).await
-    }
-
-    async fn get_rack_firmware(
-        &self,
-        request: tonic::Request<rpc::RackFirmwareGetRequest>,
-    ) -> Result<Response<rpc::RackFirmware>, tonic::Status> {
-        crate::handlers::rack_firmware::get(self, request).await
-    }
-
-    async fn list_rack_firmware(
-        &self,
-        request: tonic::Request<rpc::RackFirmwareSearchFilter>,
-    ) -> Result<Response<rpc::RackFirmwareList>, tonic::Status> {
-        crate::handlers::rack_firmware::list(self, request).await
-    }
-
-    async fn delete_rack_firmware(
-        &self,
-        request: tonic::Request<rpc::RackFirmwareDeleteRequest>,
-    ) -> Result<Response<()>, tonic::Status> {
-        crate::handlers::rack_firmware::delete(self, request).await
-    }
-
-    async fn apply_rack_firmware(
-        &self,
-        request: tonic::Request<rpc::RackFirmwareApplyRequest>,
-    ) -> Result<Response<rpc::RackFirmwareApplyResponse>, tonic::Status> {
-        crate::handlers::rack_firmware::apply(self, request).await
-    }
-
-    async fn get_rack_firmware_job_status(
-        &self,
-        request: tonic::Request<rpc::RackFirmwareJobStatusRequest>,
-    ) -> Result<Response<rpc::RackFirmwareJobStatusResponse>, tonic::Status> {
-        crate::handlers::rack_firmware::get_job_status(self, request).await
-    }
-
-    async fn get_rack_firmware_history(
-        &self,
-        request: tonic::Request<rpc::RackFirmwareHistoryRequest>,
-    ) -> Result<Response<rpc::RackFirmwareHistoryResponse>, tonic::Status> {
-        crate::handlers::rack_firmware::get_history(self, request).await
-    }
-
-    async fn rack_firmware_set_default(
-        &self,
-        request: tonic::Request<rpc::RackFirmwareSetDefaultRequest>,
-    ) -> Result<Response<()>, tonic::Status> {
-        crate::handlers::rack_firmware::set_default(self, request).await
     }
 
     async fn get_expected_power_shelf(

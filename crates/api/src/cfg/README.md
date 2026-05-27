@@ -82,7 +82,6 @@ applicable.
 | `vmaas_config` | `Option<VmaasConfig>` | — | VMaaS configuration for VM system integration (see [VmaasConfig](#vmaasconfig)). |
 | `mlxconfig_profiles` | `Option<HashMap<String, MlxConfigProfile>>` | — | Named Mellanox NIC register configuration profiles for superNIC firmware flashing. TOML key: `mlx-config-profiles`. |
 | `rack_management_enabled` | `bool` | `false` | Standalone infrastructure manager mode for GB200/GB300/VR144. See doc comment for full behavioral changes. |
-| `force_dpu_nic_mode` | `bool` | `false` | Treat DPUs as regular NICs (skip managed DPU config). For dev labs with BF DPUs. |
 | `rms` | `RmsConfig` | *(see below)* | Rack Manager Service configuration for API connectivity and mTLS (see [RmsConfig](#rmsconfig)). |
 | `rack_profiles` | `RackProfileConfig` | *(default)* | Rack profile definitions referenced by expected racks. |
 | `spdm` | `SpdmConfig` | *(see below)* | SPDM hardware attestation (see [SpdmConfig](#spdmconfig)). |

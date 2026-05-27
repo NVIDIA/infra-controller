@@ -123,6 +123,17 @@ pub struct StaticPowerShelfEndpoint {
     pub serial: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StaticSwitchEndpointRole {
+    Bmc,
+    Host,
+}
+
+fn default_static_switch_endpoint_role() -> StaticSwitchEndpointRole {
+    StaticSwitchEndpointRole::Host
+}
+
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct StaticSwitchEndpoint {
@@ -130,6 +141,12 @@ pub struct StaticSwitchEndpoint {
     pub serial: Option<String>,
     pub slot_number: Option<i32>,
     pub tray_index: Option<i32>,
+    #[serde(default = "default_static_switch_endpoint_role")]
+    pub endpoint_role: StaticSwitchEndpointRole,
+    #[serde(default)]
+    pub is_primary: bool,
+    #[serde(default)]
+    pub nmxt_enabled: Option<bool>,
 }
 
 impl Debug for StaticBmcEndpoint {
@@ -1450,6 +1467,66 @@ power_shelf = { id = "fps100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1
     }
 
     #[test]
+    fn test_static_switch_host_accepts_primary_without_nmxt_override() {
+        let toml_content = r#"
+[endpoint_sources.carbide_api]
+enabled = false
+
+[[endpoint_sources.static_bmc_endpoints]]
+ip = "10.0.1.1"
+mac = "11:22:33:44:55:66"
+username = "admin"
+password = "pass"
+switch = { id = "fsw100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0", serial = "SN-SW-001", endpoint_role = "host", is_primary = true }
+"#;
+
+        let config: Config = Figment::new()
+            .merge(Serialized::defaults(Config::default()))
+            .merge(Toml::string(toml_content))
+            .extract()
+            .expect("static switch host config should parse");
+
+        let switch = config.endpoint_sources.static_bmc_endpoints[0]
+            .switch
+            .as_ref()
+            .expect("switch metadata");
+
+        assert_eq!(switch.endpoint_role, StaticSwitchEndpointRole::Host);
+        assert!(switch.is_primary);
+        assert_eq!(switch.nmxt_enabled, None);
+    }
+
+    #[test]
+    fn test_static_switch_host_accepts_nmxt_override() {
+        let toml_content = r#"
+[endpoint_sources.carbide_api]
+enabled = false
+
+[[endpoint_sources.static_bmc_endpoints]]
+ip = "10.0.1.2"
+mac = "11:22:33:44:55:77"
+username = "admin"
+password = "pass"
+switch = { id = "fsw100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0", serial = "SN-SW-002", endpoint_role = "host", is_primary = false, nmxt_enabled = true }
+"#;
+
+        let config: Config = Figment::new()
+            .merge(Serialized::defaults(Config::default()))
+            .merge(Toml::string(toml_content))
+            .extract()
+            .expect("static switch host config should parse");
+
+        let switch = config.endpoint_sources.static_bmc_endpoints[0]
+            .switch
+            .as_ref()
+            .expect("switch metadata");
+
+        assert_eq!(switch.endpoint_role, StaticSwitchEndpointRole::Host);
+        assert!(!switch.is_primary);
+        assert_eq!(switch.nmxt_enabled, Some(true));
+    }
+
+    #[test]
     fn test_static_machine_endpoint_accepts_placement_and_nvlink_metadata() {
         let toml_content = r#"
 [endpoint_sources.carbide_api]
@@ -1517,7 +1594,7 @@ switch = { serial = "SN-SW-001" }
             .extract()
             .expect("could not parse config toml file");
 
-        assert_eq!(config.endpoint_sources.static_bmc_endpoints.len(), 3);
+        assert_eq!(config.endpoint_sources.static_bmc_endpoints.len(), 4);
         assert!(
             config.endpoint_sources.static_bmc_endpoints[0]
                 .switch
@@ -1546,17 +1623,38 @@ switch = { serial = "SN-SW-001" }
                 .switch
                 .as_ref()
                 .and_then(|switch| switch.serial.as_deref()),
-            Some("SN-SWITCH-001")
+            Some("SN-SWITCH-BMC-001")
+        );
+        assert_eq!(
+            config.endpoint_sources.static_bmc_endpoints[1]
+                .switch
+                .as_ref()
+                .map(|switch| switch.endpoint_role),
+            Some(StaticSwitchEndpointRole::Bmc)
         );
         assert_eq!(
             config.endpoint_sources.static_bmc_endpoints[2]
+                .switch
+                .as_ref()
+                .and_then(|switch| switch.serial.as_deref()),
+            Some("SN-SWITCH-HOST-001")
+        );
+        assert_eq!(
+            config.endpoint_sources.static_bmc_endpoints[2]
+                .switch
+                .as_ref()
+                .map(|switch| switch.endpoint_role),
+            Some(StaticSwitchEndpointRole::Host)
+        );
+        assert_eq!(
+            config.endpoint_sources.static_bmc_endpoints[3]
                 .power_shelf
                 .as_ref()
                 .and_then(|power_shelf| power_shelf.id.as_deref()),
             Some("fps100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0")
         );
         assert_eq!(
-            config.endpoint_sources.static_bmc_endpoints[2]
+            config.endpoint_sources.static_bmc_endpoints[3]
                 .power_shelf
                 .as_ref()
                 .and_then(|power_shelf| power_shelf.serial.as_deref()),

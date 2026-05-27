@@ -394,7 +394,7 @@ impl Redfish for RedfishSimClient {
         &'a self,
         _target: libredfish::Boot,
     ) -> libredfish::RedfishFuture<'a, Result<(), RedfishError>> {
-        Box::pin(async move { todo!() })
+        Box::pin(async move { Ok(()) })
     }
 
     fn set_boot_override<'a>(

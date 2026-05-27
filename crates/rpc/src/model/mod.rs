@@ -53,7 +53,6 @@ pub mod os;
 pub mod power_manager;
 pub mod power_shelf;
 pub mod rack;
-pub mod rack_firmware;
 pub mod rack_type;
 pub mod redfish;
 pub mod resource_pool;

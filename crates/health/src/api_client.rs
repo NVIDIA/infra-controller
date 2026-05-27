@@ -21,6 +21,7 @@ use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 
 use carbide_uuid::rack::RackId;
+use carbide_uuid::switch::SwitchId;
 use forge_tls::client_config::ClientCert;
 use mac_address::MacAddress;
 use rpc::forge::MachineSearchConfig;
@@ -32,7 +33,7 @@ use url::Url;
 use crate::HealthError;
 use crate::endpoint::{
     BmcAddr, BmcCredentials, BmcEndpoint, BoxFuture, CredentialProvider, EndpointMetadata,
-    EndpointSource, MachineData, PowerShelfData, SwitchData,
+    EndpointSource, MachineData, PowerShelfData, SwitchData, SwitchEndpointRole,
 };
 
 #[derive(Clone)]
@@ -44,6 +45,13 @@ pub struct ApiClientWrapper {
 #[derive(Clone)]
 struct ApiCredentialProvider {
     client: ForgeApiClient,
+    kind: ApiCredentialKind,
+}
+
+#[derive(Clone)]
+enum ApiCredentialKind {
+    Bmc,
+    SwitchNvosAdmin { switch_id: SwitchId },
 }
 
 impl CredentialProvider for ApiCredentialProvider {
@@ -52,22 +60,66 @@ impl CredentialProvider for ApiCredentialProvider {
         endpoint: &'a BmcAddr,
     ) -> BoxFuture<'a, Result<BmcCredentials, HealthError>> {
         Box::pin(async move {
-            let request = rpc::forge::GetBmcCredentialsRequest {
-                mac_addr: endpoint.mac.to_string(),
+            let response = match &self.kind {
+                ApiCredentialKind::Bmc => {
+                    let request = rpc::forge::GetBmcCredentialsRequest {
+                        mac_addr: endpoint.mac.to_string(),
+                    };
+
+                    self.client
+                        .get_bmc_credentials(request)
+                        .await
+                        .map_err(HealthError::ApiInvocationError)?
+                }
+                ApiCredentialKind::SwitchNvosAdmin { switch_id } => {
+                    let request = rpc::forge::GetSwitchNvosCredentialsRequest {
+                        switch_id: Some(*switch_id),
+                    };
+
+                    self.client
+                        .get_switch_nvos_credentials(request)
+                        .await
+                        .map_err(HealthError::ApiInvocationError)?
+                }
             };
 
-            self.client
-                .get_bmc_credentials(request)
-                .await
-                .map_err(HealthError::ApiInvocationError)?
+            response
                 .credentials
                 .and_then(|credentials| credentials.r#type)
                 .map(Into::into)
                 .ok_or_else(|| {
-                    HealthError::GenericError("missing BMC credentials in API response".to_string())
+                    HealthError::GenericError("missing credentials in API response".to_string())
                 })
         })
     }
+}
+
+fn switch_endpoint_metadata(
+    switch: &rpc::forge::Switch,
+    endpoint_role: SwitchEndpointRole,
+    nmxt_enabled: bool,
+) -> Result<EndpointMetadata, HealthError> {
+    let serial = switch
+        .config
+        .as_ref()
+        .map(|config| config.name.clone())
+        .ok_or_else(|| HealthError::GenericError("switch endpoint does not have serial".into()))?;
+
+    Ok(EndpointMetadata::Switch(SwitchData {
+        id: switch.id,
+        serial,
+        slot_number: switch
+            .placement_in_rack
+            .as_ref()
+            .and_then(|placement| placement.slot_number),
+        tray_index: switch
+            .placement_in_rack
+            .as_ref()
+            .and_then(|placement| placement.tray_index),
+        endpoint_role,
+        is_primary: switch.is_primary,
+        nmxt_enabled,
+    }))
 }
 
 impl ApiClientWrapper {
@@ -166,6 +218,18 @@ impl ApiClientWrapper {
                             "Could not add switch endpoint due to error"
                         ),
                     }
+
+                    match self.extract_switch_host_endpoint(&switch).await {
+                        Ok(Some(endpoint)) => endpoints.push(Arc::new(endpoint)),
+                        Ok(None) => {}
+                        Err(error) => {
+                            tracing::warn!(
+                                ?switch,
+                                ?error,
+                                "Could not add switch host endpoint due to error"
+                            );
+                        }
+                    }
                 }
 
                 tracing::debug!(count = endpoints.len(), "Fetched switch endpoints");
@@ -242,7 +306,12 @@ impl ApiClientWrapper {
             })
         });
 
-        self.endpoint_with_auth(addr, metadata, machine.rack_id.clone())
+        self.endpoint_with_auth(
+            addr,
+            metadata,
+            machine.rack_id.clone(),
+            ApiCredentialKind::Bmc,
+        )
     }
 
     fn extract_switch_endpoint(
@@ -255,30 +324,43 @@ impl ApiClientWrapper {
             ));
         };
         let addr = BmcAddr::try_from(bmc_info)?;
-        let serial = switch
-            .config
-            .as_ref()
-            .map(|config| config.name.clone())
-            .ok_or(HealthError::GenericError(
-                "Switch endpont does not have serial".to_string(),
-            ))?;
 
         self.endpoint_with_auth(
             addr,
-            Some(EndpointMetadata::Switch(SwitchData {
-                id: switch.id,
-                serial,
-                slot_number: switch
-                    .placement_in_rack
-                    .as_ref()
-                    .and_then(|placement| placement.slot_number),
-                tray_index: switch
-                    .placement_in_rack
-                    .as_ref()
-                    .and_then(|placement| placement.tray_index),
-            })),
-            None,
+            Some(switch_endpoint_metadata(
+                switch,
+                SwitchEndpointRole::Bmc,
+                false,
+            )?),
+            switch.rack_id.clone(),
+            ApiCredentialKind::Bmc,
         )
+    }
+
+    async fn extract_switch_host_endpoint(
+        &self,
+        switch: &rpc::forge::Switch,
+    ) -> Result<Option<BmcEndpoint>, HealthError> {
+        let Some(nvos_info) = switch.nvos_info.as_ref() else {
+            return Ok(None);
+        };
+        let switch_id = switch.id.ok_or_else(|| {
+            HealthError::GenericError("switch host endpoint missing switch ID".to_string())
+        })?;
+        let addr = BmcAddr::try_from(nvos_info)?;
+
+        self.endpoint_with_auth(
+            addr,
+            Some(switch_endpoint_metadata(
+                switch,
+                SwitchEndpointRole::Host,
+                switch.is_primary,
+            )?),
+            switch.rack_id.clone(),
+            ApiCredentialKind::SwitchNvosAdmin { switch_id },
+        )
+        .await
+        .map(Some)
     }
 
     fn extract_power_shelf_endpoint(
@@ -306,6 +388,7 @@ impl ApiClientWrapper {
                 serial,
             })),
             None,
+            ApiCredentialKind::Bmc,
         )
     }
 
@@ -314,7 +397,15 @@ impl ApiClientWrapper {
         addr: BmcAddr,
         metadata: Option<EndpointMetadata>,
         rack_id: Option<RackId>,
+        credential_kind: ApiCredentialKind,
     ) -> Result<BmcEndpoint, HealthError> {
+        let provider = ApiCredentialProvider {
+            client: self.client.clone(),
+            kind: credential_kind,
+        };
+
+        let credentials = provider.fetch_credentials(&addr).await?;
+
         Ok(BmcEndpoint {
             addr,
             provider: self.credential_provider.clone(),
@@ -443,6 +534,30 @@ impl TryFrom<&rpc::forge::BmcInfo> for BmcAddr {
                     .map_err(|error| HealthError::GenericError(error.to_string()))
             })?;
         let port = bmc_info.port.map(|port| port.try_into().unwrap_or(443));
+
+        Ok(Self { ip, port, mac })
+    }
+}
+
+impl TryFrom<&rpc::forge::SwitchNvosInfo> for BmcAddr {
+    type Error = HealthError;
+
+    fn try_from(nvos_info: &rpc::forge::SwitchNvosInfo) -> Result<Self, Self::Error> {
+        let ip = nvos_info
+            .ip
+            .as_ref()
+            .ok_or_else(|| HealthError::GenericError("missing NVOS IP address".to_string()))?
+            .parse::<IpAddr>()
+            .map_err(|error| HealthError::GenericError(error.to_string()))?;
+        let mac = nvos_info
+            .mac
+            .as_ref()
+            .ok_or_else(|| HealthError::GenericError("missing NVOS MAC address".to_string()))
+            .and_then(|mac| {
+                MacAddress::from_str(mac)
+                    .map_err(|error| HealthError::GenericError(error.to_string()))
+            })?;
+        let port = nvos_info.port.map(|port| port.try_into().unwrap_or(443));
 
         Ok(Self { ip, port, mac })
     }

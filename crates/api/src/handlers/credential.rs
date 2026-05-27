@@ -462,6 +462,62 @@ pub(crate) async fn get_bmc_credentals(
     }))
 }
 
+pub(crate) async fn get_switch_nvos_credentials(
+    api: &Api,
+    request: tonic::Request<rpc::GetSwitchNvosCredentialsRequest>,
+) -> Result<Response<rpc::GetBmcCredentialsResponse>, tonic::Status> {
+    crate::api::log_request_data(&request);
+
+    let req = request.into_inner();
+    let switch_id = req
+        .switch_id
+        .ok_or_else(|| CarbideError::InvalidArgument("switch_id is required".to_string()))?;
+
+    let bmc_mac_address = {
+        let mut txn = api.txn_begin().await?;
+        let switches = db::switch::find_by(
+            &mut txn,
+            db::ObjectColumnFilter::One(db::switch::IdColumn, &switch_id),
+        )
+        .await?;
+        let _ = txn.rollback().await;
+
+        let switch = switches
+            .first()
+            .ok_or_else(|| CarbideError::NotFoundError {
+                kind: "switch",
+                id: switch_id.to_string(),
+            })?;
+
+        switch
+            .bmc_mac_address
+            .ok_or_else(|| CarbideError::NotFoundError {
+                kind: "switch_bmc_mac_address",
+                id: switch_id.to_string(),
+            })?
+    };
+
+    let credentials = api
+        .credential_manager
+        .get_credentials(&CredentialKey::SwitchNvosAdmin { bmc_mac_address })
+        .await
+        .map_err(|e| CarbideError::internal(e.to_string()))?
+        .ok_or_else(|| CarbideError::NotFoundError {
+            kind: "switch_nvos_credentials",
+            id: switch_id.to_string(),
+        })?;
+
+    let Credentials::UsernamePassword { username, password } = credentials;
+
+    Ok(Response::new(rpc::GetBmcCredentialsResponse {
+        credentials: Some(rpc::BmcCredentials {
+            r#type: Some(rpc::bmc_credentials::Type::UsernamePassword(
+                rpc::UsernamePassword { username, password },
+            )),
+        }),
+    }))
+}
+
 async fn set_sitewide_bmc_root_credentials(
     api: &Api,
     password: String,

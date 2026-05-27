@@ -19,8 +19,6 @@ use std::collections::HashMap;
 use std::fmt;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 
 use bmc_vendor::BMCVendor;
 use carbide_authn::config::{AllowedCertCriteria, TrustConfig};
@@ -29,9 +27,7 @@ use carbide_ib_fabric::config::{IBFabricConfig, IbFabricDefinition};
 use carbide_nvlink_manager::config::NvLinkConfig;
 use carbide_preingestion_manager::PreingestionManagerConfig;
 use carbide_site_explorer::config::SiteExplorerConfig;
-use carbide_utils::config::{
-    as_duration, as_std_duration, deserialize_arc_atomic_bool, serialize_arc_atomic_bool,
-};
+use carbide_utils::config::{as_duration, as_std_duration};
 use chrono::Duration;
 use duration_str::{deserialize_duration, deserialize_duration_chrono};
 use figment::Figment;
@@ -483,7 +479,7 @@ pub struct CarbideConfig {
     /// (disconnected / air-gapped) infrastructure manager for racks of GB200/GB300/VR144.
     /// Only set this if using NICo site controller with Rack Manager to manage GB200/300/VR144.
     /// It will change site controller behavior significantly in the following ways, etc.:
-    /// 1. skip dpu management and use dpus in nic mode (optional, can set force_dpu_nic_mode=false)
+    /// 1. skip dpu management and use dpus in nic mode (set the site-wide `[site_explorer] dpu_mode = "nic_mode"`, or per-host `ExpectedMachine.dpu_mode`)
     ///    a. no dpu bfb upgrade and host power cycle
     ///    b. no firmware upgrade and host power cycle
     ///    c. no hbn deployment (no ecmp, etc)
@@ -525,16 +521,6 @@ pub struct CarbideConfig {
     /// the ingestion call.
     #[serde(default)]
     pub rack_profiles: model::rack_type::RackProfileConfig,
-
-    /// Treat any dpu found as a regular NIC and skip configuring it as a managed dpu.
-    /// This is specifically for dev labs to allow using GB200/300 and VR compute
-    /// trays with bluefield dpus as NICs.
-    #[serde(
-        default = "SiteExplorerConfig::default_force_dpu_nic_mode",
-        deserialize_with = "deserialize_arc_atomic_bool",
-        serialize_with = "serialize_arc_atomic_bool"
-    )]
-    pub force_dpu_nic_mode: Arc<AtomicBool>,
 
     /// SPDM (Security Protocol and Data Model) configuration for hardware attestation.
     #[serde(default)]
@@ -2796,6 +2782,7 @@ pub fn default_host_intercept_bridge_port() -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use std::sync::atomic::Ordering as AtomicOrdering;
 
     use carbide_authn::config::CertComponent;
@@ -2805,6 +2792,7 @@ mod tests {
     use figment::providers::{Env, Format, Toml};
     use libmlx::variables::value::MlxValueType;
     use libredfish::model::service_root::RedfishVendor;
+    use model::expected_machine::DpuMode;
     use model::network_segment::NetworkDefinitionSegmentType;
     use model::resource_pool;
 
@@ -3168,7 +3156,7 @@ mod tests {
                 create_switches: Arc::new(true.into()),
                 switches_created_per_run: 9,
                 rotate_switch_nvos_credentials: Arc::new(false.into()),
-                force_dpu_nic_mode: Arc::new(false.into()),
+                dpu_mode: None,
                 explore_mode: SiteExplorerExploreMode::LibRedfish,
             }
         );
@@ -3343,7 +3331,7 @@ mod tests {
                 create_switches: Arc::new(true.into()),
                 switches_created_per_run: 9,
                 rotate_switch_nvos_credentials: Arc::new(false.into()),
-                force_dpu_nic_mode: Arc::new(false.into()),
+                dpu_mode: None,
                 explore_mode: SiteExplorerExploreMode::LibRedfish,
             }
         );
@@ -3653,7 +3641,7 @@ mod tests {
                 create_switches: Arc::new(true.into()),
                 switches_created_per_run: 9,
                 rotate_switch_nvos_credentials: Arc::new(false.into()),
-                force_dpu_nic_mode: Arc::new(false.into()),
+                dpu_mode: None,
                 explore_mode: SiteExplorerExploreMode::LibRedfish,
             }
         );
@@ -3801,6 +3789,56 @@ mod tests {
         let deserialized = serde_json::from_str::<SiteExplorerConfig>("{}")?;
         assert_eq!(deserialized, SiteExplorerConfig::default());
         Ok(())
+    }
+
+    /// Verifies the `[site_explorer] dpu_mode = ...` setting parses
+    /// correctly for every named variant. When unset (the default),
+    /// `site_explorer.dpu_mode` is `None` and hosts resolve to
+    /// `DpuMode::DpuMode`.
+    #[test]
+    fn site_explorer_dpu_mode_parses_and_defaults_to_none() {
+        let config: CarbideConfig = Figment::new()
+            .merge(Toml::file(format!("{TEST_DATA_DIR}/min_config.toml")))
+            .extract()
+            .unwrap();
+        assert_eq!(config.site_explorer.dpu_mode, None);
+
+        for (toml_value, expected) in [
+            ("dpu_mode", DpuMode::DpuMode),
+            ("nic_mode", DpuMode::NicMode),
+            ("no_dpu", DpuMode::NoDpu),
+        ] {
+            let config: CarbideConfig = Figment::new()
+                .merge(Toml::file(format!("{TEST_DATA_DIR}/min_config.toml")))
+                .merge(Toml::string(&format!(
+                    "[site_explorer]\ndpu_mode = \"{toml_value}\"\n"
+                )))
+                .extract()
+                .unwrap();
+            assert_eq!(
+                config.site_explorer.dpu_mode,
+                Some(expected),
+                "[site_explorer] dpu_mode = {toml_value:?} should parse to {expected:?}",
+            );
+        }
+    }
+
+    /// Real-world site TOMLs may still carry the now-removed
+    /// `force_dpu_nic_mode` setting (top-level and/or under
+    /// `[site_explorer]`). serde silently ignores unknown keys, so
+    /// those files should keep parsing cleanly after the rip-out --
+    /// this is the regression guard for that.
+    #[test]
+    fn legacy_force_dpu_nic_mode_in_toml_still_parses() {
+        let _config: CarbideConfig = Figment::new()
+            .merge(Toml::file(format!("{TEST_DATA_DIR}/min_config.toml")))
+            .merge(Toml::string(
+                "force_dpu_nic_mode = false\n\
+                 [site_explorer]\n\
+                 force_dpu_nic_mode = true\n",
+            ))
+            .extract()
+            .expect("legacy force_dpu_nic_mode in TOML must still parse");
     }
 
     #[test]

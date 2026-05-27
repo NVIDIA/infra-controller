@@ -17,6 +17,7 @@
 
 use std::sync::Arc;
 
+use carbide_dpa_interface_controller::DpaInfo;
 use carbide_ib_fabric::ib::IBFabricManager;
 use carbide_ipmi::IPMITool;
 use carbide_redfish::libredfish::RedfishClientPool;
@@ -29,7 +30,6 @@ use model::resource_pool::common::IbPools;
 use sqlx::PgPool;
 
 use crate::cfg::file::CarbideConfig;
-use crate::dpa::handler::DpaInfo;
 use crate::rack::rms_client::SwitchSystemImageRmsClient;
 use crate::state_controller::state_handler::StateHandlerError;
 
