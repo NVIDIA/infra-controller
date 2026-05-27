@@ -46,6 +46,7 @@ use model::machine::Machine;
 use model::machine::machine_search_config::MachineSearchConfig;
 use model::resource_pool::common::CommonPools;
 use sqlx::PgTransaction;
+use state_controller::controller::Enqueuer;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status, Streaming};
 
@@ -56,7 +57,6 @@ use crate::dynamic_settings::DynamicSettings;
 use crate::ethernet_virtualization::EthVirtData;
 use crate::logging::log_limiter::LogLimiter;
 use crate::scout_stream::ConnectionRegistry;
-use crate::state_controller::controller::Enqueuer;
 use crate::state_controller::machine::dpf::DpfOperations;
 use crate::state_controller::machine::io::MachineStateControllerIO;
 use crate::{CarbideError, CarbideResult};

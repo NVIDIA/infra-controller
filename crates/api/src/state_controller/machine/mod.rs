@@ -27,8 +27,7 @@ use model::attestation::EkCertVerificationStatus;
 use model::machine::{
     FailureCause, FailureDetails, FailureSource, MeasuringState, StateMachineArea,
 };
-
-use super::state_handler::StateHandlerError;
+use state_controller::state_handler::StateHandlerError;
 
 pub mod config;
 pub mod context;
