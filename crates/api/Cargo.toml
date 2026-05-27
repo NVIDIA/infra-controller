@@ -38,7 +38,9 @@ bms-dsx-exchange = { path = "../bms-dsx-exchange" }
 config-version = { path = "../config-version", features = ["sqlx"] }
 carbide-dpa-interface-controller = { path = "../dpa-interface-controller" }
 carbide-host-support = { path = "../host-support", default-features = false }
+carbide-mqtt-common = { path = "../mqtt-common" }
 carbide-network = { path = "../network", features = ["sqlx"] }
+carbide-rack = { path = "../rack" }
 carbide-secrets = { path = "../secrets" }
 carbide-version = { path = "../version" }
 carbide-firmware = { path = "../firmware" }
@@ -52,6 +54,7 @@ carbide-redfish = { path = "../redfish" }
 carbide-network-segment-controller = { path = "../network-segment-controller" }
 carbide-site-explorer = { path = "../site-explorer" }
 carbide-spdm-controller = { path = "../spdm-controller" }
+carbide-state-controller-common = { path = "../state-controller-common" }
 carbide-switch-controller = { path = "../switch-controller" }
 carbide-preingestion-manager = { path = "../preingestion-manager" }
 carbide-nvlink-manager = { path = "../nvlink-manager" }
@@ -222,6 +225,7 @@ carbide-macros = { path = "../macros" }
 carbide-sqlx-testing = { path = "../sqlx-testing", default-features = false }
 carbide-prost-builder = { path = "../prost-builder" }
 carbide-nvlink-manager = { path = "../nvlink-manager", features = ["test-support"] }
+carbide-rack = { path = "../rack", features = ["test-support"] }
 carbide-redfish = { path = "../redfish", features = ["test-support"] }
 carbide-utils = { path = "../utils", features = ["test-support"] }
 state-controller = { path = "../state-controller", features = ["test-support"] }

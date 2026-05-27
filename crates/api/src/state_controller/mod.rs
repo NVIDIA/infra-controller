@@ -21,6 +21,4 @@ pub mod machine;
 pub mod power_shelf;
 pub mod rack;
 
-pub use ::state_controller::{
-    config, controller, db_write_batch, io, metrics, state_change_emitter, state_handler,
-};
+pub use ::state_controller::{controller, db_write_batch, state_change_emitter, state_handler};

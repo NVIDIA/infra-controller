@@ -106,6 +106,10 @@ impl BmcEndpoint {
         }
     }
 
+    pub fn switch_data(&self) -> Option<&SwitchData> {
+        self.metadata.as_ref().and_then(EndpointMetadata::as_switch)
+    }
+
     pub fn credentials(&self) -> BmcCredentials {
         self.credentials.read().expect("lock poisoned").to_owned()
     }
@@ -128,6 +132,13 @@ pub enum EndpointMetadata {
 }
 
 impl EndpointMetadata {
+    pub fn as_switch(&self) -> Option<&SwitchData> {
+        match self {
+            EndpointMetadata::Switch(switch) => Some(switch),
+            _ => None,
+        }
+    }
+
     pub fn serial_number(&self) -> Option<&str> {
         match self {
             EndpointMetadata::Machine(machine) => machine.machine_serial.as_deref(),
@@ -152,12 +163,21 @@ pub struct PowerShelfData {
     pub serial: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SwitchEndpointRole {
+    Bmc,
+    Host,
+}
+
 #[derive(Clone, Debug)]
 pub struct SwitchData {
     pub id: Option<SwitchId>,
     pub serial: String,
     pub slot_number: Option<i32>,
     pub tray_index: Option<i32>,
+    pub endpoint_role: SwitchEndpointRole,
+    pub is_primary: bool,
+    pub nmxt_enabled: bool,
 }
 
 #[derive(Clone)]

@@ -28,12 +28,12 @@ use model::machine::{
     ManagedHostStateSnapshot, SpdmMeasuringState, StateMachineArea,
 };
 use sqlx::PgPool;
+use state_controller::state_handler::{
+    StateHandlerContext, StateHandlerError, StateHandlerOutcome,
+};
 
 use crate::handlers::attestation as attestation_handlers;
 use crate::state_controller::machine::context::MachineStateHandlerContextObjects;
-use crate::state_controller::state_handler::{
-    StateHandlerContext, StateHandlerError, StateHandlerOutcome,
-};
 
 /// When SPDM attestation failed, check whether attestation was restarted (admin / status) or
 /// disabled in config; if so, transition back to the appropriate measuring state based on
@@ -44,7 +44,7 @@ pub(crate) async fn handle_spdm_attestation_failed_recovery(
     details: &FailureDetails,
 ) -> Result<StateHandlerOutcome<ManagedHostState>, StateHandlerError> {
     let mut txn = ctx.services.db_pool.begin().await?;
-    let should_resume_attestation = if !ctx.services.site_config.spdm.enabled {
+    let should_resume_attestation = if !ctx.services.site_config.spdm_enabled {
         true
     } else {
         let attestation_status =
