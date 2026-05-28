@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package forge;
+package core;
 
 // Don't forget to update build.rs to add the Serialize annotation for any new
 // message types!
@@ -18,7 +18,7 @@ import "mlx_device.proto";
 import "scout_firmware_upgrade.proto";
 import "site_explorer.proto";
 
-service Forge {
+service Core {
   // What version of Forge is this service running? Matches `--version` command line.
   rpc Version(VersionRequest) returns (BuildInfo);
 

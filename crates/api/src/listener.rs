@@ -246,8 +246,37 @@ pub async fn start(
     let router = axum::Router::new()
         .route("/", axum::routing::get(root_url))
         .route_service(
-            "/forge.Forge/{*rpc}",
+            "/core.Core/{*rpc}",
             rpc::forge_server::ForgeServer::from_arc(api_service.clone()),
+        )
+        // Backward-compat alias: accept legacy /forge.Forge/* paths by
+        // rewriting them to /core.Core/* before dispatch. The generated
+        // gRPC server (CoreServer, exposed via the ForgeServer type alias)
+        // matches on the full URI path internally, so the rewrite is
+        // required for the legacy path to find its handler. Wire payload
+        // bytes are untouched — only the URI path is substituted.
+        .route_service(
+            "/forge.Forge/{*rpc}",
+            tower::ServiceBuilder::new()
+                .map_request(|mut req: http::Request<axum::body::Body>| {
+                    let new_path = req.uri().path().replacen("/forge.Forge/", "/core.Core/", 1);
+                    let pq: http::uri::PathAndQuery = match req.uri().query() {
+                        Some(q) => format!("{new_path}?{q}")
+                            .parse()
+                            .expect("rewritten path+query is a valid PathAndQuery"),
+                        None => new_path
+                            .parse()
+                            .expect("rewritten path is a valid PathAndQuery"),
+                    };
+                    let mut parts = req.uri().clone().into_parts();
+                    parts.path_and_query = Some(pq);
+                    *req.uri_mut() = http::Uri::from_parts(parts)
+                        .expect("URI parts with rewritten path+query reassemble into a valid URI");
+                    req
+                })
+                .service(rpc::forge_server::ForgeServer::from_arc(
+                    api_service.clone(),
+                )),
         )
         .route_service(
             "/grpc.reflection.v1alpha.ServerReflection/{*r}",

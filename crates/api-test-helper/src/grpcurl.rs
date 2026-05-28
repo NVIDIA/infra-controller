@@ -42,7 +42,11 @@ pub async fn grpcurl_for<T: ToString>(
         .choose(&mut rand::rng())
         .context("No API servers configured")?
         .to_string();
-    let grpc_endpoint = format!("forge.Forge/{endpoint}");
+    // grpcurl performs reflection against the server before sending, and the
+    // generated FileDescriptorSet only registers the renamed service (core.Core);
+    // it does not know about the legacy /forge.Forge/* path even though the
+    // listener accepts it. Use the canonical core.Core path for test traffic.
+    let grpc_endpoint = format!("core.Core/{endpoint}");
     let mut args = vec![
         "-cacert",
         LOCALHOST_CERTS.ca_cert.to_str().unwrap(),

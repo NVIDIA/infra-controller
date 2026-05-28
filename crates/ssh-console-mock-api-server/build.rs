@@ -53,7 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "proto/common.proto",
                 "proto/scout_firmware_upgrade.proto",
                 "proto/dns.proto",
-                "proto/forge.proto",
+                "proto/core.proto",
                 "proto/machine_discovery.proto",
                 "proto/site_explorer.proto",
             ],
@@ -72,13 +72,13 @@ fn copy_protos_from_rpc_crate() -> io::Result<()> {
     for source_proto in fs::read_dir(rpc_crate_path.join("proto"))? {
         let source_proto = source_proto?;
         let source = match source_proto.file_name().to_str() {
-            Some("forge.proto") => {
+            Some("core.proto") => {
                 let mut in_rpc_section = false;
                 fs::read_to_string(source_proto.path())?
                     .lines()
                     .filter(|line| match in_rpc_section {
                         false => {
-                            if line.contains("service Forge {") {
+                            if line.contains("service Core {") {
                                 in_rpc_section = true;
                             }
                             true

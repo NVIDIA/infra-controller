@@ -63,8 +63,13 @@ pub async fn test_network_monitor() -> eyre::Result<()> {
             "/forge.Forge/GetDpuInfoList",
             post(handle_get_dpu_info_list),
         )
+        // Same handlers, registered at the renamed proto path for forward
+        // compatibility with clients built from core.proto. To be collapsed
+        // once all callers have migrated to /core.Core/*.
+        .route("/core.Core/GetDpuInfoList", post(handle_get_dpu_info_list))
         // ForgeApiClient needs a working Version route for connection retrying
         .route("/forge.Forge/Version", post(handle_version))
+        .route("/core.Core/Version", post(handle_version))
         .fallback(handler)
         .with_state(state.clone());
     let (addr, join_handle) = common::run_grpc_server(app).await?;

@@ -33,8 +33,28 @@ pub mod scout_firmware_upgrade {
 
 #[allow(non_snake_case, unknown_lints, clippy::all)]
 #[rustfmt::skip]
+pub mod core {
+    include!(concat!(env!("OUT_DIR"), "/core.rs"));
+}
+
+// Backward-compat alias module. The proto file was renamed forge.proto →
+// core.proto with `package forge → package core` and `service Forge → service
+// Core`, but message/field names were intentionally left unchanged in this
+// PR. To avoid a sweeping rename of every `crate::protos::forge::*` callsite
+// in one go, this alias re-exports the generated `core::*` items under the
+// `forge::*` name so existing imports keep working unchanged. To be removed
+// in a follow-up PR after downstream callers are migrated to `core::*`.
+#[allow(unused_imports)]
+#[rustfmt::skip]
 pub mod forge {
-    include!(concat!(env!("OUT_DIR"), "/forge.rs"));
+    pub use super::core::*;
+    pub mod forge_server {
+        pub use super::super::core::core_server::Core as Forge;
+        pub use super::super::core::core_server::CoreServer as ForgeServer;
+    }
+    pub mod forge_client {
+        pub use super::super::core::core_client::CoreClient as ForgeClient;
+    }
 }
 
 #[allow(non_snake_case, unknown_lints, clippy::all)]

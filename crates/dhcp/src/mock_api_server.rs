@@ -230,14 +230,24 @@ impl MockAPIServer {
         fail: Arc<Mutex<bool>>,
         address_overrides: Arc<Mutex<HashMap<String, String>>>,
     ) -> Result<Response<GrpcBody>, MockAPIServerError> {
-        let path = req.uri().path();
+        // Accept both legacy /forge.Forge/* and renamed /core.Core/* request
+        // paths. Clients built from the renamed core.proto hit the new path;
+        // existing clients keep hitting the old one. The match arms below
+        // continue to be expressed in terms of /forge.Forge/* so the change
+        // is local. To be collapsed once all callers have migrated.
+        let raw_path = req.uri().path();
+        let path: String = if let Some(rest) = raw_path.strip_prefix("/core.Core/") {
+            format!("/forge.Forge/{rest}")
+        } else {
+            raw_path.to_owned()
+        };
         calls
             .lock()
             .unwrap()
-            .entry(path.to_owned())
+            .entry(path.clone())
             .and_modify(|e| *e += 1)
             .or_insert(1);
-        match path {
+        match path.as_str() {
             // Add the endpoints you need here
             ENDPOINT_DISCOVER_DHCP => {
                 let inject_failure = *fail.lock().unwrap();
