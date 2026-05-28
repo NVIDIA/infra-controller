@@ -246,6 +246,7 @@ mod instance_type;
 mod interface;
 mod ipam;
 mod ipxe_template;
+mod logs;
 mod machine;
 mod machine_validation;
 pub mod managed_host;
@@ -777,6 +778,8 @@ pub fn routes(api: Arc<Api>) -> eyre::Result<NormalizePath<Router>> {
                 get(machine_validation::external_configs),
             )
             .route("/ufm-browser", get(ufm_browser::query))
+            .route("/logs", get(logs::page))
+            .route("/logs/{source}/stream", get(logs::stream))
             .layer(axum::middleware::from_fn(auth_oauth2))
             .layer(Extension(oauth_extension_layer))
             .with_state(api),

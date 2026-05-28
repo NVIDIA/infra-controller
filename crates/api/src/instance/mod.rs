@@ -890,7 +890,7 @@ pub async fn batch_allocate_instances(
         // their only valid attachments are HostInband segments, and NICo knows
         // which one(s) the host is on. Conversely, hosts with DPUs cannot use
         // `auto`, and are expected to enumerate their interfaces explicitly.
-        if mh_snapshot.is_zero_dpu() {
+        if !mh_snapshot.has_managed_dpus() {
             if !request.config.network.auto {
                 return Err(CarbideError::InvalidArgument(format!(
                     "zero-DPU host {} requires `InstanceNetworkConfig.auto = true`; cannot allocate an instance with explicitly-listed interfaces or with `auto = false`",
