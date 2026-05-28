@@ -469,6 +469,22 @@ pub async fn update_phone_home_last_contact(
     Ok(query_result.0)
 }
 
+pub async fn clear_phone_home_last_contact(
+    txn: &mut PgConnection,
+    instance_id: InstanceId,
+) -> Result<(), DatabaseError> {
+    let query = "UPDATE instances SET phone_home_last_contact=NULL WHERE id=$1 RETURNING id";
+
+    let _id = sqlx::query_as::<_, InstanceId>(query)
+        .bind(instance_id)
+        .fetch_one(txn)
+        .await
+        .map_err(|e| DatabaseError::query(query, e))?;
+
+    tracing::info!("Phone home last contact cleared for instance {instance_id}");
+    Ok(())
+}
+
 /// Updates updateable configurations of an instance
 /// - OS
 /// - Keyset IDs

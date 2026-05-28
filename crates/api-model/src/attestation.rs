@@ -277,7 +277,7 @@ pub mod spdm {
         }
     }
 
-    #[derive(FromRow, Debug, Clone)]
+    #[derive(Debug, Clone)]
     pub struct SpdmDeviceAttestationDetails {
         pub machine_id: MachineId,
         pub device_id: String,
