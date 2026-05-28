@@ -59,6 +59,7 @@ struct RedfishSimState {
     firmware_for_component_error: bool,
     get_task_trigger_evidence_returns_interrupted: bool,
     machine_setup_bios_job_id: Option<String>,
+    is_bios_setup: Option<bool>,
     job_state_sequence: VecDeque<JobState>,
     /// Records every call to `RedfishClientPool::create_client` so tests can
     /// assert what vendor was passed at each call site.
@@ -149,6 +150,10 @@ impl RedfishSim {
 
     pub fn set_job_state_sequence(&self, states: Vec<JobState>) {
         self.state.lock().unwrap().job_state_sequence = VecDeque::from(states);
+    }
+
+    pub fn set_is_bios_setup(&self, ready: bool) {
+        self.state.lock().unwrap().is_bios_setup = Some(ready);
     }
 
     /// Returns a snapshot of every `create_client` call made through this sim,
@@ -1355,7 +1360,7 @@ impl Redfish for RedfishSimClient {
         &'a self,
         _: Option<&'a str>,
     ) -> libredfish::RedfishFuture<'a, Result<bool, RedfishError>> {
-        Box::pin(async move { Ok(true) })
+        Box::pin(async move { Ok(self.state.lock().unwrap().is_bios_setup.unwrap_or(true)) })
     }
 
     fn get_secure_boot_certificate<'a>(

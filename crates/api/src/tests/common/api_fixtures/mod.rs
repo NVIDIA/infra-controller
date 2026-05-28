@@ -485,7 +485,7 @@ impl TestEnv {
                     model::machine::MachineState::WaitingForPlatformConfiguration { .. } => {
                         machine_state
                     }
-                    model::machine::MachineState::PollingBiosSetup => machine_state,
+                    model::machine::MachineState::PollingBiosSetup { .. } => machine_state,
                     model::machine::MachineState::SetBootOrder { .. } => machine_state,
                     model::machine::MachineState::UefiSetup { .. } => machine_state,
                     model::machine::MachineState::WaitingForDiscovery => machine_state,
@@ -1241,6 +1241,10 @@ pub fn get_config() -> CarbideConfig {
             controller: StateControllerConfig::default(),
             scout_reporting_timeout: Duration::weeks(52),
             uefi_boot_wait: Duration::seconds(0),
+            max_bios_config_retries: MachineStateControllerConfig::max_bios_config_retries_default(
+            ),
+            polling_bios_setup_stuck_threshold:
+                MachineStateControllerConfig::polling_bios_setup_stuck_threshold_default(),
         },
         network_segment_state_controller: NetworkSegmentStateControllerConfig {
             network_segment_drain_time: Duration::seconds(2),
