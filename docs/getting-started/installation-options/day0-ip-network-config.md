@@ -288,7 +288,7 @@ The required A records (shown for `.forge`; substitute `.nico` if your binaries 
 |---|---|---|---|---|
 | `carbide-api.forge` | 443 | `carbide-api` external LoadBalancer VIP | NICo gRPC API | Yes — `NICO_API_URL` env var on most clients |
 | `carbide-pxe.forge` | 80 | `carbide-pxe` LoadBalancer VIP | iPXE scripts, cloud-init, internal APT, TLS root CA | **No** — hardcoded in the compiled DPU agent |
-| `carbide-static-pxe.forge` | 80 | Static PXE asset server VIP | `scout.cpio.zst`, `scout.efi`, BFB images, and other static boot artifacts | **No** — hardcoded in the host boot scripts that ship inside boot images |
+| `carbide-static-pxe.forge` | 80 | Static PXE asset server VIP | `scout.squashfs`, `scout.efi`, BFB images, and other static boot artifacts | **No** — hardcoded in the host boot scripts that ship inside boot images |
 | `carbide-ntp.forge` | 123 | Operator-supplied NTP server IP(s) — the record points at your existing NTP infrastructure, not a NICo-deployed service | NTP time sync; agent reads this and re-advertises via DHCP option 42 | **No** — hostname is hardcoded in the compiled DPU agent; multiple A records recommended |
 | `unbound.forge` | 53 | `unbound` LoadBalancer VIP | Recursive DNS resolver | Yes — the resolver address itself is distributed via DHCP option 6 |
 | `otel-receiver.forge` | 443 | OTel receiver VIP on the site controller | OTLP ingestion endpoint for DPU otel-collector sidecars | Yes — set in the otel-collector configuration YAML and re-deployed |

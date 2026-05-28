@@ -256,7 +256,6 @@ lazy_static! {
 
 #[derive(Clone, Debug, Default)]
 pub struct TestEnvOverrides {
-    pub allow_zero_dpu_hosts: Option<bool>,
     pub site_prefixes: Option<Vec<IpNetwork>>,
     pub config: Option<CarbideConfig>,
     pub create_network_segments: Option<bool>,
@@ -1902,7 +1901,6 @@ pub async fn create_test_env_with_overrides(
             machines_created_per_run: 1,
             override_target_ip: None,
             override_target_port: None,
-            allow_zero_dpu_hosts: overrides.allow_zero_dpu_hosts.unwrap_or(false),
             bmc_proxy: Arc::new(Default::default()),
             allow_changing_bmc_proxy: None,
             reset_rate_limit: Duration::hours(1),

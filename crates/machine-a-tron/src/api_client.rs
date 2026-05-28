@@ -501,10 +501,13 @@ impl ApiClient {
 
     /// Registers a mock expected machine. Static BMC (`bmc_ip_address`) is left unset here;
     /// real environments set it through the admin CLI / API when DHCP discovery is not used.
+    /// `dpu_mode` is the per-host operating mode -- pass `Some(NoDpu)` for zero-DPU mock hosts
+    /// or `Some(NicMode)` for DPU-in-NIC-mode mock hosts; `None` for normal DPU hosts.
     pub async fn add_expected_machine(
         &self,
         bmc_mac_address: String,
         chassis_serial_number: String,
+        dpu_mode: Option<rpc::forge::DpuMode>,
     ) -> ClientApiResult<()> {
         self.0
             .add_expected_machine(ExpectedMachine {
@@ -524,7 +527,7 @@ impl ApiClient {
                 is_dpf_enabled: Some(true),
                 bmc_ip_address: None,
                 bmc_retain_credentials: None,
-                dpu_mode: None,
+                dpu_mode: dpu_mode.map(|m| m as i32),
                 host_lifecycle_profile: None,
             })
             .await

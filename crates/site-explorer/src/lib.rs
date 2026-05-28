@@ -1238,10 +1238,10 @@ impl SiteExplorer {
                                         ep.address,
                                     );
 
-                                    self.redfish_powercycle(
-                                        ep.address,
-                                    )
-                                        .await.inspect_err(|err| tracing::warn!("site explorer failed to power cycle host {} to apply DPU mode changes: {err}", ep.address)).ok();
+                                    self.redfish_powercycle(ep.address)
+                                        .await
+                                        .inspect_err(|err| tracing::warn!("site explorer failed to power cycle host {} to apply DPU mode changes: {err}", ep.address))
+                                        .ok();
                                 }
                             } else {
                                 tracing::warn!(
@@ -1256,11 +1256,29 @@ impl SiteExplorer {
                         }
 
                         continue;
-                    } else if !self.config.allow_zero_dpu_hosts {
+                    } else if matches!(host_dpu_mode, DpuMode::DpuMode) {
+                        // Host has no DPU PCIe devices reported by its
+                        // BMC, and the effective `dpu_mode` is the
+                        // default (`DpuMode`) -- i.e. neither per-host
+                        // on `ExpectedMachine.dpu_mode` nor site-wide on
+                        // `[site_explorer] dpu_mode` declared this host
+                        // as zero-DPU. We expect DPUs but found none --
+                        // probably a misconfiguration or a DPU-discovery
+                        // bug. Skip ingestion this cycle; site-explorer
+                        // will retry on the next iteration, giving the
+                        // operator a chance to either fix the host or
+                        // declare it as `NoDpu`.
+                        //
+                        // (`NoDpu` hosts are handled by the fast-path
+                        // earlier in the loop; `NicMode` hosts fall
+                        // through to the push below with an empty `dpus`
+                        // vector -- the operator already declared
+                        // "treat as zero-DPU.")
                         tracing::warn!(
                             address = %ep.address,
                             exploration_report = ?ep,
-                            "cannot identify managed host because the site explorer does not see any DPUs on this host, and zero-DPU hosts are not allowed by configuration; expected_num_dpus_attached_to_host: {expected_num_dpus_attached_to_host}; dpus_explored_for_host: {dpus_explored_for_host:#?}",
+                            ?host_dpu_mode,
+                            "cannot identify managed host: site explorer sees no DPUs on this host and it isn't declared as `NoDpu`; declare `dpu_mode = \"no_dpu\"` to ingest as zero-DPU",
                         );
                         metrics.increment_host_dpu_pairing_blocker(
                             PairingBlockerReason::NoDpuReportedByHost,

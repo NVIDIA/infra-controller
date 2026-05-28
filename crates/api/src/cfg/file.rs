@@ -661,7 +661,6 @@ impl CarbideConfig {
             spdm_enabled: self.spdm.enabled,
 
             dpu_enable_secure_boot: self.dpu_config.dpu_enable_secure_boot,
-            allow_zero_dpu_hosts: self.site_explorer.allow_zero_dpu_hosts,
         }
     }
 }
@@ -2605,7 +2604,6 @@ mod tests {
                 machines_created_per_run: 1,
                 override_target_ip: None,
                 override_target_port: None,
-                allow_zero_dpu_hosts: false,
                 bmc_proxy: carbide_site_explorer::config::bmc_proxy(None),
                 allow_changing_bmc_proxy: None,
                 reset_rate_limit: Duration::hours(1),
@@ -2781,7 +2779,6 @@ mod tests {
                 machines_created_per_run: 2,
                 override_target_ip: Some("1.2.3.4".to_owned()),
                 override_target_port: Some(10443),
-                allow_zero_dpu_hosts: false,
                 bmc_proxy: carbide_site_explorer::config::bmc_proxy(None),
                 allow_changing_bmc_proxy: None,
                 reset_rate_limit: Duration::hours(2),
@@ -3092,7 +3089,6 @@ mod tests {
                 machines_created_per_run: 2,
                 override_target_ip: Some("1.2.3.4".to_owned()),
                 override_target_port: Some(10443),
-                allow_zero_dpu_hosts: false,
                 bmc_proxy: carbide_site_explorer::config::bmc_proxy(None),
                 allow_changing_bmc_proxy: None,
                 reset_rate_limit: Duration::hours(2),
