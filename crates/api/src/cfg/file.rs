@@ -24,6 +24,11 @@ use bmc_vendor::BMCVendor;
 use carbide_authn::config::{AllowedCertCriteria, TrustConfig};
 use carbide_firmware::FirmwareConfig;
 use carbide_ib_fabric::config::{IBFabricConfig, IbFabricDefinition};
+use carbide_machine_controller::config::power_manager::default_power_options;
+use carbide_machine_controller::config::{
+    BomValidationConfig, FirmwareGlobal, MachineStateControllerConfig,
+    MachineStateHandlerSiteConfig, MachineValidationConfig, PowerManagerOptions, TimePeriod,
+};
 use carbide_nvlink_manager::config::NvLinkConfig;
 use carbide_preingestion_manager::PreingestionManagerConfig;
 use carbide_rack_controller::config::{RackValidationConfig, RmsConfig};
@@ -50,12 +55,6 @@ use model::resource_pool::define::ResourcePoolDef;
 use model::tenant::identity_config::SigningAlgorithm;
 use regex::Regex;
 use serde::{Deserialize, Deserializer, Serialize};
-
-use crate::state_controller::machine::config::power_manager::default_power_options;
-use crate::state_controller::machine::config::{
-    BomValidationConfig, FirmwareGlobal, MachineStateControllerConfig,
-    MachineStateHandlerSiteConfig, PowerManagerOptions,
-};
 
 static BF2_NIC: &str = "24.47.2682";
 static BF2_BMC: &str = "BF-25.10-20";
@@ -1762,15 +1761,6 @@ pub struct MachineUpdater {
     pub max_concurrent_machine_updates_percent: Option<i32>,
 }
 
-/// A UTC time window defined by a start and end timestamp.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-pub struct TimePeriod {
-    /// Start of the time window (UTC).
-    pub start: chrono::DateTime<chrono::Utc>,
-    /// End of the time window (UTC).
-    pub end: chrono::DateTime<chrono::Utc>,
-}
-
 pub fn default_max_find_by_ids() -> u32 {
     100
 }
@@ -1837,70 +1827,6 @@ impl Default for MeasuredBootMetricsCollectorConfig {
 }
 
 impl MeasuredBootMetricsCollectorConfig {
-    const fn default_run_interval() -> std::time::Duration {
-        std::time::Duration::from_secs(60)
-    }
-}
-
-/// Controls which machine validation tests are active.
-#[derive(Default, Clone, Copy, Debug, Deserialize, Serialize)]
-pub enum MachineValidationTestSelectionMode {
-    /// Only update tests in DB that are specified in the
-    /// `tests` config list.
-    #[default]
-    Default,
-    /// Enable all tests in DB, but allow per-test overrides
-    /// from the `tests` config list.
-    EnableAll,
-    /// Disable all tests in DB, but allow per-test overrides
-    /// from the `tests` config list.
-    DisableAll,
-}
-
-/// Configuration for machine validation tests (memory
-/// latency, SSD I/O, etc.) run after ingestion to verify
-/// hardware health.
-#[derive(Default, Clone, Debug, Deserialize, Serialize)]
-pub struct MachineValidationConfig {
-    /// Enables machine validation testing.
-    #[serde(default)]
-    pub enabled: bool,
-
-    /// Controls whether to run all tests, no tests, or use
-    /// per-test configuration.
-    #[serde(default)]
-    pub test_selection_mode: MachineValidationTestSelectionMode,
-
-    #[serde(
-        default = "MachineValidationConfig::default_run_interval",
-        deserialize_with = "deserialize_duration",
-        serialize_with = "as_std_duration"
-    )]
-    pub run_interval: std::time::Duration,
-
-    /// Per-test enable/disable overrides.
-    #[serde(default)]
-    pub tests: Vec<MachineValidationTestConfig>,
-}
-
-/// Per-test override for machine validation.
-///
-/// Example:
-/// ```toml
-/// tests = [
-///    { id = "MmMemLatency", enable = true },
-///    { id = "FioSSD", enable = true }
-/// ]
-/// ```
-#[derive(Default, Clone, Debug, Deserialize, Serialize)]
-pub struct MachineValidationTestConfig {
-    /// Unique test identifier (e.g., "MmMemLatency").
-    pub id: String,
-    /// Whether this test is enabled.
-    pub enable: bool,
-}
-
-impl MachineValidationConfig {
     const fn default_run_interval() -> std::time::Duration {
         std::time::Duration::from_secs(60)
     }
@@ -2363,6 +2289,8 @@ mod tests {
             dpu_up_threshold: Duration::weeks(1),
             scout_reporting_timeout: Duration::minutes(5),
             uefi_boot_wait: Duration::minutes(5),
+            max_bios_config_retries: 3,
+            polling_bios_setup_stuck_threshold: Duration::minutes(15),
         };
 
         let config_str = serde_json::to_string(&input).unwrap();
@@ -2406,6 +2334,8 @@ mod tests {
                 dpu_up_threshold: Duration::weeks(1),
                 scout_reporting_timeout: Duration::minutes(5),
                 uefi_boot_wait: Duration::minutes(5),
+                max_bios_config_retries: 3,
+                polling_bios_setup_stuck_threshold: Duration::minutes(15),
             }
         );
     }
@@ -2426,6 +2356,8 @@ mod tests {
                 dpu_up_threshold: Duration::weeks(1),
                 scout_reporting_timeout: Duration::minutes(5),
                 uefi_boot_wait: Duration::minutes(5),
+                max_bios_config_retries: 3,
+                polling_bios_setup_stuck_threshold: Duration::minutes(15),
             }
         );
     }
@@ -2723,6 +2655,8 @@ mod tests {
                 dpu_up_threshold: Duration::minutes(77),
                 scout_reporting_timeout: Duration::minutes(5),
                 uefi_boot_wait: Duration::minutes(5),
+                max_bios_config_retries: 3,
+                polling_bios_setup_stuck_threshold: Duration::minutes(15),
             }
         );
         assert_eq!(
@@ -2909,6 +2843,8 @@ mod tests {
                 dpu_up_threshold: Duration::minutes(33),
                 scout_reporting_timeout: Duration::minutes(20),
                 uefi_boot_wait: Duration::minutes(5),
+                max_bios_config_retries: 3,
+                polling_bios_setup_stuck_threshold: Duration::minutes(15),
             }
         );
         assert_eq!(
@@ -3219,6 +3155,8 @@ mod tests {
                 dpu_up_threshold: Duration::minutes(77),
                 scout_reporting_timeout: Duration::minutes(20),
                 uefi_boot_wait: Duration::minutes(5),
+                max_bios_config_retries: 3,
+                polling_bios_setup_stuck_threshold: Duration::minutes(15),
             }
         );
         assert_eq!(

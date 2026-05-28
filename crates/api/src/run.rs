@@ -75,7 +75,7 @@ pub async fn run(
     } else {
         setup_logging(
             debug,
-            crate::state_controller::machine::extra_logfmt_logging_fields(),
+            carbide_machine_controller::extra_logfmt_logging_fields(),
             None::<NoSubscriber>,
         )
         .wrap_err("setup_telemetry")?

@@ -15,6 +15,7 @@ import "health.proto";
 import "machine_discovery.proto";
 import "measured_boot.proto";
 import "mlx_device.proto";
+import "scout_firmware_upgrade.proto";
 import "site_explorer.proto";
 
 service Forge {
@@ -182,12 +183,6 @@ service Forge {
   rpc DpuAgentUpgradePolicyAction(DpuAgentUpgradePolicyRequest) returns (DpuAgentUpgradePolicyResponse);
   // Looks up a DNS record for DNS names assigned by Forge
   rpc LookupRecord(dns.DnsResourceRecordLookupRequest)returns (dns.DnsResourceRecordLookupResponse);
-
-  // DEPRECATED DNS Lookup RPC - for backward compatibility
-  // Use LookupRecord with DnsResourceRecordLookupRequest instead
-  rpc LookupRecordLegacy(DNSMessage.DNSQuestion)returns (DNSMessage.DNSResponse) {
-    option deprecated = true;
-  }
 
   // Get all DNS domains
   rpc GetAllDomains(dns.GetAllDomainsRequest) returns (dns.GetAllDomainsResponse);
@@ -4571,23 +4566,9 @@ message ForgeAgentControlResponse {
   }
 
   message FirmwareUpgrade {
-    ScoutFirmwareUpgradeTask task = 1;
+    scout_firmware_upgrade.ScoutFirmwareUpgradeTask task = 1;
   }
 
-  message ScoutFirmwareUpgradeTask {
-    string upgrade_task_id = 1;
-    string component_type = 2;
-    string target_version = 3;
-    FileArtifact script = 4;
-    uint32 execution_timeout_seconds = 5;
-    uint32 artifact_download_timeout_seconds = 6;
-    repeated FileArtifact file_artifacts = 7;
-  }
-
-  message FileArtifact {
-    string url = 1;
-    string sha256 = 2;
-  }
 
   oneof action {
     Noop noop = 3;

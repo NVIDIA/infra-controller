@@ -33,6 +33,16 @@ use carbide_ib_partition_controller::context::IBPartitionStateHandlerServices;
 use carbide_ib_partition_controller::handler::IBPartitionStateHandler;
 use carbide_ib_partition_controller::io::IBPartitionStateControllerIO;
 use carbide_ipmi::IPMITool;
+use carbide_machine_controller::config::{
+    BomValidationConfig, FirmwareGlobal, MachineStateControllerConfig, MachineValidationConfig,
+    PowerManagerOptions,
+};
+use carbide_machine_controller::context::MachineStateHandlerServices;
+use carbide_machine_controller::dpf::DpfOperations;
+use carbide_machine_controller::handler::{
+    MachineStateHandler, MachineStateHandlerBuilder, PowerOptionConfig, ReachabilityParams,
+};
+use carbide_machine_controller::io::MachineStateControllerIO;
 use carbide_network_segment_controller::context::NetworkSegmentStateHandlerServices;
 use carbide_network_segment_controller::handler::NetworkSegmentStateHandler;
 use carbide_network_segment_controller::io::NetworkSegmentStateControllerIO;
@@ -109,6 +119,10 @@ use rpc_instance::RpcInstance;
 use site_explorer::new_host_with_machine_validation;
 use sqlx::PgPool;
 use sqlx::postgres::PgConnectOptions;
+use state_controller::controller::{Enqueuer, StateController};
+use state_controller::state_handler::{
+    StateHandler, StateHandlerContext, StateHandlerError, StateHandlerOutcome,
+};
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 use tokio_util::sync::{CancellationToken, DropGuard};
@@ -120,31 +134,17 @@ use crate::api::metrics::ApiMetricsEmitter;
 use crate::cfg::file::{
     CarbideConfig, ComputeAllocationEnforcement, DpaConfig, DpaInterfaceStateControllerConfig,
     DpuConfig as InitialDpuConfig, FnnConfig, IbPartitionStateControllerConfig, ListenMode,
-    MachineUpdater, MachineValidationConfig, MeasuredBootMetricsCollectorConfig, MqttAuthConfig,
-    NetworkSecurityGroupConfig, NetworkSegmentStateControllerConfig,
-    PowerShelfStateControllerConfig, RackStateControllerConfig, SpdmConfig,
-    SpdmStateControllerConfig, SwitchStateControllerConfig, VmaasConfig, VpcPeeringPolicy,
-    default_bmc_session_lockout_threshold, default_max_find_by_ids,
+    MachineUpdater, MeasuredBootMetricsCollectorConfig, MqttAuthConfig, NetworkSecurityGroupConfig,
+    NetworkSegmentStateControllerConfig, PowerShelfStateControllerConfig,
+    RackStateControllerConfig, SpdmConfig, SpdmStateControllerConfig, SwitchStateControllerConfig,
+    VmaasConfig, VpcPeeringPolicy, default_bmc_session_lockout_threshold, default_max_find_by_ids,
 };
-use crate::dpf::DpfOperations;
 use crate::ethernet_virtualization::{EthVirtData, SiteFabricPrefixList};
 use crate::logging::level_filter::ActiveLevel;
 use crate::logging::log_limiter::LogLimiter;
 use crate::measured_boot::convert_vec;
 use crate::scout_stream;
 use crate::state_controller::common_services::CommonStateHandlerServices;
-use crate::state_controller::controller::{Enqueuer, StateController};
-use crate::state_controller::machine::config::{
-    BomValidationConfig, FirmwareGlobal, MachineStateControllerConfig, PowerManagerOptions,
-};
-use crate::state_controller::machine::context::MachineStateHandlerServices;
-use crate::state_controller::machine::handler::{
-    MachineStateHandler, MachineStateHandlerBuilder, PowerOptionConfig, ReachabilityParams,
-};
-use crate::state_controller::machine::io::MachineStateControllerIO;
-use crate::state_controller::state_handler::{
-    StateHandler, StateHandlerContext, StateHandlerError, StateHandlerOutcome,
-};
 use crate::tests::common::api_fixtures::endpoint_explorer::MockEndpointExplorer;
 use crate::tests::common::api_fixtures::managed_host::ManagedHostConfig;
 use crate::tests::common::api_fixtures::network_segment::{
@@ -485,7 +485,7 @@ impl TestEnv {
                     model::machine::MachineState::WaitingForPlatformConfiguration { .. } => {
                         machine_state
                     }
-                    model::machine::MachineState::PollingBiosSetup => machine_state,
+                    model::machine::MachineState::PollingBiosSetup { .. } => machine_state,
                     model::machine::MachineState::SetBootOrder { .. } => machine_state,
                     model::machine::MachineState::UefiSetup { .. } => machine_state,
                     model::machine::MachineState::WaitingForDiscovery => machine_state,
@@ -1242,6 +1242,10 @@ pub fn get_config() -> CarbideConfig {
             controller: StateControllerConfig::default(),
             scout_reporting_timeout: Duration::weeks(52),
             uefi_boot_wait: Duration::seconds(0),
+            max_bios_config_retries: MachineStateControllerConfig::max_bios_config_retries_default(
+            ),
+            polling_bios_setup_stuck_threshold:
+                MachineStateControllerConfig::polling_bios_setup_stuck_threshold_default(),
         },
         network_segment_state_controller: NetworkSegmentStateControllerConfig {
             network_segment_drain_time: Duration::seconds(2),

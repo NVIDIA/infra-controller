@@ -1509,6 +1509,8 @@ pub enum FailureCause {
     DpfProvisioning { err: String },
 
     SpdmAttestationFailed { err: String },
+
+    BiosSetupFailed { err: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -1660,7 +1662,10 @@ pub enum MachineState {
     WaitingForBiosJob {
         bios_config_info: BiosConfigInfo,
     },
-    PollingBiosSetup,
+    PollingBiosSetup {
+        #[serde(default)]
+        retry_count: u32,
+    },
     SetBootOrder {
         set_boot_order_info: Option<SetBootOrderInfo>,
     },
@@ -1716,6 +1721,10 @@ pub enum UefiSetupState {
 
 /// Tracks progress waiting for the Dell BIOS config job (from machine_setup PATCH) to complete
 /// before configuring boot order. Same pattern as SetBootOrderInfo / SetBootOrderState.
+///
+/// `bios_job_id` is `Some` while polling a vendor BIOS job (e.g. Dell). `None` only during
+/// `HandleBiosJobFailure` recovery from stuck PollingBiosSetup; non-Dell hosts reboot in
+/// `configure_host_bios` and never enter job-polling substates.
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub struct BiosConfigInfo {
@@ -1929,7 +1938,10 @@ pub enum HostPlatformConfigurationState {
     WaitingForBiosJob {
         bios_config_info: BiosConfigInfo,
     },
-    PollingBiosSetup,
+    PollingBiosSetup {
+        #[serde(default)]
+        retry_count: u32,
+    },
     SetBootOrder {
         set_boot_order_info: SetBootOrderInfo,
     },
@@ -2043,6 +2055,7 @@ impl Display for FailureCause {
             FailureCause::SpdmAttestationFailed { .. } => {
                 write!(f, "SpdmAttestationFailed")
             }
+            FailureCause::BiosSetupFailed { .. } => write!(f, "BiosSetupFailed"),
         }
     }
 }
@@ -2867,7 +2880,38 @@ mod tests {
         assert_eq!(
             deserialized,
             ManagedHostState::HostInit {
-                machine_state: MachineState::PollingBiosSetup,
+                machine_state: MachineState::PollingBiosSetup { retry_count: 0 },
+            }
+        );
+    }
+
+    #[test]
+    fn test_json_deserialize_polling_bios_setup_with_retry_count() {
+        let serialized =
+            r#"{"state":"hostinit","machine_state":{"state":"pollingbiossetup","retry_count":2}}"#;
+        let deserialized: ManagedHostState = serde_json::from_str(serialized).unwrap();
+
+        assert_eq!(
+            deserialized,
+            ManagedHostState::HostInit {
+                machine_state: MachineState::PollingBiosSetup { retry_count: 2 },
+            }
+        );
+    }
+
+    #[test]
+    fn test_json_deserialize_host_platform_configuration_polling_bios_setup_legacy() {
+        let serialized = r#"{"state":"assigned","instance_state":{"state":"hostplatformconfiguration","platform_config_state":{"state":"pollingbiossetup"}}}"#;
+        let deserialized: ManagedHostState = serde_json::from_str(serialized).unwrap();
+
+        assert_eq!(
+            deserialized,
+            ManagedHostState::Assigned {
+                instance_state: InstanceState::HostPlatformConfiguration {
+                    platform_config_state: HostPlatformConfigurationState::PollingBiosSetup {
+                        retry_count: 0,
+                    },
+                },
             }
         );
     }
