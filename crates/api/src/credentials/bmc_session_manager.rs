@@ -33,8 +33,8 @@
 //! Multiple API replicas may concurrently rotate the same pair. We do not
 //! serialize across replicas: in the worst case a race produces one orphan
 //! session on the BMC that expires via the BMC's idle-timeout. Within a
-//! single replica, a per-key `tokio::sync::Mutex` serializes rotates for the
-//! same `(spiffe, mac)` pair.
+//! single replica, a per-BMC `tokio::sync::Mutex` serializes all rotates
+//! against the same MAC.
 //!
 //! ## Lifecycle hooks
 //!
@@ -234,13 +234,11 @@ impl BmcSessionStore for PgBmcSessionStore {
     }
 }
 
-type InFlightKey = (String, MacAddress);
-
 pub struct BmcSessionManager {
     redfish_pool: Arc<NvRedfishClientPool>,
     credential_manager: Arc<dyn CredentialManager>,
     store: Arc<dyn BmcSessionStore>,
-    in_flight: Mutex<HashMap<InFlightKey, Arc<Mutex<()>>>>,
+    mac_locks: Mutex<HashMap<MacAddress, Arc<Mutex<()>>>>,
     lockouts: Mutex<HashMap<MacAddress, LockoutState>>,
     lockout_threshold: u32,
 }
@@ -256,7 +254,7 @@ impl BmcSessionManager {
             redfish_pool,
             credential_manager,
             store,
-            in_flight: Mutex::new(HashMap::new()),
+            mac_locks: Mutex::new(HashMap::new()),
             lockouts: Mutex::new(HashMap::new()),
             lockout_threshold: lockout_threshold.max(1),
         }
@@ -271,10 +269,8 @@ impl BmcSessionManager {
         bmc_mac: MacAddress,
         bmc_addr: SocketAddr,
     ) -> Result<SessionEntry, BmcSessionError> {
-        // Ensure what no single combination of spiffe/mac can rotate key concurrently
-        let key: InFlightKey = (spiffe_service_id.to_owned(), bmc_mac);
-        let key_lock = self.acquire_key_lock(key).await;
-        let _guard = key_lock.lock().await;
+        let mac_lock = self.acquire_mac_lock(bmc_mac).await;
+        let _mac_guard = mac_lock.lock().await;
 
         if let Some(err) = self.check_not_locked_out(bmc_mac).await {
             return Err(err);
@@ -508,10 +504,11 @@ impl BmcSessionManager {
         );
     }
 
-    async fn acquire_key_lock(&self, key: InFlightKey) -> Arc<Mutex<()>> {
-        let mut in_flight = self.in_flight.lock().await;
-        in_flight
-            .entry(key)
+    async fn acquire_mac_lock(&self, bmc_mac: MacAddress) -> Arc<Mutex<()>> {
+        let mut mac_locks = self.mac_locks.lock().await;
+        mac_locks.retain(|_, lock| Arc::strong_count(lock) > 1);
+        mac_locks
+            .entry(bmc_mac)
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone()
     }
@@ -550,12 +547,16 @@ mod tests {
 
     use arc_swap::ArcSwap;
     use async_trait::async_trait;
-    use forge_secrets::credentials::{Credentials, TestCredentialManager};
+    use forge_secrets::SecretsError;
+    use forge_secrets::credentials::{
+        BmcCredentialType, CredentialKey, CredentialManager, CredentialReader, CredentialWriter,
+        Credentials, TestCredentialManager,
+    };
     use mac_address::MacAddress;
     use sqlx::types::chrono::Utc;
     use tokio::sync::Mutex;
 
-    use super::{BmcSessionError, BmcSessionManager, BmcSessionStore, InFlightKey, StoredSession};
+    use super::{BmcSessionError, BmcSessionManager, BmcSessionStore, StoredSession};
 
     fn mac(byte: u8) -> MacAddress {
         MacAddress::from([byte, 0, 0, 0, 0, 1])
@@ -736,16 +737,211 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn in_flight_lock_is_per_key() {
+    async fn mac_lock_collapses_all_spiffe_callers_for_one_mac() {
         let (manager, _store) = manager_with_creds();
-        let key_a: InFlightKey = ("svc-1".to_string(), mac(0x01));
-        let key_b: InFlightKey = ("svc-2".to_string(), mac(0x01));
-        let lock_a = manager.acquire_key_lock(key_a.clone()).await;
-        let lock_b = manager.acquire_key_lock(key_b.clone()).await;
-        assert!(!Arc::ptr_eq(&lock_a, &lock_b));
-        let lock_a_again = manager.acquire_key_lock(key_a).await;
-        assert!(Arc::ptr_eq(&lock_a, &lock_a_again));
+        let mac_a = mac(0x01);
+        let mac_b = mac(0x02);
+
+        let lock_a1 = manager.acquire_mac_lock(mac_a).await;
+        let lock_a2 = manager.acquire_mac_lock(mac_a).await;
+        let lock_b = manager.acquire_mac_lock(mac_b).await;
+
+        assert!(
+            Arc::ptr_eq(&lock_a1, &lock_a2),
+            "every caller for the same MAC must share a single mutex — \
+             otherwise the lockout breaker can be raced past"
+        );
+        assert!(
+            !Arc::ptr_eq(&lock_a1, &lock_b),
+            "distinct MACs must use distinct mutexes — otherwise one slow \
+             BMC blocks unrelated traffic"
+        );
         let _g = lock_b.lock().await;
+    }
+
+    #[tokio::test]
+    async fn acquire_mac_lock_evicts_unused_entries() {
+        let (manager, _store) = manager_with_creds();
+        let mac_a = mac(0x10);
+        let mac_b = mac(0x11);
+
+        // Acquire and immediately drop a lock for mac_a — no rotate is
+        // holding it once this expression statement ends.
+        drop(manager.acquire_mac_lock(mac_a).await);
+        assert!(
+            manager.mac_locks.lock().await.contains_key(&mac_a),
+            "entry should be present immediately after acquire-then-drop \
+             (GC only runs on the next acquire)"
+        );
+
+        // Touching any MAC fires the opportunistic GC pass, which should
+        // evict the now-stale mac_a entry because nobody references its
+        // Arc except the map.
+        let _b = manager.acquire_mac_lock(mac_b).await;
+
+        let locks = manager.mac_locks.lock().await;
+        assert!(
+            !locks.contains_key(&mac_a),
+            "stale mac_lock entry must have been evicted to keep the map \
+             bounded; current keys = {:?}",
+            locks.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            locks.contains_key(&mac_b),
+            "the freshly-acquired entry must be retained"
+        );
+    }
+
+    #[tokio::test]
+    async fn acquire_mac_lock_retains_in_use_entries() {
+        let (manager, _store) = manager_with_creds();
+        let mac_busy = mac(0x20);
+        let mac_other = mac(0x21);
+
+        // Hold a clone of the Arc for mac_busy to simulate an in-flight
+        // rotate that's currently inside its critical section.
+        let in_flight = manager.acquire_mac_lock(mac_busy).await;
+
+        // Touching a different MAC triggers GC. mac_busy must survive
+        // because `in_flight` keeps the Arc strong_count above 1.
+        let _other = manager.acquire_mac_lock(mac_other).await;
+
+        let locks = manager.mac_locks.lock().await;
+        assert!(
+            locks.contains_key(&mac_busy),
+            "entry held by an in-flight caller must NOT be evicted — \
+             otherwise concurrent rotates would race past the per-MAC lock"
+        );
+        drop(in_flight);
+    }
+
+    struct CountingCredentialManager {
+        creds: Credentials,
+        in_flight: Mutex<HashMap<MacAddress, u32>>,
+        peak: Mutex<HashMap<MacAddress, u32>>,
+        hold: std::time::Duration,
+    }
+
+    impl CountingCredentialManager {
+        fn new(creds: Credentials, hold: std::time::Duration) -> Arc<Self> {
+            Arc::new(Self {
+                creds,
+                in_flight: Mutex::new(HashMap::new()),
+                peak: Mutex::new(HashMap::new()),
+                hold,
+            })
+        }
+
+        async fn peak_for(&self, bmc_mac: MacAddress) -> u32 {
+            self.peak.lock().await.get(&bmc_mac).copied().unwrap_or(0)
+        }
+    }
+
+    #[async_trait]
+    impl CredentialReader for CountingCredentialManager {
+        async fn get_credentials(
+            &self,
+            key: &CredentialKey,
+        ) -> Result<Option<Credentials>, SecretsError> {
+            let bmc_mac = match key {
+                CredentialKey::BmcCredentials {
+                    credential_type: BmcCredentialType::BmcRoot { bmc_mac_address },
+                } => *bmc_mac_address,
+                other => panic!("unexpected credential key in rotate path: {other:?}"),
+            };
+
+            let current = {
+                let mut in_flight = self.in_flight.lock().await;
+                let entry = in_flight.entry(bmc_mac).or_insert(0);
+                *entry = entry.saturating_add(1);
+                *entry
+            };
+            {
+                let mut peak = self.peak.lock().await;
+                let entry = peak.entry(bmc_mac).or_insert(0);
+                if current > *entry {
+                    *entry = current;
+                }
+            }
+
+            tokio::time::sleep(self.hold).await;
+
+            {
+                let mut in_flight = self.in_flight.lock().await;
+                if let Some(value) = in_flight.get_mut(&bmc_mac) {
+                    *value = value.saturating_sub(1);
+                }
+            }
+
+            Ok(Some(self.creds.clone()))
+        }
+    }
+
+    #[async_trait]
+    impl CredentialWriter for CountingCredentialManager {
+        async fn set_credentials(
+            &self,
+            _key: &CredentialKey,
+            _credentials: &Credentials,
+        ) -> Result<(), SecretsError> {
+            unreachable!("rotate path never writes credentials")
+        }
+
+        async fn create_credentials(
+            &self,
+            _key: &CredentialKey,
+            _credentials: &Credentials,
+        ) -> Result<(), SecretsError> {
+            unreachable!("rotate path never creates credentials")
+        }
+
+        async fn delete_credentials(&self, _key: &CredentialKey) -> Result<(), SecretsError> {
+            unreachable!("rotate path never deletes credentials")
+        }
+    }
+
+    impl CredentialManager for CountingCredentialManager {}
+
+    #[tokio::test]
+    async fn rotate_serializes_per_mac_even_across_distinct_spiffe_callers() {
+        let bmc_proxy = Arc::new(ArcSwap::new(Arc::new(None)));
+        let redfish_pool = carbide_redfish::nv_redfish::new_pool(bmc_proxy);
+        let credential_manager = CountingCredentialManager::new(
+            Credentials::UsernamePassword {
+                username: "root".to_string(),
+                password: "password".to_string(),
+            },
+            std::time::Duration::from_millis(50),
+        );
+        let store = InMemoryBmcSessionStore::new();
+        let manager = Arc::new(BmcSessionManager::new(
+            redfish_pool,
+            credential_manager.clone(),
+            store,
+            TEST_LOCKOUT_THRESHOLD,
+        ));
+
+        let bmc_mac = mac(0xAB);
+        let bmc_addr = "127.0.0.1:1".parse().unwrap();
+
+        let mut handles = Vec::new();
+        for i in 0..16 {
+            let manager = manager.clone();
+            let spiffe = format!("svc-{i}");
+            handles.push(tokio::spawn(async move {
+                let _ = manager.rotate(&spiffe, bmc_mac, bmc_addr).await;
+            }));
+        }
+        for h in handles {
+            h.await.expect("rotate task should not panic");
+        }
+
+        let peak = credential_manager.peak_for(bmc_mac).await;
+        assert_eq!(
+            peak, 1,
+            "rotate must serialize per-MAC across distinct SPIFFE callers; \
+             observed peak in-flight credential lookups = {peak}, want 1"
+        );
     }
 
     #[tokio::test]
