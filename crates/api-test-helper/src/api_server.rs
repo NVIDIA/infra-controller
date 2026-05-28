@@ -206,7 +206,6 @@ pub async fn start(
         explorations_per_run = 90
         create_machines = true
         machines_created_per_run = 30
-        allow_zero_dpu_hosts = true
         allow_proxy_to_unknown_host = false
         {bmc_proxy_cfg}
         reset_rate_limit = "3600s"

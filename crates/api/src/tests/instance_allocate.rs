@@ -90,7 +90,6 @@ async fn create_test_env_for_instance_allocation(
     let env = common::api_fixtures::create_test_env_with_overrides(
         pool.clone(),
         TestEnvOverrides {
-            allow_zero_dpu_hosts: Some(true),
             site_prefixes: Some(site_prefixes),
             create_network_segments: Some(false),
             ..Default::default()

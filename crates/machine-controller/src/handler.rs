@@ -9550,13 +9550,9 @@ fn can_restart_reprovision(dpu_snapshots: &[Machine], version: ConfigVersion) ->
     dpu_reprovision_restart_requested_after_state_transition(version, *latest_requested_at)
 }
 
-/// Call [`Redfish::machine_setup`], but ignore any [`RedfishError::NoDpu`] if we expect there to be no DPUs.
-/// Returns `Ok(Some(job_id))` when the vendor (e.g. Dell) creates a BIOS config job that must complete
-/// before configuring boot order; `Ok(None)` when no job to wait for.
-///
-/// TODO(ken): This is a temporary workaround for work-in-progress on zero-DPU support (August 2024)
-/// The way we should do this going forward is to plumb the actual non-DPU MAC address we want to
-/// boot from, instead of special-casing NoDpu errors.
+/// Call [`Redfish::machine_setup`], but ignore any [`RedfishError::NoDpu`] if we expect there to
+/// be no DPUs on the host. Returns `Ok(Some(job_id))` when the vendor (e.g. Dell) creates a BIOS
+/// config job that must complete before configuring boot order; `Ok(None)` when no job to wait for.
 pub async fn call_machine_setup_and_handle_no_dpu_error(
     redfish_client: &dyn Redfish,
     boot_interface_mac: Option<&str>,
@@ -9571,40 +9567,38 @@ pub async fn call_machine_setup_and_handle_no_dpu_error(
             &site_config.oem_manager_profiles,
         )
         .await;
-    match (
-        setup_result,
-        expected_dpu_count,
-        site_config.allow_zero_dpu_hosts,
-    ) {
-        (Err(RedfishError::NoDpu), 0, true) => {
-            tracing::info!(
-                "redfish machine_setup failed due to there being no DPUs on the host. This is expected as the host has no DPUs, and we are configured to allow this."
-            );
-            Ok(None)
-        }
-        (Ok(maybe_jid), _, _) => Ok(maybe_jid),
-        (Err(e), _, _) => Err(e),
-    }
+    handle_no_dpu_error(setup_result, expected_dpu_count, "machine_setup")
 }
 
 async fn set_boot_order_dpu_first_and_handle_no_dpu_error(
     redfish_client: &dyn Redfish,
     boot_interface_mac: &str,
     expected_dpu_count: usize,
-    allow_zero_dpu_hosts: bool,
 ) -> Result<Option<String>, RedfishError> {
     let setup_result = redfish_client
         .set_boot_order_dpu_first(boot_interface_mac)
         .await;
-    match (setup_result, expected_dpu_count, allow_zero_dpu_hosts) {
-        (Err(RedfishError::NoDpu), 0, true) => {
+    handle_no_dpu_error(setup_result, expected_dpu_count, "set_boot_order_dpu_first")
+}
+
+/// Treat `Err(RedfishError::NoDpu)` as `Ok(None)` *only* when the host is
+/// declared zero-DPU (`expected_dpu_count == 0`). Other error variants and
+/// successful results pass through untouched. The `dpu_mode` gate in
+/// site-explorer is what guarantees `expected_dpu_count == 0` actually
+/// means the host was configured as `NoDpu`.
+fn handle_no_dpu_error(
+    result: Result<Option<String>, RedfishError>,
+    expected_dpu_count: usize,
+    operation: &'static str,
+) -> Result<Option<String>, RedfishError> {
+    match (result, expected_dpu_count) {
+        (Err(RedfishError::NoDpu), 0) => {
             tracing::info!(
-                "redfish set_boot_order_dpu_first failed due to there being no DPUs on the host. This is expected as the host has no DPUs, and we are configured to allow this."
+                "redfish {operation} failed with NoDpu on a zero-DPU host; treating as Ok"
             );
             Ok(None)
         }
-        (Ok(job_id), _, _) => Ok(job_id),
-        (Err(e), _, _) => Err(e),
+        (other, _) => other,
     }
 }
 
@@ -10219,9 +10213,9 @@ async fn set_host_boot_order(
             // all zero-DPU hosts because libredfish doesn't implement
             // `boot_first` for every vendor yet (Dell currently returns
             // `NotSupported`); zero-DPU hosts fall through to the
-            // `set_boot_order_dpu_first` path below, which downgrades
-            // the resulting `NoDpu` error via `allow_zero_dpu_hosts`
-            // and still hits `CheckBootOrder` for verification.
+            // `set_boot_order_dpu_first` path below, which treats the
+            // resulting `NoDpu` error as `Ok` and still hits `CheckBootOrder`
+            // for verification.
             //
             // Resolve the boot NIC MAC the same way `CheckHostConfig` does,
             // supporting hosts with DPU(s) and zero DPUs alike.
@@ -10236,7 +10230,6 @@ async fn set_host_boot_order(
                 redfish_client,
                 &boot_interface_mac.to_string(),
                 mh_snapshot.host_snapshot.associated_dpu_machine_ids().len(),
-                ctx.services.site_config.allow_zero_dpu_hosts,
             )
             .await
             {
@@ -10680,6 +10673,37 @@ mod tests {
             .expect("stale CX7 inventory should require upgrade");
 
         assert_eq!(to_install.version, target_version);
+    }
+
+    #[test]
+    fn handle_no_dpu_error_treats_as_ok_on_zero_dpu_host() {
+        let result = handle_no_dpu_error(Err(RedfishError::NoDpu), 0, "machine_setup");
+        assert!(matches!(result, Ok(None)));
+    }
+
+    #[test]
+    fn handle_no_dpu_error_surfaces_when_dpus_were_expected() {
+        let result = handle_no_dpu_error(Err(RedfishError::NoDpu), 2, "machine_setup");
+        assert!(matches!(result, Err(RedfishError::NoDpu)));
+    }
+
+    #[test]
+    fn handle_no_dpu_error_passes_through_success() {
+        let job_id = "bios-job-1".to_string();
+        let result = handle_no_dpu_error(Ok(Some(job_id.clone())), 0, "machine_setup");
+        assert!(matches!(result, Ok(Some(ref s)) if s == &job_id));
+
+        let result = handle_no_dpu_error(Ok(None), 2, "machine_setup");
+        assert!(matches!(result, Ok(None)));
+    }
+
+    #[test]
+    fn handle_no_dpu_error_does_not_touch_other_errors() {
+        // Other error variants must surface, even on zero-DPU hosts -- we
+        // only ignore the *specific* NoDpu signal.
+        let result =
+            handle_no_dpu_error(Err(RedfishError::Lockdown), 0, "set_boot_order_dpu_first");
+        assert!(matches!(result, Err(RedfishError::Lockdown)));
     }
 
     #[test]
