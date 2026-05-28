@@ -1427,6 +1427,7 @@ func TestGetForgeMachineStatus(t *testing.T) {
 		name                   string
 		args                   args
 		wantStatus             string
+		wantMessage            string
 		wantMachineAllocatable bool
 	}{
 		{
@@ -1498,6 +1499,75 @@ func TestGetForgeMachineStatus(t *testing.T) {
 				},
 			},
 			wantStatus:             cdbm.MachineStatusError,
+			wantMachineAllocatable: false,
+		},
+		{
+			name: "test get forge machine status - with automatic DPU firmware update alert",
+			args: args{
+				controllerMachine: &cwssaws.Machine{
+					State: controllerMachineStatePrefixReady,
+					Health: &cwssaws.HealthReport{
+						Alerts: []*cwssaws.HealthProbeAlert{
+							{
+								Id:      MachineDPUFirmwareUpdateAlertID,
+								Target:  cdb.GetStrPtr(MachineDPUFirmwareUpdateAlertTarget),
+								Message: "AutomaticDpuFirmwareUpdate//",
+								Classifications: []string{
+									MachinePreventAllocations,
+								},
+							},
+						},
+					},
+				},
+			},
+			wantStatus:             cdbm.MachineStatusInitializing,
+			wantMessage:            MachineDPUFirmwareUpdateStatusMessage,
+			wantMachineAllocatable: false,
+		},
+		{
+			name: "test get forge machine status - with non-automatic DPU firmware update alert",
+			args: args{
+				controllerMachine: &cwssaws.Machine{
+					State: controllerMachineStatePrefixAssigned,
+					Health: &cwssaws.HealthReport{
+						Alerts: []*cwssaws.HealthProbeAlert{
+							{
+								Id:      MachineDPUFirmwareUpdateAlertID,
+								Target:  cdb.GetStrPtr(MachineDPUFirmwareUpdateAlertTarget),
+								Message: "ManualDpuFirmwareUpdate//",
+								Classifications: []string{
+									MachinePreventAllocations,
+								},
+							},
+						},
+					},
+				},
+			},
+			wantStatus:             cdbm.MachineStatusInitializing,
+			wantMessage:            MachineDPUFirmwareUpdateStatusMessage,
+			wantMachineAllocatable: false,
+		},
+		{
+			name: "test get forge machine status - non-DPU firmware prevent alert remains error",
+			args: args{
+				controllerMachine: &cwssaws.Machine{
+					State: controllerMachineStatePrefixReady,
+					Health: &cwssaws.HealthReport{
+						Alerts: []*cwssaws.HealthProbeAlert{
+							{
+								Id:      MachineDPUFirmwareUpdateAlertID,
+								Target:  cdb.GetStrPtr("HostFirmware"),
+								Message: "HostFirmwareUpdate//",
+								Classifications: []string{
+									MachinePreventAllocations,
+								},
+							},
+						},
+					},
+				},
+			},
+			wantStatus:             cdbm.MachineStatusError,
+			wantMessage:            MachinePreventAllocationStatusMessage,
 			wantMachineAllocatable: false,
 		},
 		{
@@ -1649,7 +1719,11 @@ func TestGetForgeMachineStatus(t *testing.T) {
 			status, message, isAllocatable := getNICoMachineStatus(tt.args.controllerMachine, log.Logger)
 			assert.Equal(t, tt.wantMachineAllocatable, isAllocatable)
 			assert.Equal(t, tt.wantStatus, status)
-			assert.NotEmpty(t, message)
+			if tt.wantMessage != "" {
+				assert.Equal(t, tt.wantMessage, message)
+			} else {
+				assert.NotEmpty(t, message)
+			}
 		})
 	}
 }
