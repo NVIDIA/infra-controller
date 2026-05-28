@@ -187,6 +187,7 @@ impl TryFrom<Switch> for rpc::Switch {
             deleted,
             controller_state,
             bmc_info: None,
+            nvos_info: None,
             state_version,
             metadata: Some(src.metadata.into()),
             version: src.version.version_string(),

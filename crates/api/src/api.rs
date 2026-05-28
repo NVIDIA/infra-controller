@@ -31,6 +31,7 @@ use ::rpc::protos::dns::{
 };
 use ::rpc::protos::{measured_boot as measured_boot_pb, mlx_device as mlx_device_pb};
 use carbide_ib_fabric::ib::IBFabricManager;
+use carbide_rack::bms_client::BmsDsxExchangeHandle;
 use carbide_redfish::libredfish::RedfishClientPool;
 use carbide_site_explorer::EndpointExplorer;
 use carbide_uuid::machine::{MachineId, MachineInterfaceId};
@@ -45,19 +46,18 @@ use model::machine::Machine;
 use model::machine::machine_search_config::MachineSearchConfig;
 use model::resource_pool::common::CommonPools;
 use sqlx::PgTransaction;
+use state_controller::controller::Enqueuer;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status, Streaming};
 
 use self::metrics::ApiMetricsEmitter;
 use self::rpc::forge_server::Forge;
 use crate::cfg::file::CarbideConfig;
-use crate::dpf::DpfOperations;
 use crate::dynamic_settings::DynamicSettings;
 use crate::ethernet_virtualization::EthVirtData;
 use crate::logging::log_limiter::LogLimiter;
-use crate::rack::bms_client::BmsDsxExchangeHandle;
 use crate::scout_stream::ConnectionRegistry;
-use crate::state_controller::controller::Enqueuer;
+use crate::state_controller::machine::dpf::DpfOperations;
 use crate::state_controller::machine::io::MachineStateControllerIO;
 use crate::{CarbideError, CarbideResult};
 
@@ -671,14 +671,6 @@ impl Forge for Api {
         crate::handlers::dns::lookup_record(self, request).await
     }
 
-    // Legacy DNS lookup method for backward compatibility
-    async fn lookup_record_legacy(
-        &self,
-        request: Request<rpc::dns_message::DnsQuestion>,
-    ) -> Result<Response<rpc::dns_message::DnsResponse>, Status> {
-        crate::handlers::dns::lookup_record_legacy_compat(self, request).await
-    }
-
     async fn invoke_instance_power(
         &self,
         request: Request<rpc::InstancePowerRequest>,
@@ -925,6 +917,13 @@ impl Forge for Api {
         request: Request<rpc::GetBmcCredentialsRequest>,
     ) -> Result<Response<rpc::GetBmcCredentialsResponse>, Status> {
         crate::handlers::credential::get_bmc_credentals(self, request).await
+    }
+
+    async fn get_switch_nvos_credentials(
+        &self,
+        request: Request<rpc::GetSwitchNvosCredentialsRequest>,
+    ) -> Result<Response<rpc::GetBmcCredentialsResponse>, Status> {
+        crate::handlers::credential::get_switch_nvos_credentials(self, request).await
     }
 
     /// Network status of each managed host, as reported by forge-dpu-agent.

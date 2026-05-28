@@ -15,13 +15,48 @@
  * limitations under the License.
  */
 
-use crate::state_controller::common_services::CommonStateHandlerServices;
+use std::sync::Arc;
+
+use carbide_ipmi::IPMITool;
+use carbide_redfish::libredfish::RedfishClientPool;
+use db::db_read::PgPoolReader;
+use libredfish::Redfish;
+use model::machine::Machine;
+use sqlx::PgPool;
+use state_controller::state_handler::{StateHandlerContextObjects, StateHandlerError};
+
+use crate::state_controller::machine::config::MachineStateHandlerSiteConfig;
 use crate::state_controller::machine::metrics::MachineMetrics;
-use crate::state_controller::state_handler::StateHandlerContextObjects;
 
 pub struct MachineStateHandlerContextObjects {}
 
 impl StateHandlerContextObjects for MachineStateHandlerContextObjects {
-    type Services = CommonStateHandlerServices;
+    type Services = MachineStateHandlerServices;
     type ObjectMetrics = MachineMetrics;
+}
+
+#[derive(Clone)]
+pub struct MachineStateHandlerServices {
+    pub db_pool: PgPool,
+    /// Postgres database pool that can be passed directly to read-only db functions without a
+    /// transaction
+    pub db_reader: PgPoolReader,
+    /// API for interaction with Libredfish
+    pub redfish_client_pool: Arc<dyn RedfishClientPool>,
+    /// An implementation of the IPMITool that understands how to reboot a machine
+    pub ipmi_tool: Arc<dyn IPMITool>,
+    /// Configuration used by MachineStateHandler.
+    pub site_config: Arc<MachineStateHandlerSiteConfig>,
+}
+
+impl MachineStateHandlerServices {
+    pub async fn create_redfish_client_from_machine(
+        &self,
+        machine: &Machine,
+    ) -> Result<Box<dyn Redfish>, StateHandlerError> {
+        self.redfish_client_pool
+            .create_client_from_machine(machine, &self.db_pool)
+            .await
+            .map_err(StateHandlerError::from)
+    }
 }

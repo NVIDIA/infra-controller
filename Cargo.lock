@@ -1186,11 +1186,15 @@ dependencies = [
  "carbide-macros",
  "carbide-measured-boot",
  "carbide-metrics-utils",
+ "carbide-mqtt-common",
  "carbide-network",
  "carbide-network-segment-controller",
  "carbide-nvlink-manager",
+ "carbide-power-shelf-controller",
  "carbide-preingestion-manager",
  "carbide-prost-builder",
+ "carbide-rack",
+ "carbide-rack-controller",
  "carbide-redfish",
  "carbide-rpc",
  "carbide-rpc-utils",
@@ -1199,6 +1203,7 @@ dependencies = [
  "carbide-spdm-controller",
  "carbide-sqlx-testing",
  "carbide-ssh",
+ "carbide-state-controller-common",
  "carbide-switch-controller",
  "carbide-tls",
  "carbide-utils",
@@ -1331,7 +1336,7 @@ dependencies = [
  "eyre",
  "futures",
  "futures-util",
- "hickory-proto 0.26.1",
+ "hickory-proto",
  "ipnetwork",
  "itertools 0.14.0",
  "lazy_static",
@@ -1408,6 +1413,7 @@ dependencies = [
  "mac_address",
  "nras",
  "once_cell",
+ "p256 0.14.0-rc.7",
  "prost",
  "rand 0.10.1",
  "regex",
@@ -1620,13 +1626,11 @@ dependencies = [
  "clap",
  "dns-record",
  "eyre",
- "local-ip-address",
  "metrics-endpoint",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "serde",
- "serde_json",
  "thiserror 2.0.18",
  "tokio",
  "toml 1.1.2+spec-1.1.0",
@@ -1636,7 +1640,6 @@ dependencies = [
  "tracing-subscriber",
  "trust-dns-resolver",
  "trust-dns-server",
- "uuid",
 ]
 
 [[package]]
@@ -2262,6 +2265,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "carbide-mqtt-common"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "mqttea",
+ "opentelemetry",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "carbide-network"
 version = "0.0.0"
 dependencies = [
@@ -2321,6 +2336,28 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "carbide-power-shelf-controller"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "carbide-api-db",
+ "carbide-api-model",
+ "carbide-health-metrics",
+ "carbide-rack",
+ "carbide-secrets",
+ "carbide-utils",
+ "carbide-uuid",
+ "config-version",
+ "eyre",
+ "librms",
+ "mac_address",
+ "opentelemetry",
+ "sqlx",
+ "state-controller",
+ "tracing",
 ]
 
 [[package]]
@@ -2389,6 +2426,60 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "uuid",
+]
+
+[[package]]
+name = "carbide-rack"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "bms-dsx-exchange",
+ "carbide-api-db",
+ "carbide-api-model",
+ "carbide-health-report",
+ "carbide-mqtt-common",
+ "carbide-secrets",
+ "carbide-uuid",
+ "chrono",
+ "eyre",
+ "librms",
+ "mac_address",
+ "mqttea",
+ "opentelemetry",
+ "serde_json",
+ "sqlx",
+ "state-controller",
+ "tokio",
+ "tokio-util",
+ "tonic",
+ "tracing",
+]
+
+[[package]]
+name = "carbide-rack-controller"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "carbide-api-db",
+ "carbide-api-model",
+ "carbide-health-metrics",
+ "carbide-rack",
+ "carbide-secrets",
+ "carbide-utils",
+ "carbide-uuid",
+ "chrono",
+ "config-version",
+ "duration-str",
+ "eyre",
+ "librms",
+ "mac_address",
+ "opentelemetry",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "state-controller",
+ "tonic",
+ "tracing",
 ]
 
 [[package]]
@@ -2744,6 +2835,16 @@ dependencies = [
  "tonic-prost-build",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "carbide-state-controller-common"
+version = "0.0.0"
+dependencies = [
+ "carbide-utils",
+ "duration-str",
+ "serde",
+ "state-controller",
 ]
 
 [[package]]
@@ -3947,14 +4048,14 @@ checksum = "abd57806937c9cc163efc8ea3910e00a62e2aeb0b8119f1793a978088f8f6b04"
 
 [[package]]
 name = "dhcproto"
-version = "0.14.0"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "425ab19f6a915beac79cac8ec2810c1311b502ae14d7f294682081cf5ae4c5bb"
+checksum = "c278d2f17dbcb7332f3b31788be67f76017096c5eedc293e1259f2d48b0f891f"
 dependencies = [
  "dhcproto-macros",
- "hickory-proto 0.25.2",
+ "hickory-proto",
  "ipnet",
- "rand 0.9.4",
+ "rand 0.10.1",
  "thiserror 2.0.18",
 ]
 
@@ -4829,18 +4930,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "getset"
-version = "0.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9cf0fc11e47561d47397154977bc219f4cf809b2974facc3ccb3b89e2436f912"
-dependencies = [
- "proc-macro-error2",
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
-
-[[package]]
 name = "ghash"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5141,7 +5230,7 @@ dependencies = [
  "futures-channel",
  "futures-io",
  "futures-util",
- "hickory-proto 0.26.1",
+ "hickory-proto",
  "idna 1.1.0",
  "ipnet",
  "jni",
@@ -5149,28 +5238,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tinyvec",
  "tokio",
- "tracing",
- "url",
-]
-
-[[package]]
-name = "hickory-proto"
-version = "0.25.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8a6fe56c0038198998a6f217ca4e7ef3a5e51f46163bd6dd60b5c71ca6c6502"
-dependencies = [
- "async-trait",
- "cfg-if",
- "data-encoding",
- "enum-as-inner",
- "futures-channel",
- "futures-util",
- "idna 1.1.0",
- "ipnet",
- "once_cell",
- "rand 0.9.4",
- "thiserror 2.0.18",
- "tinyvec",
  "tracing",
  "url",
 ]
@@ -5204,7 +5271,7 @@ dependencies = [
  "cfg-if",
  "futures-util",
  "hickory-net",
- "hickory-proto 0.26.1",
+ "hickory-proto",
  "ipconfig",
  "ipnet",
  "jni",
@@ -6430,17 +6497,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
-name = "local-ip-address"
-version = "0.6.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7b0187df4e614e42405b49511b82ff7a1774fbd9a816060ee465067847cac22"
-dependencies = [
- "libc",
- "neli",
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6891,35 +6947,6 @@ name = "ndk-context"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27b02d87554356db9e9a873add8782d4ea6e3e58ea071a9adb9a2e8ddb884a8b"
-
-[[package]]
-name = "neli"
-version = "0.7.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22f9786d56d972959e1408b6a93be6af13b9c1392036c5c1fafa08a1b0c6ee87"
-dependencies = [
- "bitflags 2.11.1",
- "byteorder",
- "derive_builder",
- "getset",
- "libc",
- "log",
- "neli-proc-macros",
- "parking_lot",
-]
-
-[[package]]
-name = "neli-proc-macros"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05d8d08c6e98f20a62417478ebf7be8e1425ec9acecc6f63e22da633f6b71609"
-dependencies = [
- "either",
- "proc-macro2",
- "quote",
- "serde",
- "syn 2.0.117",
-]
 
 [[package]]
 name = "netlink-packet-core"
@@ -8262,28 +8289,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "proc-macro-error-attr2"
-version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96de42df36bb9bba5542fe9f1a054b8cc87e172759a1868aa05c1f3acc89dfc5"
-dependencies = [
- "proc-macro2",
- "quote",
-]
-
-[[package]]
-name = "proc-macro-error2"
-version = "2.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11ec05c52be0a07b08061f7dd003e7d7092e0472bc731b4af7bb1ef876109802"
-dependencies = [
- "proc-macro-error-attr2",
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
-
-[[package]]
 name = "proc-macro2"
 version = "1.0.106"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9187,12 +9192,8 @@ dependencies = [
  "flume",
  "futures-util",
  "log",
- "rustls-native-certs",
- "rustls-pemfile",
- "rustls-webpki 0.102.8",
  "thiserror 2.0.18",
  "tokio",
- "tokio-rustls",
  "tokio-stream",
  "tokio-util",
 ]
@@ -9429,7 +9430,7 @@ dependencies = [
  "once_cell",
  "ring",
  "rustls-pki-types",
- "rustls-webpki 0.103.13",
+ "rustls-webpki",
  "subtle",
  "zeroize",
 ]
@@ -9479,7 +9480,7 @@ dependencies = [
  "rustls",
  "rustls-native-certs",
  "rustls-platform-verifier-android",
- "rustls-webpki 0.103.13",
+ "rustls-webpki",
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
@@ -9491,17 +9492,6 @@ name = "rustls-platform-verifier-android"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f87165f0995f63a9fbeea62b64d10b4d9d8e78ec6d7d51fb2125fda7bb36788f"
-
-[[package]]
-name = "rustls-webpki"
-version = "0.102.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64ca1bc8749bd4cf37b5ce386cc146580777b4e8572c7b97baf22c83f444bee9"
-dependencies = [
- "ring",
- "rustls-pki-types",
- "untrusted 0.9.0",
-]
 
 [[package]]
 name = "rustls-webpki"

@@ -234,7 +234,12 @@ pub(crate) async fn set_primary_dpu(
 }
 
 /// Maintenance mode: Put a machine into maintenance mode or take it out.
-/// Switching a host into maintenance mode prevents an instance being assigned to it.
+///
+/// Switching a host into maintenance mode prevents an instance being assigned
+/// to it and suppresses external alerting on the host. It also excludes the
+/// host from state-machine SLA tracking so that machines being worked on by an
+/// operator do not page on-call for time-in-state breaches (e.g. stuck-instance
+/// alerts) regardless of which state or substate they happen to be in.
 pub(crate) async fn set_maintenance(
     api: &Api,
     request: Request<rpc::MaintenanceRequest>,
@@ -297,6 +302,7 @@ pub(crate) async fn set_maintenance(
                                 classifications: vec![
                                     health_report::HealthAlertClassification::prevent_allocations(),
                                     health_report::HealthAlertClassification::suppress_external_alerting(),
+                                    health_report::HealthAlertClassification::exclude_from_state_machine_sla(),
                                 ],
                             }],
                         }

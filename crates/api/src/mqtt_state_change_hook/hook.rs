@@ -17,51 +17,20 @@
 
 //! MQTT hook implementation for publishing state changes.
 
-use std::sync::Arc;
 use std::time::Duration;
 
+use carbide_mqtt_common::hook::{MqttPublisher, QueuedMessage, process_events};
+use carbide_mqtt_common::metrics::MqttHookMetrics;
 use carbide_uuid::machine::MachineId;
 use model::machine::ManagedHostState;
-use mqttea::{MqtteaClient, MqtteaClientError};
 use opentelemetry::metrics::Meter;
+use state_controller::state_change_emitter::{StateChangeEvent, StateChangeHook};
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
-use tokio::time::error::Elapsed;
-use tokio::time::{Instant, timeout_at};
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::mqtt_state_change_hook::message::ManagedHostStateChangeMessage;
-use crate::mqtt_state_change_hook::metrics::MqttHookMetrics;
-use crate::state_controller::state_change_emitter::{StateChangeEvent, StateChangeHook};
-
-/// Internal queue item containing pre-serialized MQTT message with deadline.
-struct QueuedMessage {
-    topic: String,
-    payload: Vec<u8>,
-    /// Deadline by which this message must be published.
-    deadline: Instant,
-}
-
-/// Trait for MQTT publishing, enabling test mocks.
-#[async_trait::async_trait]
-pub trait MqttPublisher: Send + Sync + 'static {
-    /// Publish a message to the given topic.
-    async fn publish(&self, topic: &str, payload: Vec<u8>) -> Result<(), MqtteaClientError>;
-}
-
-#[async_trait::async_trait]
-impl MqttPublisher for MqtteaClient {
-    async fn publish(&self, topic: &str, payload: Vec<u8>) -> Result<(), MqtteaClientError> {
-        MqtteaClient::publish(self, topic, payload).await
-    }
-}
-
-#[async_trait::async_trait]
-impl<T: MqttPublisher> MqttPublisher for Arc<T> {
-    async fn publish(&self, topic: &str, payload: Vec<u8>) -> Result<(), MqtteaClientError> {
-        T::publish(self, topic, payload).await
-    }
-}
 
 /// MQTT hook that publishes `ManagedHostState` changes to the MQTT broker.
 ///
@@ -150,43 +119,12 @@ impl StateChangeHook<MachineId, ManagedHostState> for MqttStateChangeHook {
     }
 }
 
-/// Background task that processes queued messages and publishes to MQTT.
-async fn process_events<P: MqttPublisher>(
-    mut receiver: mpsc::Receiver<QueuedMessage>,
-    client: P,
-    metrics: MqttHookMetrics,
-    cancel_token: CancellationToken,
-) {
-    while let Some(Some(msg)) = cancel_token.run_until_cancelled(receiver.recv()).await {
-        match timeout_at(msg.deadline, client.publish(&msg.topic, msg.payload)).await {
-            Ok(Ok(())) => {
-                tracing::debug!(topic = %msg.topic, "Published state change to MQTT");
-                metrics.record_success();
-            }
-            Ok(Err(e)) => {
-                tracing::warn!(
-                    topic = %msg.topic,
-                    error = %e,
-                    "Failed to publish state change to MQTT"
-                );
-                metrics.record_publish_error();
-            }
-            Err(Elapsed { .. }) => {
-                tracing::warn!(
-                    topic = %msg.topic,
-                    "MQTT publish timed out"
-                );
-                metrics.record_timeout();
-            }
-        }
-    }
-    tracing::debug!("MQTT state change hook background task stopped");
-}
-
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use mqttea::MqtteaClientError;
     use opentelemetry::global;
     use tokio::sync::Barrier;
 

@@ -34,7 +34,15 @@ use carbide_network_segment_controller::context::NetworkSegmentStateHandlerServi
 use carbide_network_segment_controller::handler::NetworkSegmentStateHandler;
 use carbide_network_segment_controller::io::NetworkSegmentStateControllerIO;
 use carbide_nvlink_manager::NvlPartitionMonitor;
+use carbide_power_shelf_controller::context::PowerShelfStateHandlerServices;
+use carbide_power_shelf_controller::handler::PowerShelfStateHandler;
+use carbide_power_shelf_controller::io::PowerShelfStateControllerIO;
 use carbide_preingestion_manager::PreingestionManager;
+use carbide_rack::bms_client::BmsDsxExchangeHandle;
+use carbide_rack_controller::config::RackConfig;
+use carbide_rack_controller::context::RackStateHandlerServices;
+use carbide_rack_controller::handler::RackStateHandler;
+use carbide_rack_controller::io::RackStateControllerIO;
 use carbide_redfish::libredfish::RedfishClientPool;
 use carbide_redfish::nv_redfish::NvRedfishClientPool;
 use carbide_site_explorer::SiteExplorer;
@@ -66,6 +74,8 @@ use opentelemetry::metrics::Meter;
 use sqlx::postgres::PgSslMode;
 use sqlx::{ConnectOptions, PgPool};
 use sqlx_query_tracing::SQLX_STATEMENTS_LOG_LEVEL;
+use state_controller::controller::{Enqueuer, StateController};
+use state_controller::state_change_emitter::StateChangeEmitterBuilder;
 use tokio::sync::Semaphore;
 use tokio::sync::oneshot::Sender;
 use tokio::task::JoinSet;
@@ -88,20 +98,11 @@ use crate::logging::service_health_metrics::{
 use crate::machine_update_manager::MachineUpdateManager;
 use crate::measured_boot::metrics_collector::MeasuredBootMetricsCollector;
 use crate::mqtt_state_change_hook::hook::MqttStateChangeHook;
-use crate::rack::bms_client::BmsDsxExchangeHandle;
 use crate::scout_stream::ConnectionRegistry;
 use crate::state_controller::common_services::CommonStateHandlerServices;
-use crate::state_controller::controller::{Enqueuer, StateController};
+use crate::state_controller::machine::context::MachineStateHandlerServices;
 use crate::state_controller::machine::handler::MachineStateHandlerBuilder;
 use crate::state_controller::machine::io::MachineStateControllerIO;
-use crate::state_controller::power_shelf::context::PowerShelfStateHandlerServices;
-use crate::state_controller::power_shelf::handler::PowerShelfStateHandler;
-use crate::state_controller::power_shelf::io::PowerShelfStateControllerIO;
-use crate::state_controller::rack::config::RackConfig;
-use crate::state_controller::rack::context::RackStateHandlerServices;
-use crate::state_controller::rack::handler::RackStateHandler;
-use crate::state_controller::rack::io::RackStateControllerIO;
-use crate::state_controller::state_change_emitter::StateChangeEmitterBuilder;
 use crate::{attestation, db_init, ethernet_virtualization, listener};
 
 /// The resolved set of network declarations passed from `start_api` into
@@ -641,51 +642,58 @@ pub async fn start_api(
 
     // Create DPF SDK and initialize CRs if enabled
     // If we end up having static DPUDeployments, we could move the static CRs outside of the API.
-    let dpf_sdk: Option<Arc<dyn crate::dpf::DpfOperations>> = if carbide_config.dpf.enabled {
-        tracing::info!("Initializing DPF SDK");
-        let repo = carbide_dpf::KubeRepository::new()
-            .await
-            .map_err(|e| eyre::eyre!("Failed to create DPF repository: {e}"))?;
+    let dpf_sdk: Option<Arc<dyn crate::state_controller::machine::dpf::DpfOperations>> =
+        if carbide_config.dpf.enabled {
+            tracing::info!("Initializing DPF SDK");
+            let repo = carbide_dpf::KubeRepository::new()
+                .await
+                .map_err(|e| eyre::eyre!("Failed to create DPF repository: {e}"))?;
 
-        let provider = crate::dpf::CarbideBmcPasswordProvider::new(credential_manager.clone());
+            let provider = crate::state_controller::machine::dpf::CarbideBmcPasswordProvider::new(
+                credential_manager.clone(),
+            );
 
-        let mandatory_services = carbide_config.dpf.services.clone();
-        let dpf_mandatory_services = vec![
-            crate::dpf_services::dts_service(&mandatory_services.dts),
-            crate::dpf_services::doca_hbn_service(&mandatory_services.doca_hbn),
-            crate::dpf_services::dhcp_server_service(&mandatory_services.dhcp_server),
-            crate::dpf_services::dpu_agent_service(&mandatory_services.dpu_agent),
-            crate::dpf_services::fmds_service(&mandatory_services.fmds),
-            crate::dpf_services::otelcol_service(&mandatory_services.otel),
-        ];
+            let mandatory_services = carbide_config.dpf.services.clone();
+            let dpf_mandatory_services = vec![
+                crate::dpf_services::dts_service(&mandatory_services.dts),
+                crate::dpf_services::doca_hbn_service(&mandatory_services.doca_hbn),
+                crate::dpf_services::dhcp_server_service(&mandatory_services.dhcp_server),
+                crate::dpf_services::dpu_agent_service(&mandatory_services.dpu_agent),
+                crate::dpf_services::fmds_service(&mandatory_services.fmds),
+                crate::dpf_services::otelcol_service(&mandatory_services.otel),
+            ];
 
-        // This is just temparary code until we make v2 only option. (just 2 weeks)
-        // Soon v2 flag will be removed and will become only mode for dpf handling.
-        let init_config = carbide_dpf::InitDpfResourcesConfig {
-            bfb_url: carbide_config.dpf.bfb_url.clone(),
-            flavor_name: carbide_config.dpf.flavor_name.clone(),
-            deployment_name: carbide_config.dpf.deployment_name.clone(),
-            services: dpf_mandatory_services,
-        };
+            // This is just temparary code until we make v2 only option. (just 2 weeks)
+            // Soon v2 flag will be removed and will become only mode for dpf handling.
+            let init_config = carbide_dpf::InitDpfResourcesConfig {
+                bfb_url: carbide_config.dpf.bfb_url.clone(),
+                flavor_name: carbide_config.dpf.flavor_name.clone(),
+                deployment_name: carbide_config.dpf.deployment_name.clone(),
+                services: dpf_mandatory_services,
+            };
 
-        let sdk = carbide_dpf::DpfSdkBuilder::new(repo, carbide_dpf::NAMESPACE, provider)
-            .with_labeler(crate::dpf::CarbideDPFLabeler::new(
-                carbide_config.dpf.node_label_key.clone(),
+            let sdk = carbide_dpf::DpfSdkBuilder::new(repo, carbide_dpf::NAMESPACE, provider)
+                .with_labeler(
+                    crate::state_controller::machine::dpf::CarbideDPFLabeler::new(
+                        carbide_config.dpf.node_label_key.clone(),
+                    ),
+                )
+                .with_bmc_password_refresh_interval(std::time::Duration::from_secs(60))
+                .with_join_set(join_set)
+                .initialize(&init_config)
+                .await
+                .map_err(|err| eyre::eyre!("Failed to initialize DPF SDK: {err}"))?;
+
+            Some(Arc::new(
+                crate::state_controller::machine::dpf::DpfSdkOps::new(
+                    Arc::new(sdk),
+                    db_pool.clone(),
+                    join_set,
+                )?,
             ))
-            .with_bmc_password_refresh_interval(std::time::Duration::from_secs(60))
-            .with_join_set(join_set)
-            .initialize(&init_config)
-            .await
-            .map_err(|err| eyre::eyre!("Failed to initialize DPF SDK: {err}"))?;
-
-        Some(Arc::new(crate::dpf::DpfSdkOps::new(
-            Arc::new(sdk),
-            db_pool.clone(),
-            join_set,
-        )?))
-    } else {
-        None
-    };
+        } else {
+            None
+        };
 
     let component_manager = if let Some(cd_config) = &carbide_config.component_manager {
         match component_manager::component_manager::build_component_manager(
@@ -1021,7 +1029,7 @@ pub async fn initialize_and_start_controllers<'a>(
                 );
                 let rms_api_config = librms::client::RmsApiConfig::new(url, &rms_client_config);
                 Arc::new(librms::RackManagerApi::new(&rms_api_config))
-                    as Arc<dyn crate::rack::rms_client::SwitchSystemImageRmsClient>
+                    as Arc<dyn carbide_rack::rms_client::SwitchSystemImageRmsClient>
             }),
         credential_manager: credential_manager.clone(),
     });
@@ -1041,7 +1049,19 @@ pub async fn initialize_and_start_controllers<'a>(
         .database(db_pool.clone(), work_lock_manager_handle.clone())
         .meter("carbide_machines", meter.clone())
         .processor_id(state_controller_id.clone())
-        .services(handler_services.clone())
+        .services(
+            MachineStateHandlerServices {
+                db_pool: handler_services.db_pool.clone(),
+                db_reader: handler_services.db_reader.clone(),
+                redfish_client_pool: handler_services.redfish_client_pool.clone(),
+                ipmi_tool: handler_services.ipmi_tool.clone(),
+                site_config: handler_services
+                    .site_config
+                    .machine_state_handler_site_config()
+                    .into(),
+            }
+            .into(),
+        )
         .iteration_config((&carbide_config.machine_state_controller.controller).into())
         .state_handler(Arc::new(
             MachineStateHandlerBuilder::builder()
@@ -1307,6 +1327,7 @@ pub async fn initialize_and_start_controllers<'a>(
         carbide_config.clone(),
         meter.clone(),
         work_lock_manager_handle.clone(),
+        dpf_sdk.clone(),
     )
     .start(join_set, cancel_token.clone())?;
 

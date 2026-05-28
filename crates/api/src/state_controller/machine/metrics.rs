@@ -28,8 +28,7 @@ use model::hardware_info::MachineInventorySoftwareComponent;
 use model::tenant::TenantOrganizationId;
 use opentelemetry::KeyValue;
 use opentelemetry::metrics::{Histogram, Meter};
-
-use crate::state_controller::metrics::MetricsEmitter;
+use state_controller::metrics::MetricsEmitter;
 
 #[derive(Debug, Default)]
 pub struct MachineMetrics {

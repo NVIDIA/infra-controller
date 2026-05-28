@@ -20,6 +20,7 @@ use common::api_fixtures::create_test_env;
 use common::api_fixtures::instance::{
     default_os_config, default_tenant_config, single_interface_network_config,
 };
+use model::machine::{FailureCause, FailureDetails, FailureSource, ManagedHostState};
 use rpc::forge as rpcf;
 use rpc::forge::forge_server::Forge;
 
@@ -68,7 +69,8 @@ async fn test_maintenance(db_pool: sqlx::PgPool) -> Result<(), eyre::Report> {
             tenant_message: None,
             classifications: vec![
                 "PreventAllocations".to_string(),
-                "SuppressExternalAlerting".to_string()
+                "SuppressExternalAlerting".to_string(),
+                "ExcludeFromStateMachineSla".to_string(),
             ]
         }
     );
@@ -284,6 +286,96 @@ async fn test_maintenance_multi_dpu(db_pool: sqlx::PgPool) -> Result<(), eyre::R
         allow_unhealthy_machine: false,
     };
     env.api.allocate_instance(tonic::Request::new(req)).await?;
+
+    Ok(())
+}
+
+/// test: putting a machine into maintenance mode must suppress any stuck instance alerts.
+///
+/// We check a machine in maintenance mode for its contribution to the state-machine
+/// SLA-breach signal that drives the `stuckInstanceCritical` Prometheus alert.
+///
+/// This makes use of the tactic from `test_state_sla` (force the machine into
+/// `ManagedHostState::Failed`, which has a zero-second SLA, so the machine is
+/// instantly "above SLA" without us having to wait out a real SLA window)
+#[crate::sqlx_test]
+async fn test_maintenance_suppresses_state_machine_sla_alert(
+    db_pool: sqlx::PgPool,
+) -> Result<(), eyre::Report> {
+    let env = create_test_env(db_pool.clone()).await;
+    let (host_id, _dpu_id) = create_managed_host(&env).await.into();
+    let rpc_host_id: MachineId = host_id;
+
+    // force the host into Failed state (0-second SLA).
+    // this is what would otherwise drive `carbide_machines_per_state_above_sla > 0`
+    // and page on-call via `stuckInstanceCritical`.
+    let mut txn = env.db_txn().await;
+    db::machine::update_state(
+        &mut txn,
+        &host_id,
+        &ManagedHostState::Failed {
+            details: FailureDetails {
+                cause: FailureCause::NoError,
+                failed_at: chrono::Utc::now(),
+                source: FailureSource::NoError,
+            },
+            machine_id: host_id,
+            retry_count: 1,
+        },
+    )
+    .await
+    .unwrap();
+    txn.commit().await.unwrap();
+
+    // with no maintenance override, the machine reports as
+    // above-SLA and would be counted by the stuck-instance alert metric.
+    let machine = env.find_machine(rpc_host_id).await.remove(0);
+    let sla = machine.state_sla.as_ref().unwrap();
+    assert!(
+        sla.time_in_state_above_sla,
+        "expected the Failed-state host to be above SLA before maintenance is enabled",
+    );
+
+    // enable maintenance mode
+    env.api
+        .set_maintenance(tonic::Request::new(rpcf::MaintenanceRequest {
+            operation: rpcf::MaintenanceOperation::Enable.into(),
+            host_id: Some(rpc_host_id),
+            reference: Some("https://jira.example.com/ABC-123".to_string()),
+        }))
+        .await
+        .unwrap();
+
+    // SetMaintenance now adds the ExcludeFromStateMachineSla
+    // classification, so state_sla() short-circuits to no_sla() and the
+    // host stops contributing to the stuck-instance Prometheus metric.
+    let machine = env.find_machine(rpc_host_id).await.remove(0);
+    let sla = machine.state_sla.as_ref().unwrap();
+    assert!(
+        !sla.time_in_state_above_sla,
+        "maintenance mode must suppress state-machine SLA breach",
+    );
+    assert!(
+        sla.sla.is_none(),
+        "maintenance mode must produce a no-SLA result regardless of current state",
+    );
+
+    // disabling maintenance should re-expose the breach.
+    env.api
+        .set_maintenance(tonic::Request::new(rpcf::MaintenanceRequest {
+            operation: rpcf::MaintenanceOperation::Disable.into(),
+            host_id: Some(rpc_host_id),
+            reference: None,
+        }))
+        .await
+        .unwrap();
+
+    let machine = env.find_machine(rpc_host_id).await.remove(0);
+    let sla = machine.state_sla.as_ref().unwrap();
+    assert!(
+        sla.time_in_state_above_sla,
+        "disabling maintenance should re-expose the above-SLA condition",
+    );
 
     Ok(())
 }

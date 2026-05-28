@@ -24,9 +24,8 @@ use config_version::ConfigVersion;
 use health_report::{HealthReport, HealthReportApplyMode};
 use model::machine::{MachineLastRebootRequested, MachineLastRebootRequestedMode};
 use sqlx::PgTransaction;
-
-use crate::state_controller::db_write_batch::WriteOp;
-use crate::state_controller::state_handler::StateHandlerError;
+use state_controller::db_write_batch::WriteOp;
+use state_controller::state_handler::StateHandlerError;
 
 /// A deferred-write operation for use in [`MachineStateHandler`].
 ///
