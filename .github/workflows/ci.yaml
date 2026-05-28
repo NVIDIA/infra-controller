@@ -1109,23 +1109,6 @@ jobs:
       download_artifacts: true
     secrets: inherit
 
-  build-bluefield-forge-dpu-otel-agent:
-    needs:
-      - prepare
-      - build-bluefield-binaries
-    if: ${{ !cancelled() && github.event_name != 'schedule' && needs.prepare.result == 'success' && needs.build-bluefield-binaries.result == 'success' }}
-    uses: ./.github/workflows/docker-build.yml
-    with:
-      dockerfile_path: bluefield/containers/forge-dpu-otel-agent/Dockerfile
-      image_name: nvcr.io/0837451325059433/carbide-dev/forge-dpu-otel-agent
-      image_tag: ${{ needs.prepare.outputs.version }}
-      platforms: linux/arm64
-      runner: linux-arm64-cpu4
-      push: ${{ !contains(github.ref, 'pull-request/') }}
-      load: false
-      download_artifacts: true
-    secrets: inherit
-
   build-bluefield-carbide-fmds:
     needs:
       - prepare
@@ -1291,7 +1274,6 @@ jobs:
       - build-bluefield-otelcol-contrib
       - build-bluefield-forge-dpu-agent
       - build-bluefield-forge-dhcp-server
-      - build-bluefield-forge-dpu-otel-agent
       - build-bluefield-carbide-fmds
       - build-validate-bluefield-helm-charts
       - build-push-bluefield-helm-charts
@@ -1395,7 +1377,6 @@ jobs:
       - build-bluefield-otelcol-contrib
       - build-bluefield-forge-dpu-agent
       - build-bluefield-forge-dhcp-server
-      - build-bluefield-forge-dpu-otel-agent
       - build-bluefield-carbide-fmds
       - build-validate-bluefield-helm-charts
       - build-push-bluefield-helm-charts
