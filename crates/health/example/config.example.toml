@@ -128,7 +128,7 @@ bucket_replenish = "35ms"
 max_jitter = "40ms"
 
 # ==============================================================================
-# Collectors: What data to collect from BMCs and Switches (NMX-T/NVUE REST)
+# BMC Collectors: What data to collect from BMCs
 # ==============================================================================
 
 [collectors.sensors]
@@ -155,18 +155,33 @@ state_refresh_interval = "30m"
 #  "periodic": always poll
 mode = "auto"
 
-# required when mode = "auto" or "periodic"; must not be set when mode = "sse"
+# auto-mode downgrade thresholds and periodic fallback; read only when
+# mode = "auto". omit the whole section to use defaults.
+[collectors.logs.auto]
+# auto uses [collectors.logs.sse] while attempting SSE, then switches to
+# these periodic fallback parameters after downgrade.
+sse_not_available_threshold = 1
+connect_failure_window = "5m"
+connect_failure_threshold = 5
+logs_collection_interval = "5m"
+state_refresh_interval = "30m"
+logs_state_file = "/tmp/logs_collector_{machine_id}.json"
+
+# SSE reconnect backoff; read when mode = "sse" and during auto-mode SSE attempts.
+[collectors.logs.sse]
+initial_backoff = "1s"
+max_backoff = "30s"
+
+# required when
+# mode = "periodic"; must not be set when mode = "sse"
 [collectors.logs.periodic]
 logs_collection_interval = "5m"
 state_refresh_interval = "30m"
 logs_state_file = "/tmp/logs_collector_{machine_id}.json"
 
-# auto-mode downgrade thresholds; read only when mode = "auto". omit the
-# whole section to use defaults (1 / 5m / 5).
-[collectors.logs.auto]
-sse_not_available_threshold = 1
-connect_failure_window = "5m"
-connect_failure_threshold = 5
+# ==============================================================================
+# Switch Host Collectors: What data to collect from NVLink Switch Hosts
+# ==============================================================================
 
 [collectors.nmxt]
 scrape_interval = "1m"

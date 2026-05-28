@@ -28,7 +28,7 @@ use crate::collectors::{
     NmxtCollectorConfig, NvueRestCollector, NvueRestCollectorConfig, SensorCollector,
     SensorCollectorConfig, SseLogCollector, SseLogCollectorConfig, StreamingCollectorStartContext,
 };
-use crate::config::{Configurable, LogCollectionMode};
+use crate::config::{Configurable, LogCollectionMode, PeriodicLogConfig};
 use crate::endpoint::{BmcEndpoint, SwitchEndpointRole};
 use crate::sink::DataSink;
 
@@ -111,10 +111,18 @@ fn spawn_generic_redfish_collectors(
                 .create_collector_registry(format!("log_collector_{key}"), metrics_prefix)?,
         );
 
-        let spawn_periodic_logs = |data_sink: Option<Arc<dyn DataSink>>,
+        let sse_backoff_config = || {
+            let sse_cfg = logs_cfg.sse_or_default();
+            BackoffConfig {
+                initial: sse_cfg.initial_backoff,
+                max: sse_cfg.max_backoff,
+            }
+        };
+
+        let spawn_periodic_logs = |pcfg: PeriodicLogConfig,
+                                   data_sink: Option<Arc<dyn DataSink>>,
                                    collector_registry: Arc<_>|
          -> Option<Result<Collector, HealthError>> {
-            let pcfg = logs_cfg.periodic_or_default();
             let endpoint_id = endpoint.log_identity().into_owned();
             let state_file_path = logs_state_file_path(&pcfg.logs_state_file, &endpoint_id);
 
@@ -144,7 +152,7 @@ fn spawn_generic_redfish_collectors(
                         SseLogCollectorConfig,
                         data_sink,
                         StreamingCollectorStartContext {
-                            backoff_config: BackoffConfig::default(),
+                            backoff_config: sse_backoff_config(),
                             collector_registry,
                             client: ctx.client.clone(),
                             health_options: ctx.config.clone(),
@@ -156,14 +164,20 @@ fn spawn_generic_redfish_collectors(
                     None
                 }
             }
-            LogCollectionMode::Periodic => {
-                spawn_periodic_logs(data_sink.clone(), collector_registry)
-            }
+            LogCollectionMode::Periodic => spawn_periodic_logs(
+                logs_cfg.periodic_or_default(),
+                data_sink.clone(),
+                collector_registry,
+            ),
             LogCollectionMode::Auto => {
                 if ctx.log_downgrade_registry.is_downgraded(&key) {
-                    spawn_periodic_logs(data_sink.clone(), collector_registry)
+                    spawn_periodic_logs(
+                        logs_cfg.auto_periodic_or_default(),
+                        data_sink.clone(),
+                        collector_registry,
+                    )
                 } else if let Some(data_sink) = data_sink.clone() {
-                    let auto_cfg = logs_cfg.auto.unwrap_or_default();
+                    let auto_cfg = logs_cfg.auto.clone().unwrap_or_default();
                     let registry = ctx.log_downgrade_registry.clone();
                     let endpoint_key: std::borrow::Cow<'static, str> = key.clone().into();
                     let mut budget = AutoFailureBudget::new(auto_cfg, Instant::now());
@@ -173,7 +187,7 @@ fn spawn_generic_redfish_collectors(
                         SseLogCollectorConfig,
                         data_sink,
                         StreamingCollectorStartContext {
-                            backoff_config: BackoffConfig::default(),
+                            backoff_config: sse_backoff_config(),
                             collector_registry,
                             client: ctx.client.clone(),
                             health_options: ctx.config.clone(),
@@ -742,6 +756,7 @@ mod tests {
         config.collectors.nvue = Configurable::Disabled;
         config.collectors.logs = Configurable::Enabled(LogsCollectorConfig {
             mode: LogCollectionMode::Auto,
+            sse: None,
             periodic: Some(PeriodicLogConfig::default()),
             auto: Some(AutoModeConfig::default()),
         });

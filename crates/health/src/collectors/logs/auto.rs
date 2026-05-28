@@ -106,6 +106,7 @@ mod tests {
             sse_not_available_threshold: sse_threshold,
             connect_failure_window: window,
             connect_failure_threshold: transient_threshold,
+            ..AutoModeConfig::default()
         }
     }
 
