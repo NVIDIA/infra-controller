@@ -19,6 +19,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use axum::extract::{Path, State};
 use axum::http::{HeaderName, HeaderValue, StatusCode};
@@ -36,6 +37,7 @@ use crate::json::JsonExt;
 use crate::{http, redfish};
 
 const X_AUTH_TOKEN: HeaderName = HeaderName::from_static("x-auth-token");
+const SESSION_TOKEN_TTL: Duration = Duration::from_secs(120);
 
 pub fn service_resource() -> redfish::Resource<'static> {
     redfish::Resource {
@@ -80,9 +82,14 @@ pub struct SessionRecord {
     pub id: String,
     pub username: String,
     pub token: String,
+    pub expires_at: Instant,
 }
 
 impl SessionRecord {
+    fn is_expired(&self, now: Instant) -> bool {
+        now >= self.expires_at
+    }
+
     fn to_json(&self) -> serde_json::Value {
         json!({
             "UserName": self.username,
@@ -104,10 +111,9 @@ impl SessionServiceState {
     }
 
     pub fn is_token_valid(&self, token: &str) -> bool {
-        self.sessions
-            .lock()
-            .expect("mutex poisoned")
-            .contains_key(token)
+        let mut sessions = self.sessions.lock().expect("mutex poisoned");
+        Self::prune_expired(&mut sessions, Instant::now());
+        sessions.contains_key(token)
     }
 
     pub fn create(&self, username: impl Into<String>) -> SessionRecord {
@@ -121,6 +127,7 @@ impl SessionServiceState {
             id,
             username: username.into(),
             token: token.clone(),
+            expires_at: Instant::now() + SESSION_TOKEN_TTL,
         };
         self.sessions
             .lock()
@@ -130,25 +137,20 @@ impl SessionServiceState {
     }
 
     pub fn list(&self) -> Vec<SessionRecord> {
-        self.sessions
-            .lock()
-            .expect("mutex poisoned")
-            .values()
-            .cloned()
-            .collect()
+        let mut sessions = self.sessions.lock().expect("mutex poisoned");
+        Self::prune_expired(&mut sessions, Instant::now());
+        sessions.values().cloned().collect()
     }
 
     pub fn find_by_id(&self, id: &str) -> Option<SessionRecord> {
-        self.sessions
-            .lock()
-            .expect("mutex poisoned")
-            .values()
-            .find(|rec| rec.id == id)
-            .cloned()
+        let mut sessions = self.sessions.lock().expect("mutex poisoned");
+        Self::prune_expired(&mut sessions, Instant::now());
+        sessions.values().find(|rec| rec.id == id).cloned()
     }
 
     pub fn delete_by_id(&self, id: &str) -> bool {
         let mut sessions = self.sessions.lock().expect("mutex poisoned");
+        Self::prune_expired(&mut sessions, Instant::now());
         let Some(token) = sessions
             .iter()
             .find_map(|(tok, rec)| (rec.id == id).then(|| tok.clone()))
@@ -157,6 +159,10 @@ impl SessionServiceState {
         };
         sessions.remove(&token);
         true
+    }
+
+    fn prune_expired(sessions: &mut HashMap<String, SessionRecord>, now: Instant) {
+        sessions.retain(|_, rec| !rec.is_expired(now));
     }
 }
 
@@ -173,7 +179,7 @@ fn generate_token() -> String {
 async fn get_service() -> Response {
     json!({
         "ServiceEnabled": true,
-        "SessionTimeout": 3600,
+        "SessionTimeout": SESSION_TOKEN_TTL.as_secs(),
         "Sessions": {
             "@odata.id": sessions_collection().odata_id,
         },
@@ -286,5 +292,22 @@ mod tests {
         state.create("a");
         state.create("b");
         assert_eq!(state.list().len(), 2);
+    }
+
+    #[test]
+    fn expired_tokens_are_invalid_and_pruned() {
+        let state = SessionServiceState::new();
+        let rec = state.create("root");
+        {
+            let mut sessions = state.sessions.lock().expect("mutex poisoned");
+            sessions
+                .get_mut(&rec.token)
+                .expect("session exists")
+                .expires_at = Instant::now() - Duration::from_secs(1);
+        }
+
+        assert!(!state.is_token_valid(&rec.token));
+        assert!(state.find_by_id(&rec.id).is_none());
+        assert!(state.list().is_empty());
     }
 }

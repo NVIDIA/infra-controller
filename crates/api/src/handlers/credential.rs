@@ -386,10 +386,24 @@ pub(crate) async fn update_machine_credentials(
         credentials: request.credentials,
     };
 
-    Ok(update
-        .execute(api.credential_manager.as_ref())
-        .await
-        .map(Response::new)?)
+    let updates_bmc_credentials = update.credentials.iter().any(|credential| {
+        matches!(
+            rpc::machine_credentials_update_request::CredentialPurpose::try_from(
+                credential.credential_purpose
+            ),
+            Ok(rpc::machine_credentials_update_request::CredentialPurpose::Bmc)
+        )
+    });
+
+    let response = update.execute(api.credential_manager.as_ref()).await?;
+
+    if updates_bmc_credentials && let Some(bmc_mac_address) = update.mac_address {
+        api.bmc_session_manager
+            .note_credentials_updated(bmc_mac_address)
+            .await;
+    }
+
+    Ok(Response::new(response))
 }
 
 /// Issue (or rotate) a BMC Redfish session token for the SPIFFE service
