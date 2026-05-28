@@ -22,8 +22,8 @@ use libredfish::{PowerState, Redfish, RedfishError, SystemPowerControl};
 use model::machine::Machine;
 use state_controller::state_handler::StateHandlerContext;
 
-use crate::state_controller::machine::context::MachineStateHandlerContextObjects;
-use crate::state_controller::machine::write_ops::MachineWriteOp;
+use crate::context::MachineStateHandlerContextObjects;
+use crate::write_ops::MachineWriteOp;
 
 #[track_caller]
 pub fn host_power_control(

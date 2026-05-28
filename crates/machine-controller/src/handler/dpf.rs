@@ -33,8 +33,8 @@ use state_controller::state_handler::{
 
 use super::helpers::{DpuInitStateHelper, ManagedHostStateHelper, ReprovisionStateHelper};
 use super::{handler_host_power_control, host_power_state};
-use crate::state_controller::machine::context::MachineStateHandlerContextObjects;
-use crate::state_controller::machine::dpf::DpfOperations;
+use crate::context::MachineStateHandlerContextObjects;
+use crate::dpf::DpfOperations;
 
 fn dpf_error(error: DpfError) -> StateHandlerError {
     ExternalServiceError::with_source("dpf", "", error.to_string(), "dpf_error", error).into()

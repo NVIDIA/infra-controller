@@ -25,8 +25,8 @@ use model::machine::Machine;
 use sqlx::PgPool;
 use state_controller::state_handler::{StateHandlerContextObjects, StateHandlerError};
 
-use crate::state_controller::machine::config::MachineStateHandlerSiteConfig;
-use crate::state_controller::machine::metrics::MachineMetrics;
+use crate::config::MachineStateHandlerSiteConfig;
+use crate::metrics::MachineMetrics;
 
 pub struct MachineStateHandlerContextObjects {}
 

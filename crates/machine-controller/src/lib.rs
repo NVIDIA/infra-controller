@@ -37,6 +37,7 @@ pub mod health_report;
 pub mod io;
 pub mod metrics;
 pub mod redfish;
+pub(crate) mod rpc;
 pub mod write_ops;
 
 /// Fields of span that should be logged for each message.
@@ -139,7 +140,7 @@ where
     Ok((machine_state, ek_cert_verification_status))
 }
 
-pub(crate) async fn handle_measuring_state<DB>(
+pub async fn handle_measuring_state<DB>(
     measuring_state: &MeasuringState,
     machine_id: &MachineId,
     db: &mut DB,

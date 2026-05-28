@@ -95,7 +95,7 @@ pub struct FirmwareGlobal {
 }
 
 impl FirmwareGlobal {
-    #[cfg(test)]
+    #[cfg(feature = "test-support")]
     pub fn test_default() -> Self {
         FirmwareGlobal {
             autoupdate: true,
@@ -114,7 +114,7 @@ impl FirmwareGlobal {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(feature = "test-support")]
     pub fn get_retry_interval() -> Duration {
         Duration::seconds(1)
     }

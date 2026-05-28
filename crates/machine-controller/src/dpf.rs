@@ -32,7 +32,7 @@ use sqlx::PgPool;
 use state_controller::controller::Enqueuer;
 use tokio::task::JoinSet;
 
-use crate::state_controller::machine::io::MachineStateControllerIO;
+use crate::io::MachineStateControllerIO;
 
 /// Label key used by [`CarbideDPFLabeler`] to stamp the carbide `MachineId` of
 /// the DPU onto its DPUDevice. Propagates to the DPU CR via DPF.
@@ -48,7 +48,7 @@ const CONTROLLED_DEVICE_LABEL: &str = "carbide.nvidia.com/controlled.device";
 /// reacts to watcher callbacks, and performs reprovision/force-delete.
 ///
 /// Reboot handling is managed via the watcher's `on_reboot_required` callback.
-#[cfg_attr(test, mockall::automock)]
+#[cfg_attr(feature = "test-support", mockall::automock)]
 #[async_trait]
 pub trait DpfOperations: Send + Sync + std::fmt::Debug {
     /// Register a DPU device.
