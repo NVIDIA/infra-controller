@@ -4934,6 +4934,14 @@ impl StateHandler for HostMachineStateHandler {
                     let boot_interface_mac =
                         mh_snapshot.boot_interface_mac().map(|m| m.to_string());
 
+                    if mh_snapshot.is_zero_dpu() && ctx.services.site_config.allow_zero_dpu_hosts {
+                        tracing::info!(
+                            machine_id = %mh_snapshot.host_snapshot.id,
+                            "Skipping is_bios_setup: zero-DPU host (allow_zero_dpu_hosts=true); no BIOS profile applied for zero-DPU hosts."
+                        );
+                        return Ok(StateHandlerOutcome::transition(next_state));
+                    }
+
                     match redfish_client
                         .is_bios_setup(boot_interface_mac.as_deref())
                         .await
@@ -5193,6 +5201,20 @@ impl StateHandler for HostMachineStateHandler {
                             }
                         }
                         LockdownState::WaitForDPUUp => {
+                            // Nothing to wait for in zero-DPU mode.
+                            if mh_snapshot.dpu_snapshots.is_empty() {
+                                let next_state = ManagedHostState::BomValidating {
+                                    bom_validating_state: BomValidating::MatchingSku(
+                                        BomValidatingContext {
+                                            machine_validation_context: Some(
+                                                "Discovery".to_string(),
+                                            ),
+                                            reboot_retry_count: None,
+                                        },
+                                    ),
+                                };
+                                return Ok(StateHandlerOutcome::transition(next_state));
+                            }
                             // Has forge-dpu-agent reported state? That means DPU is up.
                             if are_dpus_up_trigger_reboot_if_needed(
                                 mh_snapshot,
@@ -9495,6 +9517,12 @@ async fn call_machine_setup_and_handle_no_dpu_error(
     expected_dpu_count: usize,
     site_config: &MachineStateHandlerSiteConfig,
 ) -> Result<Option<String>, RedfishError> {
+    if expected_dpu_count == 0 && site_config.allow_zero_dpu_hosts {
+        tracing::info!(
+            "Skipping machine_setup: zero-DPU host (allow_zero_dpu_hosts=true); BIOS profile is DPU-tied."
+        );
+        return Ok(None);
+    }
     let setup_result = redfish_client
         .machine_setup(
             boot_interface_mac,
@@ -9901,6 +9929,13 @@ async fn handle_instance_host_platform_config(
                     "Skipping boot order remediation on Viking (known FW/BMC issue)"
                 );
                 false
+            } else if mh_snapshot.is_zero_dpu() && ctx.services.site_config.allow_zero_dpu_hosts {
+                tracing::info!(
+                    machine_id = %mh_snapshot.host_snapshot.id,
+                    bmc_vendor = %vendor,
+                    "Skipping is_boot_order_setup: zero-DPU host (allow_zero_dpu_hosts=true); persistent boot order is not configured for zero-DPU hosts."
+                );
+                false
             } else if redfish_client
                 .is_boot_order_setup(&boot_interface_mac.to_string())
                 .await
@@ -10025,32 +10060,41 @@ async fn handle_instance_host_platform_config(
 
             let boot_interface_mac = mh_snapshot.boot_interface_mac().map(|m| m.to_string());
 
-            match redfish_client
-                .is_bios_setup(boot_interface_mac.as_deref())
-                .await
-            {
-                Ok(true) => {
-                    tracing::info!(
-                        machine_id = %mh_snapshot.host_snapshot.id,
-                        "BIOS setup verified successfully"
-                    );
-                    next_instance_state
-                }
-                Ok(false) => {
-                    return Ok(StateHandlerOutcome::wait(
-                        "Polling BIOS setup status, waiting for settings to be applied".to_string(),
-                    ));
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        machine_id = %mh_snapshot.host_snapshot.id,
-                        error = %e,
-                        "Failed to check BIOS setup status, will retry"
-                    );
-                    return Ok(StateHandlerOutcome::wait(format!(
-                        "Failed to check BIOS setup status: {}. Will retry.",
-                        e
-                    )));
+            if mh_snapshot.is_zero_dpu() && ctx.services.site_config.allow_zero_dpu_hosts {
+                tracing::info!(
+                    machine_id = %mh_snapshot.host_snapshot.id,
+                    "Skipping is_bios_setup: zero-DPU host (allow_zero_dpu_hosts=true); no BIOS profile applied for zero-DPU hosts."
+                );
+                next_instance_state
+            } else {
+                match redfish_client
+                    .is_bios_setup(boot_interface_mac.as_deref())
+                    .await
+                {
+                    Ok(true) => {
+                        tracing::info!(
+                            machine_id = %mh_snapshot.host_snapshot.id,
+                            "BIOS setup verified successfully"
+                        );
+                        next_instance_state
+                    }
+                    Ok(false) => {
+                        return Ok(StateHandlerOutcome::wait(
+                            "Polling BIOS setup status, waiting for settings to be applied"
+                                .to_string(),
+                        ));
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            machine_id = %mh_snapshot.host_snapshot.id,
+                            error = %e,
+                            "Failed to check BIOS setup status, will retry"
+                        );
+                        return Ok(StateHandlerOutcome::wait(format!(
+                            "Failed to check BIOS setup status: {}. Will retry.",
+                            e
+                        )));
+                    }
                 }
             }
         }
@@ -10711,6 +10755,14 @@ async fn set_host_boot_order(
             const CHECK_BOOT_ORDER_TIMEOUT_MINUTES: i64 = 30;
 
             let retry_count = set_boot_order_info.retry_count;
+
+            if mh_snapshot.is_zero_dpu() && ctx.services.site_config.allow_zero_dpu_hosts {
+                tracing::info!(
+                    "Boot order check skipped for {}: zero-DPU host (allow_zero_dpu_hosts=true); persistent boot order is not configured for zero-DPU hosts.",
+                    mh_snapshot.host_snapshot.id,
+                );
+                return Ok(SetBootOrderOutcome::Done);
+            }
 
             let boot_interface_mac = mh_snapshot.boot_interface_mac().ok_or_else(|| {
                 StateHandlerError::GenericError(eyre::eyre!(

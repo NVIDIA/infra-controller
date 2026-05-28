@@ -95,6 +95,7 @@ nico-api:
       # Site explorer — periodic background scan of site inventory
       # -----------------------------------------------------------------------
       [site_explorer]
+      allow_zero_dpu_hosts = false
       run_interval = "30s"
 
       # -----------------------------------------------------------------------
