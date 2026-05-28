@@ -123,10 +123,10 @@ use helpers::{
     DpuDiscoveringStateHelper, DpuInitStateHelper, ManagedHostStateHelper, NextState,
     ReprovisionStateHelper, all_equal,
 };
-use rpc::forge_agent_control_response::FileArtifact;
 use state_controller::db_write_batch::DbWriteBatch;
 
 use crate::config::{BomValidationConfig, PowerManagerOptions};
+use crate::rpc::scout_firmware_upgrade::{FileArtifact, ScoutFirmwareUpgradeTask};
 use crate::write_ops::MachineWriteOp;
 
 // We can't use http::StatusCode because libredfish has a newer version
@@ -7427,7 +7427,7 @@ impl HostUpgradeState {
 
                     let upgrade_task_id = uuid::Uuid::new_v4().to_string();
                     let file_artifact_count = to_install.files.len();
-                    let task = rpc::forge_agent_control_response::ScoutFirmwareUpgradeTask {
+                    let task = ScoutFirmwareUpgradeTask {
                         upgrade_task_id: upgrade_task_id.clone(),
                         component_type: firmware_type.to_string(),
                         target_version: to_install.version.clone(),

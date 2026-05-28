@@ -37,6 +37,7 @@ pub mod health_report;
 pub mod io;
 pub mod metrics;
 pub mod redfish;
+pub(crate) mod rpc;
 pub mod write_ops;
 
 /// Fields of span that should be logged for each message.

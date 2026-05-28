@@ -37,10 +37,6 @@ carbide-firmware = { path = "../firmware", default-features = false }
 carbide-ipmi = { path = "../ipmi", default-features = false }
 carbide-measured-boot = { path = "../measured-boot", default-features = false }
 carbide-redfish = { path = "../redfish", default-features = false }
-# TODO: RPC is only used to serialize / deserialize of
-# ScoutFirmwareUpgradeTask. If we can find a way to do it differently
-# we can improve build performance significantly.
-carbide-rpc = { path = "../rpc", default-features = false }
 carbide-secrets = { path = "../secrets" }
 carbide-state-controller-common = { path = "../state-controller-common", default-features = false }
 carbide-uuid = { path = "../uuid", default-features = false }
@@ -59,6 +55,8 @@ libredfish = { workspace = true }
 mac_address = { workspace = true }
 mockall = { workspace = true, optional = true }
 opentelemetry = { workspace = true }
+prost = { workspace = true }
+prost-types = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sqlx = { workspace = true }
@@ -71,6 +69,9 @@ version-compare = { workspace = true }
 figment = { workspace = true, features = ["env", "test", "toml"] }
 regex = { workspace = true }
 lazy_static = { workspace = true }
+
+[build-dependencies]
+tonic-prost-build = "0.14"
 
 [lints]
 workspace = true
