@@ -44,7 +44,6 @@ pub struct MachineStateHandlerSiteConfig {
     pub spdm_enabled: bool,
 
     pub dpu_enable_secure_boot: bool,
-    pub allow_zero_dpu_hosts: bool,
 }
 
 /// A UTC time window defined by a start and end timestamp.

@@ -745,7 +745,6 @@ async fn test_dhcp_allows_zero_dpu_host_with_instance(
     let env = create_test_env_with_overrides(
         pool,
         TestEnvOverrides {
-            allow_zero_dpu_hosts: Some(true),
             site_prefixes: Some(vec![
                 IpNetwork::new(
                     FIXTURE_ADMIN_NETWORK_SEGMENT_GATEWAY.network(),
