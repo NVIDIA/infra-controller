@@ -114,6 +114,8 @@ navigation:
       contents:
         - page: NVLink Partitioning
           path: manuals/nvlink_partitioning.md
+        - page: Rack-Level Administration (RLA)
+          path: manuals/rack_level_admin.md
         - section: Repair Workflows
           contents:
             - page: Overview
