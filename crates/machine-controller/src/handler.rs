@@ -1450,7 +1450,7 @@ impl MachineStateHandler {
                 // true, which requires non-empty DPUs. Without this guard
                 // the empty loop below falls through to `do_nothing()` and
                 // the host would sit in DPUReprovision forever.
-                if mh_snapshot.is_zero_dpu() {
+                if !mh_snapshot.has_managed_dpus() {
                     return Err(StateHandlerError::GenericError(eyre!(
                         "DPUReprovision state entered on zero-DPU host {host_machine_id}; \
                          reprovision requires DPUs"
@@ -5172,7 +5172,7 @@ impl StateHandler for HostMachineStateHandler {
                             ))
                         }
                         LockdownState::TimeWaitForDPUDown => {
-                            if mh_snapshot.is_zero_dpu() {
+                            if !mh_snapshot.has_managed_dpus() {
                                 // No DPU to wait for going down/up -- skip
                                 // straight to BomValidating. Covers
                                 // NicMode/NoDpu hosts and anything else
@@ -5530,7 +5530,7 @@ impl StateHandler for InstanceStateHandler {
                     // Extension services run on DPUs. A zero-DPU host has no
                     // DPUs to run them on, so there is nothing to wait for;
                     // skip straight to the next state.
-                    if mh_snapshot.is_zero_dpu() {
+                    if !mh_snapshot.has_managed_dpus() {
                         let next_state = ManagedHostState::Assigned {
                             instance_state: InstanceState::WaitingForRebootToReady,
                         };
@@ -5824,7 +5824,7 @@ impl StateHandler for InstanceStateHandler {
                     // A zero-DPU host has no DPUs to wait for. Skip the
                     // readiness check and proceed with the rest of the
                     // handler (custom-PXE reboot, termination flow, etc).
-                    if !mh_snapshot.is_zero_dpu()
+                    if mh_snapshot.has_managed_dpus()
                         && !are_dpus_up_trigger_reboot_if_needed(
                             mh_snapshot,
                             &self.reachability_params,
@@ -6188,7 +6188,7 @@ impl StateHandler for InstanceStateHandler {
                     // skipped upstream. But, without this guard, the empty loop
                     // below falls through to `do_nothing()` and the host
                     // would/could sit in `DPUReprovision` forever.
-                    if mh_snapshot.is_zero_dpu() {
+                    if !mh_snapshot.has_managed_dpus() {
                         return Err(StateHandlerError::GenericError(eyre!(
                             "DPUReprovision state entered on zero-DPU host {host_machine_id}; reprovision requires DPUs"
                         )));
@@ -9891,7 +9891,7 @@ async fn handle_instance_host_platform_config(
             // BIOS state -- the host can report stale Redfish info from before the
             // power cycle until the DPUs have finished initializing. Zero-DPU
             // hosts skip this wait, because there are no DPUs to come up.
-            if !mh_snapshot.is_zero_dpu()
+            if mh_snapshot.has_managed_dpus()
                 && !are_dpus_up_trigger_reboot_if_needed(mh_snapshot, reachability_params, ctx)
                     .await
             {

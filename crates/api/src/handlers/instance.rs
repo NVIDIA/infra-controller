@@ -1366,7 +1366,7 @@ async fn update_instance_network_config(
         // a secondary DPU into some other leg of the network, but we can
         // think about that later; that would mean we'd support a mix of
         // auto AND non-auto interfaces.
-        if !mh_snapshot.is_zero_dpu() {
+        if mh_snapshot.has_managed_dpus() {
             return Err(CarbideError::InvalidArgument(format!(
                 "instance was allocated with `auto: true` but host {} is no longer zero-DPU; cannot update via the auto path",
                 instance.machine_id,

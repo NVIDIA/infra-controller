@@ -265,36 +265,38 @@ fn pick_boot_interface_mac(
 }
 
 impl ManagedHostStateSnapshot {
-    /// Returns `true` if this managed host has no DPU snapshots attached.
+    /// Returns `true` if this managed host has at least one DPU snapshot
+    /// attached -- i.e. a DPU we actively manage as a `Machine`.
     ///
-    /// Most call sites in the state controller use this to follow a "zero-DPU"
-    /// branch -- skip DPU-specific work, use the host's primary interface MAC
-    /// directly, reject DPU-only operations, etc.
+    /// A `false` return ("no managed DPUs") covers two cases that are intended
+    /// to be treated the same: actual zero-DPU hosts (`DpuMode::NoDpu`), and
+    /// `DpuMode::NicMode` hosts. The latter may acutally have DPUs, but
+    /// site-explorer puts them into NIC mode at ingestion, so no DPU snapshot
+    /// is ever attached.
     ///
-    /// Note: Currently, a handful of call sites combine this with
-    /// `host_snapshot.associated_dpu_machine_ids().is_empty()` to distinguish
-    /// "truly zero-DPU" from "DPU expected per topology but the snapshot
-    /// failed to load". Those sites intentionally inspect both fields and
-    /// should NOT be rewritten to use this helper alone. Maybe we can enhance
-    /// that later, but for now this keeps it simple.
+    /// Some callers combine this w/ `associated_dpu_machine_ids().is_empty()`
+    /// to distinguish between truly no managed DPUs vs. DPU expected per
+    /// topology (but something happened, like the snapshot failed to load).
+    /// Those sites intentionally inspect both sides of this, so simply relying
+    /// on this might not be what they'd want (at least for now).
     ///
     /// NOTE(chet): When called from state-controller handlers (anything reached
     /// via `MachineStateHandler::handle_object_state`), there is an upstream
     /// guard that short-circuits with an error if topology reports DPUs but
     /// `dpu_snapshots` is empty -- i.e. the DPU snapshots failed to load.
     /// That guard runs before the `ManagedHostState` dispatch, so by the time
-    /// a state handler asks `is_zero_dpu()`, the potential bug of "topology
-    /// has DPUs, but snapshots are empty, so we think it's zero DPU" has
-    /// already been filtered out. A `true` return in that context means
-    /// genuinely zero-DPU (both topology and snapshots agree).
+    /// a state handler asks `has_managed_dpus()`, the potential bug of "topology
+    /// has DPUs, but snapshots are empty, so we think it has none" has
+    /// already been filtered out. A `false` return in that context means
+    /// genuinely no managed DPUs (both topology and snapshots agree).
     ///
     /// Now, callers OUTSIDE the state-controller path DON'T get that upstream
     /// guard; if you need the stronger guarantee there, you'll need to
     /// check both:
     /// `self.dpu_snapshots.is_empty()` and
     /// `self.host_snapshot.associated_dpu_machine_ids().is_empty()`.
-    pub fn is_zero_dpu(&self) -> bool {
-        self.dpu_snapshots.is_empty()
+    pub fn has_managed_dpus(&self) -> bool {
+        !self.dpu_snapshots.is_empty()
     }
 
     /// Returns `true` if this managed host is currently operating on the
@@ -603,7 +605,7 @@ impl ManagedHostStateSnapshot {
                 let snapshot = self.dpu_snapshots.remove(index);
                 self.dpu_snapshots.insert(0, snapshot);
             }
-        } else if primary_interface.is_none() && !self.is_zero_dpu() {
+        } else if primary_interface.is_none() && self.has_managed_dpus() {
             // DPU hosts still need some primary interface so boot/network callers have a host
             // primary to anchor on. A present primary interface without an attached DPU is valid:
             // ExpectedMachine can declare a non-DPU host admin NIC as primary, and in that case no
