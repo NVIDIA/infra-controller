@@ -16,7 +16,7 @@ Measured Boot attestation happens during the ingestion of a managed host, and af
 
 Measured Boot requires the presence of a TPM (Trusted Platform Module) chip on a managed host. DPUs do not support Measured Boot due to a lack of TPM hardware.
 
-For the hosts the Measured Boot is configurable and can be turned off with `attestation_enabled` flag set to `false`.
+For the hosts the Measured Boot is configurable and can be turned off with `attestation_enabled` flag set to `false` in `carbide-api-site-config.toml`.
 
 If Measured Boot is enabled and the attestation fails, the effect will be that `scout` will never get dispensed mTLS certificates that it needs to communicate with `nico-api`. Without mTLS certificates only gRPC calls not requiring mutual authentication will succeed, such as `DiscoverMachine` (which is where attestation happens) or `Version`.
 
