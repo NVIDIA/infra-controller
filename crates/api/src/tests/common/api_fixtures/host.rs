@@ -37,6 +37,9 @@ use crate::tests::common::rpc_builder::DhcpDiscovery;
 
 pub const X86_INFO_JSON: &[u8] =
     include_bytes!("../../../../../api-model/src/hardware_info/test_data/x86_info.json");
+pub const SUPERMICRO_ARS121_INFO_JSON: &[u8] = include_bytes!(
+    "../../../../../api-model/src/hardware_info/test_data/supermicro_ars121_info.json"
+);
 pub const GB200_COMPUTE_TRAY_1_INFO_JSON: &[u8] = include_bytes!(
     "../../../../../api-model/src/hardware_info/test_data/gb200_compute_tray_1_info.json"
 );

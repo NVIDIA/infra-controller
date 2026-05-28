@@ -184,6 +184,10 @@ pub struct RedfishSimTimepoint {
 #[derive(Debug, Clone, PartialEq)]
 pub enum RedfishSimAction {
     Power(libredfish::SystemPowerControl),
+    ChassisReset {
+        chassis_id: String,
+        reset_type: libredfish::SystemPowerControl,
+    },
     BmcReset,
     SetUtcTimezone,
     MachineSetup {
@@ -215,6 +219,10 @@ impl RedfishSimActions {
             .values()
             .flat_map(|actions| actions.iter().cloned())
             .collect()
+    }
+
+    pub fn for_host(&self, host: &str) -> Vec<RedfishSimAction> {
+        self.host_actions.get(host).cloned().unwrap_or_default()
     }
 }
 
@@ -1202,10 +1210,18 @@ impl Redfish for RedfishSimClient {
 
     fn chassis_reset<'a>(
         &'a self,
-        _chassis_id: &'a str,
-        _reset_type: SystemPowerControl,
+        chassis_id: &'a str,
+        reset_type: SystemPowerControl,
     ) -> libredfish::RedfishFuture<'a, Result<(), RedfishError>> {
-        Box::pin(async move { Ok(()) })
+        Box::pin(async move {
+            let mut state = self.state.lock().unwrap();
+            let host_state = state.hosts.get_mut(&self._host).unwrap();
+            host_state.actions.push(RedfishSimAction::ChassisReset {
+                chassis_id: chassis_id.to_string(),
+                reset_type,
+            });
+            Ok(())
+        })
     }
 
     fn get_update_service<'a>(
