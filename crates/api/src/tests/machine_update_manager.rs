@@ -20,6 +20,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use carbide_machine_controller::health_report::create_host_update_health_report;
 use carbide_uuid::machine::MachineId;
 use common::api_fixtures::create_test_env;
 use figment::Figment;
@@ -36,9 +37,7 @@ use tokio_util::sync::CancellationToken;
 use crate::CarbideResult;
 use crate::cfg::file::CarbideConfig;
 use crate::machine_update_manager::MachineUpdateManager;
-use crate::machine_update_manager::machine_update_module::{
-    MachineUpdateModule, create_host_update_health_report,
-};
+use crate::machine_update_manager::machine_update_module::MachineUpdateModule;
 use crate::tests::common;
 use crate::tests::common::api_fixtures::create_managed_host;
 

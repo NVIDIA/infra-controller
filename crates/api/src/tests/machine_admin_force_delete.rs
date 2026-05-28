@@ -26,6 +26,7 @@ use ::rpc::forge::{
 };
 use carbide_ib_fabric::config::IBFabricConfig;
 use carbide_ib_fabric::ib::{self, IBFabricManager};
+use carbide_machine_controller::dpf::{DpfOperations, MockDpfOperations};
 use carbide_uuid::infiniband::IBPartitionId;
 use carbide_uuid::machine::{MachineId, MachineType};
 use common::api_fixtures::dpu::create_dpu_machine;
@@ -743,7 +744,7 @@ async fn test_admin_force_delete_with_dpf_uses_bmc_mac(pool: sqlx::PgPool) {
     let captured_calls: Arc<std::sync::Mutex<DpfCallLog>> =
         Arc::new(std::sync::Mutex::new(Vec::new()));
 
-    let mut mock = crate::dpf::MockDpfOperations::new();
+    let mut mock = MockDpfOperations::new();
 
     mock.expect_register_dpu_device().returning(|_| Ok(()));
     mock.expect_register_dpu_node().returning(|_| Ok(()));
@@ -762,7 +763,7 @@ async fn test_admin_force_delete_with_dpf_uses_bmc_mac(pool: sqlx::PgPool) {
             Ok(())
         });
 
-    let dpf_sdk: Arc<dyn crate::dpf::DpfOperations> = Arc::new(mock);
+    let dpf_sdk: Arc<dyn DpfOperations> = Arc::new(mock);
     let mut config = get_config();
     config.dpf = crate::cfg::file::DpfConfig {
         enabled: true,

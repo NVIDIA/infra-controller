@@ -17,6 +17,7 @@
 use std::collections::HashSet;
 use std::string::ToString;
 
+use carbide_machine_controller::health_report::create_host_update_health_report_dpufw;
 use common::api_fixtures::{create_managed_host, create_managed_host_multi_dpu, create_test_env};
 use model::machine::LoadSnapshotOptions;
 use model::machine_update_module::{
@@ -286,7 +287,7 @@ async fn test_clear_completed_updates(
         .await
         .unwrap();
 
-    let health_override = crate::machine_update_manager::machine_update_module::create_host_update_health_report_dpufw();
+    let health_override = create_host_update_health_report_dpufw();
     // Mark the Host as in update.
     db::machine::insert_health_report(
         &mut txn,

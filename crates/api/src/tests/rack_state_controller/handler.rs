@@ -41,10 +41,10 @@ use model::rack_type::{
     RackHardwareClass, RackHardwareTopology, RackHardwareType, RackProfile, RackProfileConfig,
 };
 use model::switch::{NewSwitch, SwitchConfig};
+use state_controller::db_write_batch::DbWriteBatch;
 use state_controller::state_handler::{StateHandler, StateHandlerContext, StateHandlerOutcome};
 use tonic::Request;
 
-use crate::state_controller::db_write_batch::DbWriteBatch;
 use crate::tests::common::api_fixtures::managed_host::ManagedHostConfig;
 use crate::tests::common::api_fixtures::site_explorer::{create_expected_switches, new_host};
 use crate::tests::common::api_fixtures::{
