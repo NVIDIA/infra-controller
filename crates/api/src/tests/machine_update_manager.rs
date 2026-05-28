@@ -36,9 +36,8 @@ use tokio_util::sync::CancellationToken;
 use crate::CarbideResult;
 use crate::cfg::file::CarbideConfig;
 use crate::machine_update_manager::MachineUpdateManager;
-use crate::machine_update_manager::machine_update_module::{
-    MachineUpdateModule, create_host_update_health_report,
-};
+use crate::machine_update_manager::machine_update_module::MachineUpdateModule;
+use crate::state_controller::machine::health_report::create_host_update_health_report;
 use crate::tests::common;
 use crate::tests::common::api_fixtures::create_managed_host;
 

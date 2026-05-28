@@ -29,9 +29,9 @@ use carbide_dpf::{
 use carbide_uuid::machine::MachineId;
 use model::dpu_machine_update::OutdatedDpfDpu;
 use sqlx::PgPool;
+use state_controller::controller::Enqueuer;
 use tokio::task::JoinSet;
 
-use crate::state_controller::controller::Enqueuer;
 use crate::state_controller::machine::io::MachineStateControllerIO;
 
 /// Label key used by [`CarbideDPFLabeler`] to stamp the carbide `MachineId` of
