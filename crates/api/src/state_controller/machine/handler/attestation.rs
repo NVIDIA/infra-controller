@@ -65,7 +65,7 @@ pub async fn trigger_attestation(
         Ok(redfish_result) => redfish_result.map_err(|e| redfish_error("get service root", e))?,
         Err(_) => {
             return Err(StateHandlerError::GenericError(eyre::eyre!(
-                "redfish service_root could not finish in {} secods",
+                "redfish service_root could not finish in {} seconds",
                 redfish_timeout_duration.as_secs()
             )));
         }
@@ -107,7 +107,7 @@ pub async fn trigger_attestation(
             }
             Err(_) => {
                 return Err(StateHandlerError::GenericError(eyre::eyre!(
-                    "redfish get_component_integrities could not finish in {} secods",
+                    "redfish get_component_integrities could not finish in {} seconds",
                     redfish_timeout_duration.as_secs()
                 )));
             }
