@@ -120,7 +120,7 @@ struct ShowPhysicalPartitionDetail {
     domain_uuid: String,
     domain_health_url: String,
     name: String,
-    nmx_m_id: String,
+    nmx_c_partition_id: String,
     members: Vec<ShowPartitionMember>,
 }
 
@@ -149,7 +149,7 @@ impl From<ShowLogicalPartition> for LogicalPartitionDetail {
                 domain_uuid: domain_uuid.map(|id| id.to_string()).unwrap_or_default(),
                 domain_health_url,
                 name: s.partition.name,
-                nmx_m_id: s.partition.nmx_m_id,
+                nmx_c_partition_id: s.partition.nmx_m_id,
                 members: s.members,
             };
 

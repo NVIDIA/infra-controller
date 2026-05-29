@@ -96,9 +96,16 @@ pub(crate) async fn clear_host_uefi_password(
             }
         })?;
 
-    let job_id: Option<String> =
-        crate::redfish::clear_host_uefi_password(redfish_client.as_ref(), api.redfish_pool.clone())
-            .await?;
+    let job_id: Option<String> = api
+        .redfish_pool
+        .clear_host_uefi_password(redfish_client.as_ref())
+        .await
+        .map_err(|e| {
+            tracing::error!(%e, "Failed to run clear_host_uefi_password call");
+            CarbideError::internal(format!(
+                "Failed redfish clear_host_uefi_password subtask: {e}"
+            ))
+        })?;
 
     Ok(Response::new(rpc::ClearHostUefiPasswordResponse { job_id }))
 }
@@ -173,10 +180,14 @@ pub(crate) async fn set_host_uefi_password(
             }
         })?;
 
-    let job_id =
-        crate::redfish::set_host_uefi_password(redfish_client.as_ref(), api.redfish_pool.clone())
-            .await?;
-
+    let job_id = api
+        .redfish_pool
+        .uefi_setup(redfish_client.as_ref(), false)
+        .await
+        .map_err(|e| {
+            tracing::error!(%e, "Failed to run uefi_setup call");
+            CarbideError::internal(format!("Failed redfish uefi_setup subtask: {e}"))
+        })?;
     api.with_txn(|txn| db::machine::update_bios_password_set_time(&machine_id, txn).boxed())
         .await?
         .map_err(|e| {

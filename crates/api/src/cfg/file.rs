@@ -643,6 +643,13 @@ pub struct CarbideConfig {
     /// hidden when the list is empty.
     #[serde(default)]
     pub web_ui_sidebar_tools: Vec<ToolLink>,
+
+    /// In-memory log history for the admin web live log viewer
+    /// (`/admin/logs`): how much recent log data to keep for
+    /// replay-on-connect and scrollback, and how many lines to send
+    /// per page to the browser.
+    #[serde(default)]
+    pub log_history: LogHistoryConfig,
 }
 
 impl CarbideConfig {
@@ -676,6 +683,40 @@ pub struct ToolLink {
     pub display_name: String,
     /// Absolute URL the link points to.
     pub url: String,
+}
+
+/// In-memory log history for the admin web live log viewer
+/// (`crate::web::logs`). Bounds memory use and the page size served
+/// to the browser.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LogHistoryConfig {
+    /// Maximum amount of recent log history to retain in memory, in
+    /// MiB. Oldest lines are evicted once the budget is exceeded.
+    /// Default 128.
+    #[serde(default = "default_log_history_max_megabytes")]
+    pub max_megabytes: usize,
+
+    /// Number of lines sent in the initial view and in each
+    /// scrollback page. Default 500.
+    #[serde(default = "default_log_history_page_size")]
+    pub page_size: usize,
+}
+
+impl Default for LogHistoryConfig {
+    fn default() -> Self {
+        Self {
+            max_megabytes: default_log_history_max_megabytes(),
+            page_size: default_log_history_page_size(),
+        }
+    }
+}
+
+fn default_log_history_max_megabytes() -> usize {
+    128
+}
+
+fn default_log_history_page_size() -> usize {
+    500
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
