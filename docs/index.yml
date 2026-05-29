@@ -121,6 +121,8 @@ navigation:
 
     - section: Operations
       contents:
+        - page: nicocli Reference
+          path: manuals/nicocli-reference.md
         - page: NVLink Partitioning
           path: manuals/nvlink_partitioning.md
         - section: Repair Workflows

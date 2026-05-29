@@ -1166,6 +1166,7 @@ pub fn get_config() -> CarbideConfig {
     CarbideConfig {
         default_tenant_routing_profile_type: "EXTERNAL".to_string(),
         web_ui_sidebar_tools: vec![],
+        log_history: Default::default(),
         bgp_leaf_session_password: None,
         rack_validation_config: RackValidationConfig {
             enabled: true,
