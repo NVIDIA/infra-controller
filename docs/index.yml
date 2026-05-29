@@ -121,6 +121,8 @@ navigation:
 
     - section: Operations
       contents:
+        - page: Firmware Updates
+          path: operations/firmware-updates.md
         - page: NVLink Partitioning
           path: manuals/nvlink_partitioning.md
         - section: Repair Workflows
