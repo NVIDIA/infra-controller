@@ -121,6 +121,8 @@ navigation:
 
     - section: Operations
       contents:
+        - page: Monitoring and Health
+          path: operations/monitoring-health.md
         - page: NVLink Partitioning
           path: manuals/nvlink_partitioning.md
         - section: Repair Workflows
