@@ -304,7 +304,6 @@ a `ClusterRoleBinding`:
 
 ```yaml
 ---
----
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -313,16 +312,13 @@ metadata:
 rules:
   - apiGroups: ["provisioning.dpu.nvidia.com"]
     resources: ["bfbs"]
-    verbs: ["get", "list", "create", "delete"]
+    verbs: ["get", "list", "create", "patch", "delete"]
   - apiGroups: ["provisioning.dpu.nvidia.com"]
     resources: ["dpus"]
     verbs: ["get", "list", "watch", "patch", "delete"]
   - apiGroups: ["provisioning.dpu.nvidia.com"]
-    resources: ["dpus/status"]
-    verbs: ["patch"]
-  - apiGroups: ["provisioning.dpu.nvidia.com"]
     resources: ["dpudevices"]
-    verbs: ["get", "list", "create", "delete"]
+    verbs: ["get", "list", "create", "patch", "delete"]
   - apiGroups: ["provisioning.dpu.nvidia.com"]
     resources: ["dpunodes"]
     verbs: ["get", "list", "create", "patch", "delete"]
@@ -339,26 +335,16 @@ rules:
     resources: ["dpuclusters"]
     verbs: ["get", "list"]
   - apiGroups: ["svc.dpu.nvidia.com"]
-    resources:
-      - dpudeployments
-    verbs: ["get", "list", "patch", "delete"]
+    resources: ["dpudeployments"]
+    verbs: ["get", "list", "create", "patch", "delete"]
   - apiGroups: ["svc.dpu.nvidia.com"]
-    resources:
-      - dpuservices
-      - dpuservicechains
-    verbs: ["get", "list"]
+    resources: ["dpuservices", "dpuservicechains"]
+    verbs: ["get", "list", "create", "patch", "delete"]
   - apiGroups: ["svc.dpu.nvidia.com"]
-    resources:
-      - dpuserviceinterfaces
-      - dpuservicetemplates
-      - dpuserviceconfigurations
-      - dpuservicenads
-    verbs: ["get", "list", "patch"]
+    resources: ["dpuserviceinterfaces", "dpuservicetemplates", "dpuserviceconfigurations", "dpuservicenads"]
+    verbs: ["get", "list", "create", "patch", "delete"]
   - apiGroups: ["operator.dpu.nvidia.com"]
     resources: ["dpfoperatorconfigs"]
-    verbs: ["get", "patch"]
-  - apiGroups: [""]
-    resources: ["configmaps"]
     verbs: ["get", "patch"]
   - apiGroups: [""]
     resources: ["secrets"]
@@ -422,7 +408,6 @@ Field-by-field:
 | Field | Meaning |
 |---|---|
 | `dpuDetector.disable: true` | DPF normally polls hosts to discover new DPUs. NICo disables auto-discovery because DPUs are fed in via `DPUSet` CRs from the orchestrator. |
-| `provisioningController.dmsTimeout: 900` | 15 minute timeout for the Device Management Service handshake. |
 | `provisioningController.osInstallTimeout: "60m"` | Total budget for the OS install flow per DPU. |
 | `installViaRedfish` | Provision DPUs by talking Redfish to the host BMC (vs. PXE-based). |
 | `skipDPUNodeDiscovery: true` | Do not auto-detect DPUs as Kubernetes nodes — DPF is told about them explicitly by NICo. |
@@ -451,7 +436,7 @@ spec:
     keepalived:
       # Controller interface where the Kamaji cluster IP is configured
       interface: "REPLACE_ME"
-      # External IP used by the Kamaji cluster
+      # External IP used by the Kamaji cluster that needs to be accessible from the DPUs
       vip: "REPLACE_ME"
       virtualRouterID: 126
       nodeSelector:
