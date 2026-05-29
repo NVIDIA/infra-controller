@@ -151,7 +151,6 @@ applicable.
 | `rotate_switch_nvos_credentials` | `bool` | `false` | Auto-rotate switch NVOS admin credentials. |
 | `override_target_ip` | `Option<String>` | — | **Deprecated.** Use `bmc_proxy`. Debug BMC IP override. |
 | `override_target_port` | `Option<u16>` | — | **Deprecated.** Use `bmc_proxy`. Debug BMC port override. |
-| `allow_zero_dpu_hosts` | `bool` | `false` | Allow hosts with zero DPUs (set `false` in prod). |
 | `bmc_proxy` | `HostPortPair` | — | BMC proxy host:port for integration testing/dev. |
 | `allow_changing_bmc_proxy` | `Option<bool>` | *(auto)* | Allow runtime changes to `bmc_proxy`. Auto-detected from initial config. |
 | `reset_rate_limit` | `Duration` | `1h` | Minimum time between SiteExplorer-initiated BMC resets. |
@@ -192,6 +191,8 @@ Extends `StateControllerConfig` with:
 | `dpu_up_threshold` | `Duration` | `5m`    | Max time without DPU health report before assuming it's down. |
 | `scout_reporting_timeout` | `Duration` | `5m`    | Duration without scout report before host is unhealthy. |
 | `uefi_boot_wait` | `Duration` | `5m`    | Wait time for UEFI boot completion after host reboot. |
+| `max_bios_config_retries` | `u32` | `3` | Max HandleBiosJobFailure recovery cycles during BIOS configuration. |
+| `polling_bios_setup_stuck_threshold` | `Duration` | `15m` | Time in PollingBiosSetup with `is_bios_setup == false` before recovery escalation. |
 
 ### `NetworkSegmentStateControllerConfig`
 
