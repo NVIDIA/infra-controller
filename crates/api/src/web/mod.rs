@@ -162,7 +162,7 @@ pub(crate) struct StateSlaDetail {
 #[template(path = "lifecycle_detail.html")]
 pub(crate) struct LifecycleDetail {
     pub state_display: StateDisplay,
-    pub associated_instance_id: String,
+    pub associated_instance_id: Option<String>,
     pub json_state: Option<String>,
     pub version: String,
     pub time_in_state: String,
@@ -188,7 +188,7 @@ impl LifecycleDetail {
                 state,
                 time_in_state_above_sla,
             },
-            associated_instance_id: String::new(),
+            associated_instance_id: None,
             json_state,
             time_in_state: config_version::since_state_change_humanized(&version),
             version,

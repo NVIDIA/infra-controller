@@ -807,7 +807,7 @@ pub async fn detail(
                     .first()
                     .and_then(|instance| instance.id.as_ref())
                 {
-                    display.lifecycle_detail.associated_instance_id = instance_id.to_string();
+                    display.lifecycle_detail.associated_instance_id = Some(instance_id.to_string());
                 }
             }
             Err(err) => {
