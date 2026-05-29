@@ -1242,6 +1242,7 @@ impl ApiClient {
                     virtual_function_id: None,
                     ip_address: None,
                     ipv6_interface_config: None,
+                    routing_profile: None,
                 });
 
                 if let Some(vf_network_segment_chunks) = vf_chunk_iter.next() {
@@ -1257,6 +1258,7 @@ impl ApiClient {
                             virtual_function_id: Some(vf_function_id),
                             ip_address: None,
                             ipv6_interface_config: None,
+                            routing_profile: None,
                         });
                         vf_function_id += 1;
                     }
@@ -1331,6 +1333,7 @@ impl ApiClient {
                                     .get(map_index)
                                     .cloned(),
                             }),
+                        routing_profile: None,
                     };
                     tracing::debug!("Adding interface: {:?}", new_interface);
 
@@ -1361,6 +1364,7 @@ impl ApiClient {
                                                 .cloned()
                                         }),
                                     }),
+                                routing_profile: None,
                             };
                             vf_function_id += 1;
                             tracing::debug!("Adding interface: {:?}", new_interface);

@@ -920,7 +920,32 @@ impl TestEnv {
         Option<u32>,
         NetworkSegmentId,
     ) {
-        let vpc_details = VpcCreationRequest::builder("2829bbe3-c169-4cd9-8b2a-19a8b1618a93")
+        self.create_vpc_and_peer_vpc_with_tenant_segments_for_tenants(
+            "2829bbe3-c169-4cd9-8b2a-19a8b1618a93",
+            vtype1,
+            "e65a9d69-39d2-4872-a53e-e5cb87c84e75",
+            vtype2,
+        )
+        .await
+    }
+
+    /// Creates two VPCs for the provided tenants and attaches one tenant segment to each.
+    pub async fn create_vpc_and_peer_vpc_with_tenant_segments_for_tenants(
+        &self,
+        tenant_organization_id: &str,
+        vtype1: VpcVirtualizationType,
+        peer_tenant_organization_id: &str,
+        vtype2: VpcVirtualizationType,
+    ) -> (
+        Option<VpcId>,
+        Option<u32>,
+        NetworkSegmentId,
+        Option<VpcId>,
+        Option<u32>,
+        NetworkSegmentId,
+    ) {
+        // Create the primary VPC and tenant segment.
+        let vpc_details = VpcCreationRequest::builder(tenant_organization_id)
             .metadata(Metadata {
                 name: "test vpc".to_string(),
                 description: "".to_string(),
@@ -940,11 +965,12 @@ impl TestEnv {
         )
         .await;
 
-        // Get the tenant segment into ready state
+        // Drive the primary tenant segment to ready state.
         self.run_network_segment_controller_iteration().await;
         self.run_network_segment_controller_iteration().await;
 
-        let peer_vpc_details = VpcCreationRequest::builder("e65a9d69-39d2-4872-a53e-e5cb87c84e75")
+        // Create the peer VPC and tenant segment.
+        let peer_vpc_details = VpcCreationRequest::builder(peer_tenant_organization_id)
             .metadata(Metadata {
                 name: "test peer vpc".to_string(),
                 ..Default::default()
@@ -968,7 +994,7 @@ impl TestEnv {
         )
         .await;
 
-        // Get the tenant segment into ready state
+        // Drive the peer tenant segment to ready state.
         self.run_network_segment_controller_iteration().await;
         self.run_network_segment_controller_iteration().await;
 

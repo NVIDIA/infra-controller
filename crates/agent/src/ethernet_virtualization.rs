@@ -234,6 +234,19 @@ impl From<&rpc::RoutingProfile> for nvue::RoutingProfile {
     }
 }
 
+/// Converts an RPC interface routing profile into the NVUE renderer model.
+impl From<&rpc::FlatInterfaceRoutingProfile> for nvue::InterfaceRoutingProfile {
+    fn from(profile: &rpc::FlatInterfaceRoutingProfile) -> Self {
+        nvue::InterfaceRoutingProfile {
+            allowed_anycast_prefixes: profile
+                .allowed_anycast_prefixes
+                .iter()
+                .map(|p| p.prefix.to_owned())
+                .collect(),
+        }
+    }
+}
+
 /// Update the NVUE network config. Returns Ok(true) if the configuration changed, and
 /// Ok(false) if not.
 pub async fn update_nvue(
@@ -316,6 +329,16 @@ pub async fn update_nvue(
             vec![nvue::PortConfig {
                 interface_name: physical_name,
                 is_phy: true,
+                host_ip: admin_interface.ip.clone(),
+                host_route: admin_interface.interface_prefix.clone(),
+                host_ipv6: admin_interface
+                    .ipv6_interface_config
+                    .as_ref()
+                    .map(|v6| v6.ip.clone()),
+                host_ipv6_route: admin_interface
+                    .ipv6_interface_config
+                    .as_ref()
+                    .map(|v6| v6.interface_prefix.clone()),
                 vlan: admin_interface.vlan_id as u16,
                 vni: if nc.network_virtualization_type() == ::rpc::forge::VpcVirtualizationType::Fnn
                 {
@@ -344,9 +367,13 @@ pub async fn update_nvue(
                 tenant_vrf_loopback_ip: admin_interface.tenant_vrf_loopback_ip.clone(),
                 network_security_group_id: None, // NSGs are not applied on the admin network.
                 routing_profile: admin_interface
-                    .routing_profile
+                    .vpc_routing_profile
                     .as_ref()
                     .map(nvue::RoutingProfile::from),
+                interface_routing_profile: admin_interface
+                    .interface_routing_profile
+                    .as_ref()
+                    .map(nvue::InterfaceRoutingProfile::from),
                 is_l2_segment: if nc.network_virtualization_type()
                     == ::rpc::forge::VpcVirtualizationType::Fnn
                 {
@@ -379,6 +406,13 @@ pub async fn update_nvue(
                 interface_name: name,
                 is_phy: net.function_type == rpc::InterfaceFunctionType::Physical as i32,
                 vlan: net.vlan_id as u16,
+                host_ip: net.ip.clone(),
+                host_route: net.interface_prefix.clone(),
+                host_ipv6: net.ipv6_interface_config.as_ref().map(|v6| v6.ip.clone()),
+                host_ipv6_route: net
+                    .ipv6_interface_config
+                    .as_ref()
+                    .map(|v6| v6.interface_prefix.clone()),
                 vni: Some(net.vni), // TODO should this be nc.vni_device?
                 l3_vni: Some(net.vpc_vni),
                 gateway_cidr: net.gateway.clone(),
@@ -397,7 +431,14 @@ pub async fn update_nvue(
                     .network_security_group
                     .as_ref()
                     .map(|n| n.id.clone()),
-                routing_profile: net.routing_profile.as_ref().map(nvue::RoutingProfile::from),
+                routing_profile: net
+                    .vpc_routing_profile
+                    .as_ref()
+                    .map(nvue::RoutingProfile::from),
+                interface_routing_profile: net
+                    .interface_routing_profile
+                    .as_ref()
+                    .map(nvue::InterfaceRoutingProfile::from),
                 is_l2_segment: net.is_l2_segment,
             });
         }
@@ -1999,7 +2040,27 @@ mod tests {
     async fn test_with_tenant_fnn_with_leaks() -> Result<(), Box<dyn std::error::Error>> {
         let virtualization_type = VpcVirtualizationType::Fnn;
 
-        let network_config = netconf(virtualization_type, 32, 24, false, None, false, true);
+        //let network_config = netconf(virtualization_type, 32, 24, false, None, false, true);
+
+        let mut network_config = netconf(virtualization_type, 32, 24, false, None, false, true);
+
+        // Set an interface profile for a prefix that falls within the VPC profile's prefix.
+        network_config.tenant_interfaces[0].interface_routing_profile =
+            Some(rpc::FlatInterfaceRoutingProfile {
+                allowed_anycast_prefixes: vec![rpc::PrefixFilterPolicyEntry {
+                    prefix: "5.255.254.67/32".to_string(),
+                }],
+            });
+
+        // Set an interface profile for a prefix that falls OUTSIDE the VPC profile's prefix.
+        // This should trigger policy to empty out and block prefixes from the tenant.
+        // Because a VPC profiles exists and has a prefix list, there is no fallback to AnycastSitePrefixes.
+        network_config.tenant_interfaces[1].interface_routing_profile =
+            Some(rpc::FlatInterfaceRoutingProfile {
+                allowed_anycast_prefixes: vec![rpc::PrefixFilterPolicyEntry {
+                    prefix: "67.67.67.6/7".to_string(),
+                }],
+            });
 
         let td = tempfile::tempdir()?;
         let hbn_root = td.path();
@@ -2386,7 +2447,8 @@ mod tests {
             internal_uuid: None,
             mtu: None,
             ipv6_interface_config: None,
-            routing_profile: None,
+            vpc_routing_profile: None,
+            interface_routing_profile: None,
         };
         assert_eq!(admin_interface.svi_ip, None);
 
@@ -2438,7 +2500,7 @@ mod tests {
                 internal_uuid: None,
                 mtu: None,
                 ipv6_interface_config: None,
-                routing_profile: Some(rpc::RoutingProfile {
+                vpc_routing_profile: Some(rpc::RoutingProfile {
                     leak_default_route_from_underlay:
                         include_network_host_route_and_default_leaking,
                     leak_tenant_host_routes_to_underlay:
@@ -2465,6 +2527,7 @@ mod tests {
                         vni: 800,
                     }],
                 }),
+                interface_routing_profile: None,
             },
             rpc::FlatInterfaceConfig {
                 function_type: rpc::InterfaceFunctionType::Physical.into(),
@@ -2639,7 +2702,7 @@ mod tests {
                 internal_uuid: None,
                 mtu: None,
                 ipv6_interface_config: None,
-                routing_profile: Some(rpc::RoutingProfile {
+                vpc_routing_profile: Some(rpc::RoutingProfile {
                     leak_default_route_from_underlay:
                         include_network_host_route_and_default_leaking,
                     leak_tenant_host_routes_to_underlay:
@@ -2666,6 +2729,7 @@ mod tests {
                         vni: 800,
                     }],
                 }),
+                interface_routing_profile: None,
             },
         ];
 
@@ -2899,6 +2963,10 @@ mod tests {
             network_security_group_id: Some(network_security_groups[0].id.clone()),
             interface_name: HBNDeviceNames::hbn_23().reps[0].to_string(),
             is_phy: true,
+            host_ip: "10.217.4.70".to_string(),
+            host_route: "10.217.4.70/32".to_string(),
+            host_ipv6: None,
+            host_ipv6_route: None,
             vlan: 123u16,
             vni: Some(5555),
             l3_vni: Some(7777),
@@ -2917,6 +2985,7 @@ mod tests {
             vpc_peer_prefixes: vec![],
             vpc_peer_vnis: vec![],
             routing_profile: None,
+            interface_routing_profile: None,
             is_l2_segment: true,
             ipv6_port_config: None,
         }];
@@ -3100,7 +3169,8 @@ mod tests {
             internal_uuid: None,
             mtu: None,
             ipv6_interface_config: None,
-            routing_profile: None,
+            vpc_routing_profile: None,
+            interface_routing_profile: None,
         };
 
         let mut admin_interface_with_mtu = admin_interface.clone();
@@ -3137,7 +3207,8 @@ mod tests {
                 internal_uuid: None,
                 mtu: None,
                 ipv6_interface_config: None,
-                routing_profile: None,
+                vpc_routing_profile: None,
+                interface_routing_profile: None,
             },
             rpc::FlatInterfaceConfig {
                 function_type: rpc::InterfaceFunctionType::Physical.into(),
@@ -3163,7 +3234,8 @@ mod tests {
                 internal_uuid: None,
                 mtu: None,
                 ipv6_interface_config: None,
-                routing_profile: None,
+                vpc_routing_profile: None,
+                interface_routing_profile: None,
             },
         ];
 

@@ -50,6 +50,8 @@ use serde_json::json;
 use tonic::{Request, Response, Status};
 
 use crate::api::{Api, log_machine_id, log_request_data, log_tenant_organization_id};
+use crate::cfg::file::FnnConfig;
+use crate::ethernet_virtualization::validate_instance_interface_routing_profiles;
 use crate::handlers::utils::convert_and_log_machine_id;
 use crate::instance::{
     InstanceAllocationRequest, allocate_ib_port_guid, allocate_instance, allocate_network,
@@ -1279,6 +1281,7 @@ pub(crate) async fn update_instance_config(
             .as_ref()
             .map(|vc| vc.allow_instance_vf)
             .unwrap_or(true),
+        api.runtime_config.fnn.as_ref(),
         &instance,
         &mut config.network,
         &mh_snapshot,
@@ -1335,6 +1338,7 @@ pub(crate) async fn update_instance_config(
 /// network_config_version.
 async fn update_instance_network_config(
     allow_instance_vf: bool,
+    fnn_config: Option<&FnnConfig>,
     instance: &InstanceSnapshot,
     network: &mut InstanceNetworkConfig,
     mh_snapshot: &ManagedHostStateSnapshot,
@@ -1418,6 +1422,7 @@ async fn update_instance_network_config(
     network
         .validate(allow_instance_vf)
         .map_err(CarbideError::from)?;
+    validate_instance_interface_routing_profiles(txn, network, fnn_config).await?;
 
     // Allocate IPs and add them to the network config
     let updated_network_config = db::instance_network_config::with_allocated_ips(
