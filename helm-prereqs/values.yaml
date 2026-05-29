@@ -53,7 +53,7 @@ vault:
     organization: ""
   ## Kubernetes auth role for nico-api to read and manage Vault KV
   ## credentials used by SiteExplorer and related credential flows.
-  ## Required by the carbide-api binary — without this role, SiteExplorer
+  ## Required by the nico-api binary — without this role, SiteExplorer
   ## cannot authenticate to Vault and BMC credential lookups fail every cycle.
   nicoApiK8sAuth:
     enabled: true

@@ -79,7 +79,7 @@ pub mod forge_api_client;
 pub mod forge_resolver;
 pub mod nmx_c_client;
 
-pub const REFLECTION_API_SERVICE_DESCRIPTOR: &[u8] = tonic::include_file_descriptor_set!("forge");
+pub const REFLECTION_API_SERVICE_DESCRIPTOR: &[u8] = tonic::include_file_descriptor_set!("core");
 pub const MAX_ERR_MSG_SIZE: i32 = 1500;
 
 // DynForge exists because, now that we have >= streaming interface,

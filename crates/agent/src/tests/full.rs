@@ -305,6 +305,31 @@ async fn run_common_parts(
         .route("/forge.Forge/FindInterfaces", post(handle_find_interfaces))
         // ForgeApiClient needs a working Version route for connection retrying
         .route("/forge.Forge/Version", post(handle_version))
+        // Same handlers, registered at the renamed proto path for forward
+        // compatibility with clients built from core.proto. Old clients on
+        // /forge.Forge/* continue to hit the routes above; new clients on
+        // /core.Core/* hit these. To be collapsed once all callers have
+        // migrated to /core.Core/*.
+        .route("/core.Core/DiscoverMachine", post(handle_discover))
+        .route(
+            "/core.Core/GetManagedHostNetworkConfig",
+            post(handle_netconf),
+        )
+        .route(
+            "/core.Core/RecordDpuNetworkStatus",
+            post(handle_record_netstat),
+        )
+        .route(
+            "/core.Core/DpuAgentUpgradeCheck",
+            post(handle_dpu_agent_upgrade_check),
+        )
+        .route(
+            "/core.Core/UpdateAgentReportedInventory",
+            post(handle_update_agent_reported_inventory),
+        )
+        .route("/core.Core/GetDpuInfoList", post(handle_get_dpu_info_list))
+        .route("/core.Core/FindInterfaces", post(handle_find_interfaces))
+        .route("/core.Core/Version", post(handle_version))
         .fallback(handler)
         .with_state(state.clone());
     let (addr, join_handle) = common::run_grpc_server(app).await?;

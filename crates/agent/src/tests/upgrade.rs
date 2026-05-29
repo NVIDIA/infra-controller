@@ -46,8 +46,18 @@ async fn test_upgrade_check() -> eyre::Result<()> {
             "/forge.Forge/DpuAgentUpgradeCheck",
             post(dpu_agent_upgrade_check),
         )
+        // Same handlers, registered at the renamed proto path for forward
+        // compatibility with clients built from core.proto. Old clients on
+        // /forge.Forge/* continue to hit the routes above; new clients on
+        // /core.Core/* hit these. To be collapsed once all callers have
+        // migrated to /core.Core/*.
+        .route(
+            "/core.Core/DpuAgentUpgradeCheck",
+            post(dpu_agent_upgrade_check),
+        )
         // ForgeApiClient needs a working Version route for connection retrying
-        .route("/forge.Forge/Version", post(handle_version));
+        .route("/forge.Forge/Version", post(handle_version))
+        .route("/core.Core/Version", post(handle_version));
     let (addr, join_handle) = common::run_grpc_server(app).await?;
 
     let client_config =
