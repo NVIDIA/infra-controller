@@ -200,6 +200,13 @@ pub struct CarbideConfig {
     /// DPU reboot.
     pub dpu_ipmi_reboot_attempts: Option<u32>,
 
+    /// Number of consecutive HTTP 401/403 responses from a BMC before the
+    /// session-token path stops attempting to log in to that BMC, to avoid
+    /// exhausting the BMC root account's retry budget.
+    /// Default is 3.
+    #[serde(default = "default_bmc_session_lockout_threshold")]
+    pub bmc_session_lockout_threshold: u32,
+
     /// Infiniband fabrics managed by the site
     /// Note: At the moment, only a single fabric is supported
     #[serde(default)]
@@ -1485,6 +1492,10 @@ fn default_max_database_connections() -> u32 {
     1000
 }
 
+pub const fn default_bmc_session_lockout_threshold() -> u32 {
+    3
+}
+
 /// DpuConfig related internal configuration
 #[derive(Clone, Debug, Serialize)]
 pub struct DpuConfig {
@@ -2500,6 +2511,10 @@ mod tests {
         assert!(config.pools.is_none());
         assert!(config.ib_config.is_none());
         assert!(config.ib_fabrics.is_empty());
+        assert_eq!(
+            config.bmc_session_lockout_threshold,
+            default_bmc_session_lockout_threshold()
+        );
         assert!(config.vpc_peering_policy.is_none());
         assert!(config.site_explorer.enabled.load(AtomicOrdering::Relaxed));
         assert!(config.initial_objects_file.is_none());
@@ -2548,6 +2563,7 @@ mod tests {
         assert_eq!(config.asn, 777);
         assert_eq!(config.dhcp_servers, vec!["99.101.102.103".to_string()]);
         assert!(config.route_servers.is_empty());
+        assert_eq!(config.bmc_session_lockout_threshold, 5);
         assert_eq!(config.vpc_peering_policy, Some(VpcPeeringPolicy::Exclusive));
         assert_eq!(config.vpc_peering_policy_on_existing, None);
         assert_eq!(
@@ -2688,6 +2704,7 @@ mod tests {
         assert_eq!(config.database_url, "postgres://a:b@postgresql".to_string());
         assert_eq!(config.max_database_connections, 1222);
         assert_eq!(config.asn, 123);
+        assert_eq!(config.bmc_session_lockout_threshold, 4);
         assert_eq!(
             config.dhcp_servers,
             vec!["1.2.3.4".to_string(), "5.6.7.8".to_string()]
@@ -3003,6 +3020,7 @@ mod tests {
         assert_eq!(config.database_url, "postgres://a:b@postgresql".to_string());
         assert_eq!(config.max_database_connections, 1333);
         assert_eq!(config.asn, 777);
+        assert_eq!(config.bmc_session_lockout_threshold, 5);
         assert_eq!(config.dhcp_servers, vec!["99.101.102.103".to_string()]);
         assert_eq!(config.route_servers, vec!["9.10.11.12".to_string()]);
         assert_eq!(

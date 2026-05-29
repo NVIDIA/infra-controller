@@ -114,6 +114,7 @@ lazy_static = { workspace = true }
 libredfish = { workspace = true }
 librms = { workspace = true }
 mac_address = { workspace = true }
+nv-redfish = { workspace = true, features = ["session-service"] }
 num_cpus = { workspace = true }
 oauth2 = { workspace = true, default-features = false }
 opentelemetry = { workspace = true, features = ["logs"] }
