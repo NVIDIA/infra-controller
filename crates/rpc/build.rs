@@ -841,7 +841,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .type_attribute(
             "forge.GetBmcCredentialsRequest",
             "#[derive(serde::Serialize)]",
-        ).type_attribute(
+        )
+        .type_attribute(
+            "forge.GetSwitchNvosCredentialsRequest",
+            "#[derive(serde::Serialize)]",
+        )
+        .type_attribute("forge.SwitchNvosInfo", "#[derive(serde::Serialize)]")
+        .type_attribute(
             "forge.PlacementInRack",
             "#[derive(serde::Serialize)]",
         )
@@ -853,8 +859,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "forge.SpdmAttestationDetails",
             "#[derive(serde::Serialize)]",
         )
-        .type_attribute("forge.ForgeAgentControlResponse.ScoutFirmwareUpgradeTask", "#[derive(serde::Serialize, serde::Deserialize)]")
-        .type_attribute("forge.ForgeAgentControlResponse.FileArtifact", "#[derive(serde::Serialize, serde::Deserialize)]")
+        .type_attribute(
+            "scout_firmware_upgrade.ScoutFirmwareUpgradeTask",
+            "#[derive(serde::Serialize, serde::Deserialize)]",
+        )
+        .type_attribute(
+            "scout_firmware_upgrade.FileArtifact",
+            "#[derive(serde::Serialize, serde::Deserialize)]",
+        )
         .build_server(true)
         .build_client(true)
         .protoc_arg("--experimental_allow_proto3_optional")
@@ -862,6 +874,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .compile_protos(
             &[
                 "proto/common.proto",
+                "proto/scout_firmware_upgrade.proto",
                 "proto/forge.proto",
                 "proto/machine_discovery.proto",
                 "proto/mlx_device.proto",

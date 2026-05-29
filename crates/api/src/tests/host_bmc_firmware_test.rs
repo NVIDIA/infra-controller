@@ -22,6 +22,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::str::FromStr;
 use std::time::Duration;
 
+use carbide_machine_controller::config::{FirmwareGlobal, TimePeriod};
+use carbide_machine_controller::handler::MAX_FIRMWARE_UPGRADE_RETRIES;
 use carbide_preingestion_manager::PreingestionManager;
 use carbide_redfish::libredfish::test_support::RedfishSimAction;
 use carbide_uuid::machine::MachineId;
@@ -49,9 +51,8 @@ use tokio::time::sleep;
 use tonic::Request;
 
 use crate::CarbideResult;
-use crate::cfg::file::{CarbideConfig, FirmwareGlobal, TimePeriod};
+use crate::cfg::file::CarbideConfig;
 use crate::machine_update_manager::MachineUpdateManager;
-use crate::state_controller::machine::handler::MAX_FIRMWARE_UPGRADE_RETRIES;
 use crate::tests::common;
 use crate::tests::common::api_fixtures::managed_host::HardwareInfoTemplate;
 use crate::tests::common::api_fixtures::{
@@ -455,6 +456,7 @@ async fn test_postingestion_bmc_upgrade(pool: sqlx::PgPool) -> CarbideResult<()>
         env.config.clone(),
         env.test_meter.meter(),
         env.api.work_lock_manager_handle.clone(),
+        None,
     );
     // Update manager should notice that the host is underversioned, setting the request to update it
     update_manager.run_single_iteration().await.unwrap();
@@ -777,6 +779,7 @@ async fn test_host_fw_upgrade_enabledisable_global_enabled(
         env.config.clone(),
         env.test_meter.meter(),
         env.api.work_lock_manager_handle.clone(),
+        None,
     );
     update_manager.run_single_iteration().await?;
 
@@ -809,6 +812,7 @@ async fn test_host_fw_upgrade_enabledisable_global_disabled(
         env.config.clone(),
         env.test_meter.meter(),
         env.api.work_lock_manager_handle.clone(),
+        None,
     );
     update_manager.run_single_iteration().await?;
 
@@ -1197,6 +1201,7 @@ async fn test_instance_upgrading_actual(
         env.config.clone(),
         env.test_meter.meter(),
         env.api.work_lock_manager_handle.clone(),
+        None,
     );
 
     // Single iteration now starts it
@@ -1905,6 +1910,7 @@ async fn test_script_upgrade(pool: sqlx::PgPool) -> CarbideResult<()> {
         env.config.clone(),
         env.test_meter.meter(),
         env.api.work_lock_manager_handle.clone(),
+        None,
     );
     // Update manager should notice that the host is underversioned, setting the request to update it
     update_manager.run_single_iteration().await.unwrap();
@@ -2002,6 +2008,7 @@ async fn test_script_upgrade_failure(pool: sqlx::PgPool) -> CarbideResult<()> {
         env.config.clone(),
         env.test_meter.meter(),
         env.api.work_lock_manager_handle.clone(),
+        None,
     );
     // Update manager should notice that the host is underversioned, setting the request to update it
     update_manager.run_single_iteration().await.unwrap();
@@ -2163,6 +2170,7 @@ async fn test_explicit_update(pool: sqlx::PgPool) -> CarbideResult<()> {
         env.config.clone(),
         env.test_meter.meter(),
         env.api.work_lock_manager_handle.clone(),
+        None,
     );
 
     // A tick of the state machine, but we don't start anything yet and it's still in ready
@@ -2584,6 +2592,7 @@ async fn test_manual_firmware_upgrade_workflow(pool: sqlx::PgPool) -> CarbideRes
         env.config.clone(),
         env.test_meter.meter(),
         env.api.work_lock_manager_handle.clone(),
+        None,
     );
     update_manager.run_single_iteration().await?;
 
