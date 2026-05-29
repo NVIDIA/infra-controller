@@ -35,6 +35,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{Layer, filter, reload};
 
 use super::level_filter::ActiveLevel;
+use super::stream::{LogStream, LogStreamLayer};
 use crate::api::metrics::ApiMetricsEmitter;
 use crate::logging::level_filter::ReloadableFilter;
 
@@ -43,6 +44,8 @@ pub struct Logging {
     pub filter: Arc<ActiveLevel>,
     pub tracing_enabled: Arc<AtomicBool>,
     pub spancount_reader: Option<spancounter::SpanCountReader>,
+    /// Log stream used to feed the admin web UI.
+    pub log_stream: LogStream,
 }
 
 #[derive(Debug, Clone)]
@@ -102,6 +105,10 @@ pub fn setup_logging(
     let spancount_layer = spancounter::layer();
     let spancount_reader = spancount_layer.reader();
 
+    // Used as part of a layer for collecting + brodcasting
+    // log events to the admin web UI.
+    let log_stream = LogStream::default();
+
     // == Dynamic filter for tracing enabled/disabled ==
     // This doesn't track levels but instead just enabled/disabled (when we want tracing enabled, we
     // typically want a high level of verbosity.) Enabled by default if debug is enabled.
@@ -147,6 +154,7 @@ pub fn setup_logging(
             .with(spancount_layer.with_filter(log_level))
             .with(maybe_otel_tracing_layer)
             .with(logfmt_stdout_formatter.with_filter(logfmt_stdout_filter))
+            .with(LogStreamLayer::new(log_stream.clone()).with_filter(initial_log_filter.clone()))
             .with(sqlx_query_tracing::create_sqlx_query_tracing_layer())
             .try_init()
             .wrap_err("new tracing subscriber try_init()")?;
@@ -167,6 +175,7 @@ pub fn setup_logging(
             .into(),
             tracing_enabled,
             spancount_reader: Some(spancount_reader),
+            log_stream,
         })
     }
 }
