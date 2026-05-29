@@ -1164,9 +1164,7 @@ dependencies = [
  "axum",
  "axum-extra",
  "base64",
- "bmc-explorer",
  "bmc-vendor",
- "bms-dsx-exchange",
  "byteorder",
  "bytes",
  "carbide-api-db",
@@ -1175,7 +1173,6 @@ dependencies = [
  "carbide-dpa-interface-controller",
  "carbide-dpf",
  "carbide-firmware",
- "carbide-health-metrics",
  "carbide-health-report",
  "carbide-host-support",
  "carbide-ib-fabric",
@@ -1183,6 +1180,7 @@ dependencies = [
  "carbide-ipmi",
  "carbide-ipxe-renderer",
  "carbide-libmlx",
+ "carbide-machine-controller",
  "carbide-macros",
  "carbide-measured-boot",
  "carbide-metrics-utils",
@@ -1190,9 +1188,11 @@ dependencies = [
  "carbide-network",
  "carbide-network-segment-controller",
  "carbide-nvlink-manager",
+ "carbide-power-shelf-controller",
  "carbide-preingestion-manager",
  "carbide-prost-builder",
  "carbide-rack",
+ "carbide-rack-controller",
  "carbide-redfish",
  "carbide-rpc",
  "carbide-rpc-utils",
@@ -1200,10 +1200,8 @@ dependencies = [
  "carbide-site-explorer",
  "carbide-spdm-controller",
  "carbide-sqlx-testing",
- "carbide-ssh",
  "carbide-state-controller-common",
  "carbide-switch-controller",
- "carbide-tls",
  "carbide-utils",
  "carbide-uuid",
  "carbide-version",
@@ -1213,7 +1211,6 @@ dependencies = [
  "component-manager",
  "config-version",
  "const_format",
- "crypto-bigint 0.7.0-rc.28",
  "ctor",
  "dashmap",
  "data-encoding",
@@ -1229,29 +1226,21 @@ dependencies = [
  "http",
  "http-body-util",
  "hyper",
- "hyper-rustls",
- "hyper-timeout",
  "hyper-util",
  "ipnetwork",
  "itertools 0.14.0",
  "jsonwebtoken",
- "k8s-openapi",
- "kube",
  "lazy_static",
  "libnmxc",
- "libnmxm",
  "libredfish",
  "librms",
  "logfmt",
  "mac_address",
- "mockall",
  "mockito",
  "mqttea",
  "nras",
  "num_cpus",
  "oauth2",
- "oid-registry",
- "once_cell",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry-prometheus",
@@ -1262,7 +1251,6 @@ dependencies = [
  "prometheus",
  "prometheus-text-parser",
  "prost",
- "prost-types",
  "rand 0.10.1",
  "rcgen",
  "regex",
@@ -1283,7 +1271,6 @@ dependencies = [
  "strum 0.28.0",
  "temp-dir",
  "tempfile",
- "tera",
  "thiserror 2.0.18",
  "time",
  "tokio",
@@ -1295,7 +1282,6 @@ dependencies = [
  "tonic-reflection",
  "tower",
  "tower-http",
- "tower-test",
  "tracing",
  "tracing-log",
  "tracing-opentelemetry",
@@ -1304,7 +1290,6 @@ dependencies = [
  "url",
  "urlencoding",
  "uuid",
- "version-compare 0.2.1",
  "x509-parser",
 ]
 
@@ -1334,7 +1319,7 @@ dependencies = [
  "eyre",
  "futures",
  "futures-util",
- "hickory-proto 0.26.1",
+ "hickory-proto",
  "ipnetwork",
  "itertools 0.14.0",
  "lazy_static",
@@ -1624,13 +1609,11 @@ dependencies = [
  "clap",
  "dns-record",
  "eyre",
- "local-ip-address",
  "metrics-endpoint",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "serde",
- "serde_json",
  "thiserror 2.0.18",
  "tokio",
  "toml 1.1.2+spec-1.1.0",
@@ -1640,7 +1623,6 @@ dependencies = [
  "tracing-subscriber",
  "trust-dns-resolver",
  "trust-dns-server",
- "uuid",
 ]
 
 [[package]]
@@ -2192,6 +2174,52 @@ dependencies = [
 ]
 
 [[package]]
+name = "carbide-machine-controller"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "bmc-vendor",
+ "carbide-api-db",
+ "carbide-api-model",
+ "carbide-dpf",
+ "carbide-firmware",
+ "carbide-health-metrics",
+ "carbide-health-report",
+ "carbide-ipmi",
+ "carbide-measured-boot",
+ "carbide-redfish",
+ "carbide-secrets",
+ "carbide-state-controller-common",
+ "carbide-utils",
+ "carbide-uuid",
+ "chrono",
+ "config-version",
+ "duration-str",
+ "eyre",
+ "figment",
+ "futures",
+ "futures-util",
+ "itertools 0.14.0",
+ "lazy_static",
+ "libredfish",
+ "mac_address",
+ "mockall",
+ "opentelemetry",
+ "prost",
+ "prost-types",
+ "regex",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "state-controller",
+ "tokio",
+ "tonic-prost-build",
+ "tracing",
+ "uuid",
+ "version-compare 0.2.1",
+]
+
+[[package]]
 name = "carbide-machine-validation"
 version = "0.0.0"
 dependencies = [
@@ -2340,6 +2368,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "carbide-power-shelf-controller"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "carbide-api-db",
+ "carbide-api-model",
+ "carbide-health-metrics",
+ "carbide-rack",
+ "carbide-secrets",
+ "carbide-utils",
+ "carbide-uuid",
+ "config-version",
+ "eyre",
+ "librms",
+ "mac_address",
+ "opentelemetry",
+ "sqlx",
+ "state-controller",
+ "tracing",
+]
+
+[[package]]
 name = "carbide-preingestion-manager"
 version = "0.0.1"
 dependencies = [
@@ -2430,6 +2480,33 @@ dependencies = [
  "state-controller",
  "tokio",
  "tokio-util",
+ "tonic",
+ "tracing",
+]
+
+[[package]]
+name = "carbide-rack-controller"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "carbide-api-db",
+ "carbide-api-model",
+ "carbide-health-metrics",
+ "carbide-rack",
+ "carbide-secrets",
+ "carbide-utils",
+ "carbide-uuid",
+ "chrono",
+ "config-version",
+ "duration-str",
+ "eyre",
+ "librms",
+ "mac_address",
+ "opentelemetry",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "state-controller",
  "tonic",
  "tracing",
 ]
@@ -4000,14 +4077,14 @@ checksum = "abd57806937c9cc163efc8ea3910e00a62e2aeb0b8119f1793a978088f8f6b04"
 
 [[package]]
 name = "dhcproto"
-version = "0.14.0"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "425ab19f6a915beac79cac8ec2810c1311b502ae14d7f294682081cf5ae4c5bb"
+checksum = "c278d2f17dbcb7332f3b31788be67f76017096c5eedc293e1259f2d48b0f891f"
 dependencies = [
  "dhcproto-macros",
- "hickory-proto 0.25.2",
+ "hickory-proto",
  "ipnet",
- "rand 0.9.4",
+ "rand 0.10.1",
  "thiserror 2.0.18",
 ]
 
@@ -4882,18 +4959,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "getset"
-version = "0.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9cf0fc11e47561d47397154977bc219f4cf809b2974facc3ccb3b89e2436f912"
-dependencies = [
- "proc-macro-error2",
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
-
-[[package]]
 name = "ghash"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5194,7 +5259,7 @@ dependencies = [
  "futures-channel",
  "futures-io",
  "futures-util",
- "hickory-proto 0.26.1",
+ "hickory-proto",
  "idna 1.1.0",
  "ipnet",
  "jni",
@@ -5202,28 +5267,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tinyvec",
  "tokio",
- "tracing",
- "url",
-]
-
-[[package]]
-name = "hickory-proto"
-version = "0.25.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8a6fe56c0038198998a6f217ca4e7ef3a5e51f46163bd6dd60b5c71ca6c6502"
-dependencies = [
- "async-trait",
- "cfg-if",
- "data-encoding",
- "enum-as-inner",
- "futures-channel",
- "futures-util",
- "idna 1.1.0",
- "ipnet",
- "once_cell",
- "rand 0.9.4",
- "thiserror 2.0.18",
- "tinyvec",
  "tracing",
  "url",
 ]
@@ -5257,7 +5300,7 @@ dependencies = [
  "cfg-if",
  "futures-util",
  "hickory-net",
- "hickory-proto 0.26.1",
+ "hickory-proto",
  "ipconfig",
  "ipnet",
  "jni",
@@ -6483,17 +6526,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
-name = "local-ip-address"
-version = "0.6.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7b0187df4e614e42405b49511b82ff7a1774fbd9a816060ee465067847cac22"
-dependencies = [
- "libc",
- "neli",
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6944,35 +6976,6 @@ name = "ndk-context"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27b02d87554356db9e9a873add8782d4ea6e3e58ea071a9adb9a2e8ddb884a8b"
-
-[[package]]
-name = "neli"
-version = "0.7.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22f9786d56d972959e1408b6a93be6af13b9c1392036c5c1fafa08a1b0c6ee87"
-dependencies = [
- "bitflags 2.11.1",
- "byteorder",
- "derive_builder",
- "getset",
- "libc",
- "log",
- "neli-proc-macros",
- "parking_lot",
-]
-
-[[package]]
-name = "neli-proc-macros"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05d8d08c6e98f20a62417478ebf7be8e1425ec9acecc6f63e22da633f6b71609"
-dependencies = [
- "either",
- "proc-macro2",
- "quote",
- "serde",
- "syn 2.0.117",
-]
 
 [[package]]
 name = "netlink-packet-core"
@@ -8312,28 +8315,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e67ba7e9b2b56446f1d419b1d807906278ffa1a658a8a5d8a39dcb1f5a78614f"
 dependencies = [
  "toml_edit 0.25.11+spec-1.1.0",
-]
-
-[[package]]
-name = "proc-macro-error-attr2"
-version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96de42df36bb9bba5542fe9f1a054b8cc87e172759a1868aa05c1f3acc89dfc5"
-dependencies = [
- "proc-macro2",
- "quote",
-]
-
-[[package]]
-name = "proc-macro-error2"
-version = "2.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11ec05c52be0a07b08061f7dd003e7d7092e0472bc731b4af7bb1ef876109802"
-dependencies = [
- "proc-macro-error-attr2",
- "proc-macro2",
- "quote",
- "syn 2.0.117",
 ]
 
 [[package]]

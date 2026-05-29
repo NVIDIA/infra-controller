@@ -33,13 +33,30 @@ use carbide_ib_partition_controller::context::IBPartitionStateHandlerServices;
 use carbide_ib_partition_controller::handler::IBPartitionStateHandler;
 use carbide_ib_partition_controller::io::IBPartitionStateControllerIO;
 use carbide_ipmi::IPMITool;
+use carbide_machine_controller::config::{
+    BomValidationConfig, FirmwareGlobal, MachineStateControllerConfig, MachineValidationConfig,
+    PowerManagerOptions,
+};
+use carbide_machine_controller::context::MachineStateHandlerServices;
+use carbide_machine_controller::dpf::DpfOperations;
+use carbide_machine_controller::handler::{
+    MachineStateHandler, MachineStateHandlerBuilder, PowerOptionConfig, ReachabilityParams,
+};
+use carbide_machine_controller::io::MachineStateControllerIO;
 use carbide_network_segment_controller::context::NetworkSegmentStateHandlerServices;
 use carbide_network_segment_controller::handler::NetworkSegmentStateHandler;
 use carbide_network_segment_controller::io::NetworkSegmentStateControllerIO;
 use carbide_nvlink_manager::NvlPartitionMonitor;
 use carbide_nvlink_manager::config::NvLinkConfig;
 use carbide_nvlink_manager::nvlink::test_support::NmxcSimClient;
+use carbide_power_shelf_controller::context::PowerShelfStateHandlerServices;
+use carbide_power_shelf_controller::handler::PowerShelfStateHandler;
+use carbide_power_shelf_controller::io::PowerShelfStateControllerIO;
 use carbide_rack::rms_client::test_support::RmsSim;
+use carbide_rack_controller::config::{RackConfig, RackValidationConfig, RmsConfig};
+use carbide_rack_controller::context::RackStateHandlerServices;
+use carbide_rack_controller::handler::RackStateHandler;
+use carbide_rack_controller::io::RackStateControllerIO;
 use carbide_redfish::libredfish::test_support::{RedfishSim, RedfishSimTestOverrides};
 use carbide_site_explorer::SiteExplorer;
 use carbide_site_explorer::config::{SiteExplorerConfig, SiteExplorerExploreMode};
@@ -102,6 +119,10 @@ use rpc_instance::RpcInstance;
 use site_explorer::new_host_with_machine_validation;
 use sqlx::PgPool;
 use sqlx::postgres::PgConnectOptions;
+use state_controller::controller::{Enqueuer, StateController};
+use state_controller::state_handler::{
+    StateHandler, StateHandlerContext, StateHandlerError, StateHandlerOutcome,
+};
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 use tokio_util::sync::{CancellationToken, DropGuard};
@@ -113,38 +134,17 @@ use crate::api::metrics::ApiMetricsEmitter;
 use crate::cfg::file::{
     CarbideConfig, ComputeAllocationEnforcement, DpaConfig, DpaInterfaceStateControllerConfig,
     DpuConfig as InitialDpuConfig, FnnConfig, IbPartitionStateControllerConfig, ListenMode,
-    MachineUpdater, MachineValidationConfig, MeasuredBootMetricsCollectorConfig, MqttAuthConfig,
-    NetworkSecurityGroupConfig, NetworkSegmentStateControllerConfig,
-    PowerShelfStateControllerConfig, RackStateControllerConfig, SpdmConfig,
-    SpdmStateControllerConfig, SwitchStateControllerConfig, VmaasConfig, VpcPeeringPolicy,
-    default_max_find_by_ids,
+    MachineUpdater, MeasuredBootMetricsCollectorConfig, MqttAuthConfig, NetworkSecurityGroupConfig,
+    NetworkSegmentStateControllerConfig, PowerShelfStateControllerConfig,
+    RackStateControllerConfig, SpdmConfig, SpdmStateControllerConfig, SwitchStateControllerConfig,
+    VmaasConfig, VpcPeeringPolicy, default_max_find_by_ids,
 };
-use crate::dpf::DpfOperations;
 use crate::ethernet_virtualization::{EthVirtData, SiteFabricPrefixList};
 use crate::logging::level_filter::ActiveLevel;
 use crate::logging::log_limiter::LogLimiter;
 use crate::measured_boot::convert_vec;
 use crate::scout_stream;
 use crate::state_controller::common_services::CommonStateHandlerServices;
-use crate::state_controller::controller::{Enqueuer, StateController};
-use crate::state_controller::machine::config::{
-    BomValidationConfig, FirmwareGlobal, MachineStateControllerConfig, PowerManagerOptions,
-};
-use crate::state_controller::machine::context::MachineStateHandlerServices;
-use crate::state_controller::machine::handler::{
-    MachineStateHandler, MachineStateHandlerBuilder, PowerOptionConfig, ReachabilityParams,
-};
-use crate::state_controller::machine::io::MachineStateControllerIO;
-use crate::state_controller::power_shelf::context::PowerShelfStateHandlerServices;
-use crate::state_controller::power_shelf::handler::PowerShelfStateHandler;
-use crate::state_controller::power_shelf::io::PowerShelfStateControllerIO;
-use crate::state_controller::rack::config::{RackConfig, RackValidationConfig, RmsConfig};
-use crate::state_controller::rack::context::RackStateHandlerServices;
-use crate::state_controller::rack::handler::RackStateHandler;
-use crate::state_controller::rack::io::RackStateControllerIO;
-use crate::state_controller::state_handler::{
-    StateHandler, StateHandlerContext, StateHandlerError, StateHandlerOutcome,
-};
 use crate::tests::common::api_fixtures::endpoint_explorer::MockEndpointExplorer;
 use crate::tests::common::api_fixtures::managed_host::ManagedHostConfig;
 use crate::tests::common::api_fixtures::network_segment::{
@@ -256,7 +256,6 @@ lazy_static! {
 
 #[derive(Clone, Debug, Default)]
 pub struct TestEnvOverrides {
-    pub allow_zero_dpu_hosts: Option<bool>,
     pub site_prefixes: Option<Vec<IpNetwork>>,
     pub config: Option<CarbideConfig>,
     pub create_network_segments: Option<bool>,
@@ -485,7 +484,7 @@ impl TestEnv {
                     model::machine::MachineState::WaitingForPlatformConfiguration { .. } => {
                         machine_state
                     }
-                    model::machine::MachineState::PollingBiosSetup => machine_state,
+                    model::machine::MachineState::PollingBiosSetup { .. } => machine_state,
                     model::machine::MachineState::SetBootOrder { .. } => machine_state,
                     model::machine::MachineState::UefiSetup { .. } => machine_state,
                     model::machine::MachineState::WaitingForDiscovery => machine_state,
@@ -1167,6 +1166,7 @@ pub fn get_config() -> CarbideConfig {
     CarbideConfig {
         default_tenant_routing_profile_type: "EXTERNAL".to_string(),
         web_ui_sidebar_tools: vec![],
+        log_history: Default::default(),
         bgp_leaf_session_password: None,
         rack_validation_config: RackValidationConfig {
             enabled: true,
@@ -1241,6 +1241,10 @@ pub fn get_config() -> CarbideConfig {
             controller: StateControllerConfig::default(),
             scout_reporting_timeout: Duration::weeks(52),
             uefi_boot_wait: Duration::seconds(0),
+            max_bios_config_retries: MachineStateControllerConfig::max_bios_config_retries_default(
+            ),
+            polling_bios_setup_stuck_threshold:
+                MachineStateControllerConfig::polling_bios_setup_stuck_threshold_default(),
         },
         network_segment_state_controller: NetworkSegmentStateControllerConfig {
             network_segment_drain_time: Duration::seconds(2),
@@ -1324,12 +1328,7 @@ pub fn get_config() -> CarbideConfig {
         }),
         mlxconfig_profiles: None,
         rack_management_enabled: false,
-        rms: RmsConfig {
-            api_url: Some(
-                SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080).to_string(),
-            ),
-            ..Default::default()
-        },
+        rms: RmsConfig::default(),
         rack_profiles: Default::default(),
         spdm_state_controller: SpdmStateControllerConfig {
             controller: StateControllerConfig::default(),
@@ -1623,6 +1622,7 @@ pub async fn create_test_env_with_overrides(
         create_machines: config.site_explorer.create_machines.clone(),
         bmc_proxy: config.site_explorer.bmc_proxy.clone(),
         tracing_enabled: Arc::new(false.into()),
+        log_stream: Default::default(),
     };
 
     let bmc_proxy = Arc::new(ArcSwap::new(None.into()));
@@ -1903,7 +1903,6 @@ pub async fn create_test_env_with_overrides(
             machines_created_per_run: 1,
             override_target_ip: None,
             override_target_port: None,
-            allow_zero_dpu_hosts: overrides.allow_zero_dpu_hosts.unwrap_or(false),
             bmc_proxy: Arc::new(Default::default()),
             allow_changing_bmc_proxy: None,
             reset_rate_limit: Duration::hours(1),

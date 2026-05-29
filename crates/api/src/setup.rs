@@ -33,12 +33,25 @@ use carbide_ib_partition_controller::context::IBPartitionStateHandlerServices;
 use carbide_ib_partition_controller::handler::IBPartitionStateHandler;
 use carbide_ib_partition_controller::io::IBPartitionStateControllerIO;
 use carbide_ipmi::IPMITool;
+use carbide_machine_controller::context::MachineStateHandlerServices;
+use carbide_machine_controller::dpf::{
+    CarbideBmcPasswordProvider, CarbideDPFLabeler, DpfOperations, DpfSdkOps,
+};
+use carbide_machine_controller::handler::MachineStateHandlerBuilder;
+use carbide_machine_controller::io::MachineStateControllerIO;
 use carbide_network_segment_controller::context::NetworkSegmentStateHandlerServices;
 use carbide_network_segment_controller::handler::NetworkSegmentStateHandler;
 use carbide_network_segment_controller::io::NetworkSegmentStateControllerIO;
 use carbide_nvlink_manager::NvlPartitionMonitor;
+use carbide_power_shelf_controller::context::PowerShelfStateHandlerServices;
+use carbide_power_shelf_controller::handler::PowerShelfStateHandler;
+use carbide_power_shelf_controller::io::PowerShelfStateControllerIO;
 use carbide_preingestion_manager::PreingestionManager;
 use carbide_rack::bms_client::BmsDsxExchangeHandle;
+use carbide_rack_controller::config::RackConfig;
+use carbide_rack_controller::context::RackStateHandlerServices;
+use carbide_rack_controller::handler::RackStateHandler;
+use carbide_rack_controller::io::RackStateControllerIO;
 use carbide_redfish::libredfish::RedfishClientPool;
 use carbide_redfish::nv_redfish::NvRedfishClientPool;
 use carbide_site_explorer::SiteExplorer;
@@ -70,6 +83,8 @@ use opentelemetry::metrics::Meter;
 use sqlx::postgres::PgSslMode;
 use sqlx::{ConnectOptions, PgPool};
 use sqlx_query_tracing::SQLX_STATEMENTS_LOG_LEVEL;
+use state_controller::controller::{Enqueuer, StateController};
+use state_controller::state_change_emitter::StateChangeEmitterBuilder;
 use tokio::sync::Semaphore;
 use tokio::sync::oneshot::Sender;
 use tokio::task::JoinSet;
@@ -93,18 +108,6 @@ use crate::measured_boot::metrics_collector::MeasuredBootMetricsCollector;
 use crate::mqtt_state_change_hook::hook::MqttStateChangeHook;
 use crate::scout_stream::ConnectionRegistry;
 use crate::state_controller::common_services::CommonStateHandlerServices;
-use crate::state_controller::controller::{Enqueuer, StateController};
-use crate::state_controller::machine::context::MachineStateHandlerServices;
-use crate::state_controller::machine::handler::MachineStateHandlerBuilder;
-use crate::state_controller::machine::io::MachineStateControllerIO;
-use crate::state_controller::power_shelf::context::PowerShelfStateHandlerServices;
-use crate::state_controller::power_shelf::handler::PowerShelfStateHandler;
-use crate::state_controller::power_shelf::io::PowerShelfStateControllerIO;
-use crate::state_controller::rack::config::RackConfig;
-use crate::state_controller::rack::context::RackStateHandlerServices;
-use crate::state_controller::rack::handler::RackStateHandler;
-use crate::state_controller::rack::io::RackStateControllerIO;
-use crate::state_controller::state_change_emitter::StateChangeEmitterBuilder;
 use crate::{attestation, db_init, ethernet_virtualization, listener};
 
 /// The resolved set of network declarations passed from `start_api` into
@@ -644,13 +647,13 @@ pub async fn start_api(
 
     // Create DPF SDK and initialize CRs if enabled
     // If we end up having static DPUDeployments, we could move the static CRs outside of the API.
-    let dpf_sdk: Option<Arc<dyn crate::dpf::DpfOperations>> = if carbide_config.dpf.enabled {
+    let dpf_sdk: Option<Arc<dyn DpfOperations>> = if carbide_config.dpf.enabled {
         tracing::info!("Initializing DPF SDK");
         let repo = carbide_dpf::KubeRepository::new()
             .await
             .map_err(|e| eyre::eyre!("Failed to create DPF repository: {e}"))?;
 
-        let provider = crate::dpf::CarbideBmcPasswordProvider::new(credential_manager.clone());
+        let provider = CarbideBmcPasswordProvider::new(credential_manager.clone());
 
         let mandatory_services = carbide_config.dpf.services.clone();
         let dpf_mandatory_services = vec![
@@ -672,7 +675,7 @@ pub async fn start_api(
         };
 
         let sdk = carbide_dpf::DpfSdkBuilder::new(repo, carbide_dpf::NAMESPACE, provider)
-            .with_labeler(crate::dpf::CarbideDPFLabeler::new(
+            .with_labeler(CarbideDPFLabeler::new(
                 carbide_config.dpf.node_label_key.clone(),
             ))
             .with_bmc_password_refresh_interval(std::time::Duration::from_secs(60))
@@ -681,7 +684,7 @@ pub async fn start_api(
             .await
             .map_err(|err| eyre::eyre!("Failed to initialize DPF SDK: {err}"))?;
 
-        Some(Arc::new(crate::dpf::DpfSdkOps::new(
+        Some(Arc::new(DpfSdkOps::new(
             Arc::new(sdk),
             db_pool.clone(),
             join_set,
@@ -1335,6 +1338,7 @@ pub async fn initialize_and_start_controllers<'a>(
         carbide_config.clone(),
         meter.clone(),
         work_lock_manager_handle.clone(),
+        dpf_sdk.clone(),
     )
     .start(join_set, cancel_token.clone())?;
 
