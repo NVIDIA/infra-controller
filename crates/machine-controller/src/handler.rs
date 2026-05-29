@@ -1545,8 +1545,7 @@ impl MachineStateHandler {
                         match spdm_measuring_state {
                             SpdmMeasuringState::TriggerMeasurements => {
                                 handle_spdm_trigger_state(
-                                    &ctx.services.db_pool,
-                                    ctx.services.redfish_client_pool.clone(),
+                                    ctx.services,
                                     mh_snapshot,
                                     host_machine_id,
                                     ManagedHostState::PostAssignedMeasuring {
@@ -1583,8 +1582,7 @@ impl MachineStateHandler {
                 match spdm_measuring_state {
                     SpdmMeasuringState::TriggerMeasurements => {
                         handle_spdm_trigger_state(
-                            &ctx.services.db_pool,
-                            ctx.services.redfish_client_pool.clone(),
+                            ctx.services,
                             mh_snapshot,
                             host_machine_id,
                             ManagedHostState::PreAssignedMeasuring {
@@ -5040,8 +5038,7 @@ impl StateHandler for HostMachineStateHandler {
                     match spdm_measuring_state {
                         SpdmMeasuringState::TriggerMeasurements => {
                             handle_spdm_trigger_state(
-                                &ctx.services.db_pool,
-                                ctx.services.redfish_client_pool.clone(),
+                                ctx.services,
                                 mh_snapshot,
                                 host_machine_id,
                                 ManagedHostState::HostInit {
