@@ -798,7 +798,7 @@ pub async fn detail(
     if display.is_host {
         match state.database_connection.acquire().await {
             Ok(mut conn) => {
-                match db::instance::find_id_by_machine_id(&mut *conn, &machine_id).await {
+                match db::instance::find_id_by_machine_id(&mut conn, &machine_id).await {
                     Ok(Some(instance_id)) => {
                         display.lifecycle_detail.associated_instance_id =
                             instance_id.to_string();
