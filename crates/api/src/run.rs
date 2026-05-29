@@ -75,7 +75,7 @@ pub async fn run(
     } else {
         setup_logging(
             debug,
-            crate::state_controller::machine::extra_logfmt_logging_fields(),
+            carbide_machine_controller::extra_logfmt_logging_fields(),
             None::<NoSubscriber>,
         )
         .wrap_err("setup_telemetry")?
@@ -132,6 +132,7 @@ pub async fn run(
         create_machines: carbide_config.site_explorer.create_machines.clone(),
         bmc_proxy: carbide_config.site_explorer.bmc_proxy.clone(),
         tracing_enabled: tconf.tracing_enabled,
+        log_stream: tconf.log_stream,
     };
     dynamic_settings.start_reset_task(
         &mut join_set,

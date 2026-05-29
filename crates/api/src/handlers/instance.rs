@@ -884,6 +884,7 @@ pub(crate) async fn invoke_power(
 
     let run_provisioning_instructions_on_every_boot = snapshot
         .instance
+        .as_ref()
         .map(|instance| {
             instance
                 .config
@@ -917,6 +918,13 @@ pub(crate) async fn invoke_power(
 
     if use_state_machine_for_reboot {
         db::instance::set_custom_pxe_reboot_requested(&machine_id, true, &mut txn).await?;
+    }
+
+    if request.boot_with_custom_ipxe
+        && let Some(instance) = snapshot.instance.as_ref()
+        && instance.config.os.phone_home_enabled
+    {
+        db::instance::clear_phone_home_last_contact(&mut txn, instance.id).await?;
     }
 
     // For non-always-PXE instances, set use_custom_pxe_on_boot based on the request.
@@ -1358,7 +1366,7 @@ async fn update_instance_network_config(
         // a secondary DPU into some other leg of the network, but we can
         // think about that later; that would mean we'd support a mix of
         // auto AND non-auto interfaces.
-        if !mh_snapshot.is_zero_dpu() {
+        if mh_snapshot.has_managed_dpus() {
             return Err(CarbideError::InvalidArgument(format!(
                 "instance was allocated with `auto: true` but host {} is no longer zero-DPU; cannot update via the auto path",
                 instance.machine_id,
@@ -1637,7 +1645,7 @@ pub async fn force_delete_instance(
         id: instance.machine_id.to_string(),
     })?;
 
-    crate::state_controller::machine::handler::release_vpc_dpu_loopback(
+    carbide_machine_controller::handler::release_vpc_dpu_loopback(
         &snapshot,
         Some(api.common_pools.as_ref()),
         &mut txn,

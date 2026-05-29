@@ -74,7 +74,7 @@ applicable.
 | `dpa_config` | `Option<DpaConfig>` | — | Cluster Interconnect (east-west Ethernet) config (see [DpaConfig](#dpaconfig)). |
 | `dsx_exchange_event_bus` | `Option<DsxExchangeEventBusConfig>` | — | MQTT event bus for managed-host state publishing plus BMS metadata subscription and rack/isolation/heartbeat publishing (see [DsxExchangeEventBusConfig](#dsxexchangeeventbusconfig)). |
 | `datacenter_asn` | `u32` | `11414` | Datacenter ASN used by FNN for DC-specific route targets. |
-| `nvlink_config` | `Option<NvLinkConfig>` | — | NvLink partitioning via NMX-M (see [NvLinkConfig](#nvlinkconfig)). |
+| `nvlink_config` | `Option<NvLinkConfig>` | — | NvLink partitioning via NMX-C (see [NvLinkConfig](#nvlinkconfig)). |
 | `power_manager_options` | `PowerManagerOptions` | *(see below)* | Power management timing (see [PowerManagerOptions](#powermanageroptions)). |
 | `sitename` | `Option<String>` | — | Human-readable site name exposed to tenants via FMDS. |
 | `auto_machine_repair_plugin` | `AutoMachineRepairPluginConfig` | *(default)* | Auto-repair configuration for failed machines. |
@@ -134,9 +134,11 @@ applicable.
 |-------|------|---------|-------------|
 | `enabled` | `bool` | `false` | Enables NvLink partitioning. |
 | `monitor_run_interval` | `Duration` | `60s` | NvLink monitor polling interval. |
-| `nmx_m_operation_timeout` | `Duration` | `10s` | Timeout for pending NMX-M operations. |
-| `nmx_m_endpoint` | `String` | `"localhost"` | NMX-M endpoint (host:port). |
-| `allow_insecure` | `bool` | `false` | Skip TLS verification for NMX-M. |
+| `nmx_c_tls_ca_cert_path` | `Option<String>` | — | Extra CA bundle for verifying the NMX-C server over HTTPS. |
+| `nmx_c_tls_client_cert_path` | `Option<String>` | — | Client certificate for mTLS to NMX-C. |
+| `nmx_c_tls_client_key_path` | `Option<String>` | — | Client private key for mTLS to NMX-C. |
+| `nmx_c_tls_authority` | `Option<String>` | — | TLS server name used for SNI and certificate verification. |
+| `allow_insecure` | `bool` | `false` | Skip TLS verification for NMX-C. |
 
 ### `SiteExplorerConfig`
 
@@ -151,7 +153,6 @@ applicable.
 | `rotate_switch_nvos_credentials` | `bool` | `false` | Auto-rotate switch NVOS admin credentials. |
 | `override_target_ip` | `Option<String>` | — | **Deprecated.** Use `bmc_proxy`. Debug BMC IP override. |
 | `override_target_port` | `Option<u16>` | — | **Deprecated.** Use `bmc_proxy`. Debug BMC port override. |
-| `allow_zero_dpu_hosts` | `bool` | `false` | Allow hosts with zero DPUs (set `false` in prod). |
 | `bmc_proxy` | `HostPortPair` | — | BMC proxy host:port for integration testing/dev. |
 | `allow_changing_bmc_proxy` | `Option<bool>` | *(auto)* | Allow runtime changes to `bmc_proxy`. Auto-detected from initial config. |
 | `reset_rate_limit` | `Duration` | `1h` | Minimum time between SiteExplorer-initiated BMC resets. |
