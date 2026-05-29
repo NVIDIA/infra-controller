@@ -18,13 +18,15 @@ NICo provides APIs and automated workflows to manage these components for the fo
 
 In order to use rack-level administration features today, NICo deployment needs to include NICo Flow, NSM, and PSM, properly configured with the REST API, site agent, temporal workflow, and NICo Core. The following diagram shows the control and data flows within NICo services and dependencies.
 
-![Dependencies](./images/rack-level-admin-dependencies.png)
+![Dependencies](../static/rack-level-admin-dependencies.svg)
 
 ## Architecture
 
 The end-to-end service path for NICo rack-level administration goes in the following order between services.
 
 **HW Lifecycle REST API \-\> NICo Flow \-\> NICo Core \-\> Component HW Backend**
+
+![Architecture](../static/rack-level-admin-architecture.svg)
 
 * **HW Lifecycle REST API**: NICo provides all rack-level administration operations via a set of HW Lifecycle REST APIs. Besides providing inventory, bringup, validation, power control, and firmware update functionalities for racks and trays (rack components), it supports referencing racks using the DCIM-supplied rack ID (e.g., “A12”) and referencing trays using rack-based tray addressing (e.g. “Rack A12 Tray Slot 19” or “Rack A12 Compute Tray \#3”), in addition to using tray serial numbers or BMC MAC addresses. It also exposes the task sequences running, pending, or completed on racks and trays, and allows cancellation. Non-rack compute machines are also supported.
 
