@@ -795,6 +795,26 @@ pub async fn detail(
 
     let mut display: MachineDetail = machine.into();
 
+    if display.is_host {
+        match state.database_connection.acquire().await {
+            Ok(mut conn) => {
+                match db::instance::find_id_by_machine_id(&mut *conn, &machine_id).await {
+                    Ok(Some(instance_id)) => {
+                        display.lifecycle_detail.associated_instance_id =
+                            instance_id.to_string();
+                    }
+                    Ok(None) => {}
+                    Err(err) => {
+                        tracing::warn!(%err, %machine_id, "find_id_by_machine_id failed");
+                    }
+                }
+            }
+            Err(err) => {
+                tracing::warn!(%err, %machine_id, "failed to acquire database connection");
+            }
+        }
+    }
+
     if display.has_instance_type {
         match fetch_instance_type_names(&state, vec![display.instance_type_id.clone()]).await {
             Ok(mut instance_types) => {
