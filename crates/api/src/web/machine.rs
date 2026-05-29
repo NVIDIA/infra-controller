@@ -796,21 +796,23 @@ pub async fn detail(
     let mut display: MachineDetail = machine.into();
 
     if display.is_host {
-        match state.database_connection.acquire().await {
-            Ok(mut conn) => {
-                match db::instance::find_id_by_machine_id(&mut conn, &machine_id).await {
-                    Ok(Some(instance_id)) => {
-                        display.lifecycle_detail.associated_instance_id =
-                            instance_id.to_string();
-                    }
-                    Ok(None) => {}
-                    Err(err) => {
-                        tracing::warn!(%err, %machine_id, "find_id_by_machine_id failed");
-                    }
+        match state
+            .find_instance_by_machine_id(tonic::Request::new(machine_id))
+            .await
+            .map(|response| response.into_inner())
+        {
+            Ok(instances) => {
+                if let Some(instance_id) = instances
+                    .instances
+                    .first()
+                    .and_then(|instance| instance.id.as_ref())
+                {
+                    display.lifecycle_detail.associated_instance_id =
+                        instance_id.to_string();
                 }
             }
             Err(err) => {
-                tracing::warn!(%err, %machine_id, "failed to acquire database connection");
+                tracing::warn!(%err, %machine_id, "find_instance_by_machine_id failed");
             }
         }
     }
