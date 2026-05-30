@@ -1226,43 +1226,49 @@ pub struct EthernetInterface {
 pub struct UefiDevicePath(String);
 
 lazy_static! {
-    static ref UEFI_DEVICE_PATH_REGEX: Regex =
-        Regex::new(r"PciRoot\((.*?)\)\/Pci\((.*?)\)\/Pci\((.*?)\)").expect("must always compile");
+    static ref PCI_ROOT_REGEX: Regex =
+        Regex::new(r"^PciRoot\(([^)]*)\)").expect("must always compile");
+    static ref PCI_NODE_REGEX: Regex = Regex::new(r"/Pci\(([^)]*)\)").expect("must always compile");
 }
 
 impl FromStr for UefiDevicePath {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        // Uefi string is received as PciRoot(0x8)/Pci(0x2,0xa)/Pci(0x0,0x0)/MAC(A088C208545C,0x1)
-        // Need to convert it as 8.2.10.0.0
-        // Some output does not contain MAC part. Also it is useless for us.
+        // UEFI 2.10 §10.3.4: PciRoot followed by one or more Pci nodes,
+        // e.g. PciRoot(0x8)/Pci(0x2,0xa)/Pci(0x0,0x0) (NIC behind a bridge) or
+        //      PciRoot(0x7)/Pci(0x0,0x0)            (NIC on a root port).
+        // Trailing /MAC(...) is optional and discarded.
 
         let st = s.rsplit_once("/MAC").map(|x| x.0).unwrap_or(s);
 
-        let captures = UEFI_DEVICE_PATH_REGEX
-            .captures(st)
-            .ok_or_else(|| format!("Could not match regex in PCI Device Path {s}."))?;
-
         let mut pci = vec![];
-
-        for (i, capture) in captures.iter().enumerate() {
-            if i == 0 {
-                continue;
+        let mut push_group = |group: &str| -> Result<(), String> {
+            for hex in group.split(',') {
+                let hex_int = u32::from_str_radix(&hex.to_lowercase().replace("0x", ""), 16)
+                    .map_err(|e| {
+                        format!("Can't convert pci address to int {hex}, error: {e} for pci: {s}")
+                    })?;
+                pci.push(hex_int.to_string());
             }
+            Ok(())
+        };
 
-            if let Some(capture) = capture {
-                for hex in capture.as_str().split(',') {
-                    let hex_int = u32::from_str_radix(&hex.to_lowercase().replace("0x", ""), 16)
-                        .map_err(|e| {
-                            format!(
-                                "Can't convert pci address to int {hex}, error: {e} for pci: {s}"
-                            )
-                        })?;
-                    pci.push(hex_int.to_string());
-                }
+        let root = PCI_ROOT_REGEX
+            .captures(st)
+            .and_then(|c| c.get(1))
+            .ok_or_else(|| format!("Could not match regex in PCI Device Path {s}."))?;
+        push_group(root.as_str())?;
+
+        let mut had_pci = false;
+        for cap in PCI_NODE_REGEX.captures_iter(st) {
+            if let Some(g) = cap.get(1) {
+                had_pci = true;
+                push_group(g.as_str())?;
             }
-            // Should we return error if capture is not proper??
+        }
+        if !had_pci {
+            return Err(format!("Could not match regex in PCI Device Path {s}."));
         }
 
         Ok(UefiDevicePath(pci.join(".")))
@@ -1892,6 +1898,19 @@ mod tests {
         let path = "PciRoot(0x11)/Pci(0x1,0x0)/Pci(0x0,0xa)/MAC(A088C20C87C6,0x1)";
         let converted: UefiDevicePath = UefiDevicePath::from_str(path).unwrap();
         assert_eq!(converted.0, "17.1.0.0.10");
+
+        // NIC attached directly to a root port (no PCI-PCI bridge upstream).
+        let path = "PciRoot(0x7)/Pci(0x0,0x0)/MAC(525400A8282F,0x1)";
+        let converted: UefiDevicePath = UefiDevicePath::from_str(path).unwrap();
+        assert_eq!(converted.0, "7.0.0");
+
+        // Three Pci nodes (NIC behind two upstream bridges/switches).
+        let path = "PciRoot(0x0)/Pci(0x1,0x0)/Pci(0x0,0x0)/Pci(0x0,0x0)";
+        let converted: UefiDevicePath = UefiDevicePath::from_str(path).unwrap();
+        assert_eq!(converted.0, "0.1.0.0.0.0.0");
+
+        // PciRoot without any Pci node should fail.
+        assert!(UefiDevicePath::from_str("PciRoot(0x7)/MAC(525400A8282F,0x1)").is_err());
     }
 
     #[test]
