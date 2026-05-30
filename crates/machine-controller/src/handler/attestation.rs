@@ -16,9 +16,7 @@
  */
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
-use carbide_redfish::libredfish::RedfishClientPool;
 use carbide_redfish::libredfish::error::state_handler_redfish_error as redfish_error;
 use carbide_uuid::machine::MachineId;
 use chrono::{DateTime, Utc};
@@ -40,6 +38,7 @@ use state_controller::state_handler::{
 };
 
 use crate::context::MachineStateHandlerContextObjects;
+use crate::handler::MachineStateHandlerServices;
 
 const PRODUCT_GB200: &str = "GB200 NVL";
 const PRODUCT_GB300: &str = "GB300 NVL";
@@ -292,21 +291,19 @@ pub(crate) async fn handle_spdm_attestation_failed_recovery(
 }
 
 pub(crate) async fn handle_spdm_trigger_state(
-    db_pool: &PgPool,
-    redfish_client_pool: Arc<dyn RedfishClientPool>,
+    services: &MachineStateHandlerServices,
     mh_snapshot: &mut ManagedHostStateSnapshot,
     host_machine_id: &MachineId,
     next_spdm_state: ManagedHostState,
     next_skip_state: ManagedHostState,
 ) -> Result<StateHandlerOutcome<ManagedHostState>, StateHandlerError> {
     // create redfish client
-    let redfish_client = redfish_client_pool
-        .create_client_from_machine(&mh_snapshot.host_snapshot, db_pool)
-        .await
-        .map_err(StateHandlerError::from)?;
+    let redfish_client = services
+        .create_redfish_client_from_machine(&mh_snapshot.host_snapshot)
+        .await?;
 
     let devices_scheduled = trigger_attestation(
-        db_pool,
+        &services.db_pool,
         redfish_client,
         &mh_snapshot.host_snapshot.bmc_info,
         host_machine_id,

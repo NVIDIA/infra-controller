@@ -144,7 +144,6 @@ use crate::logging::level_filter::ActiveLevel;
 use crate::logging::log_limiter::LogLimiter;
 use crate::measured_boot::convert_vec;
 use crate::scout_stream;
-use crate::state_controller::common_services::CommonStateHandlerServices;
 use crate::tests::common::api_fixtures::endpoint_explorer::MockEndpointExplorer;
 use crate::tests::common::api_fixtures::managed_host::ManagedHostConfig;
 use crate::tests::common::api_fixtures::network_segment::{
@@ -407,24 +406,6 @@ impl TestEnv {
         self.admin_segments
             .first()
             .expect("test env should have an admin segment")
-    }
-
-    /// Creates an instance of CommonStateHandlerServices that are suitable for this
-    /// test environment
-    pub fn state_handler_services(&self) -> CommonStateHandlerServices {
-        CommonStateHandlerServices {
-            db_pool: self.pool.clone(),
-            db_reader: self.pool.clone().into(),
-            redfish_client_pool: self.redfish_sim.clone(),
-            ib_fabric_manager: self.ib_fabric_manager.clone(),
-            ib_pools: self.common_pools.infiniband.clone(),
-            ipmi_tool: self.ipmi_tool.clone(),
-            site_config: self.config.clone(),
-            dpa_info: None,
-            rms_client: self.rms_sim.as_rms_client(),
-            switch_system_image_rms_client: self.rms_sim.as_switch_system_image_rms_client(),
-            credential_manager: self.test_credential_manager.clone(),
-        }
     }
 
     /// Creates an instance of MachineStateHandlerServices that are suitable for this
@@ -1742,20 +1723,6 @@ pub async fn create_test_env_with_overrides(
         ))),
     };
 
-    let handler_services = Arc::new(CommonStateHandlerServices {
-        db_pool: db_pool.clone(),
-        db_reader: db_pool.clone().into(),
-        redfish_client_pool: redfish_sim.clone(),
-        ib_fabric_manager: ib_fabric_manager.clone(),
-        ib_pools: common_pools.infiniband.clone(),
-        ipmi_tool: ipmi_tool.clone(),
-        site_config: config.clone(),
-        dpa_info: None,
-        rms_client: rms_sim.as_rms_client(),
-        switch_system_image_rms_client: rms_sim.as_switch_system_image_rms_client(),
-        credential_manager: credential_manager.clone(),
-    });
-
     let state_controller_id = uuid::Uuid::new_v4().to_string();
 
     let machine_controller = StateController::<MachineStateControllerIO>::builder()
@@ -1764,14 +1731,11 @@ pub async fn create_test_env_with_overrides(
         .processor_id(state_controller_id.clone())
         .services(
             MachineStateHandlerServices {
-                db_pool: handler_services.db_pool.clone(),
-                db_reader: handler_services.db_reader.clone(),
-                redfish_client_pool: handler_services.redfish_client_pool.clone(),
-                ipmi_tool: handler_services.ipmi_tool.clone(),
-                site_config: handler_services
-                    .site_config
-                    .machine_state_handler_site_config()
-                    .into(),
+                db_pool: db_pool.clone(),
+                db_reader: db_pool.clone().into(),
+                redfish_client_pool: redfish_sim.clone(),
+                ipmi_tool: ipmi_tool.clone(),
+                site_config: config.machine_state_handler_site_config().into(),
             }
             .into(),
         )
@@ -1791,8 +1755,8 @@ pub async fn create_test_env_with_overrides(
         .processor_id(state_controller_id.clone())
         .services(
             SpdmStateHandlerServices {
-                db_pool: handler_services.db_pool.clone(),
-                redfish_client_pool: handler_services.redfish_client_pool.clone(),
+                db_pool: db_pool.clone(),
+                redfish_client_pool: redfish_sim.clone(),
             }
             .into(),
         )
@@ -1811,9 +1775,9 @@ pub async fn create_test_env_with_overrides(
         .processor_id(state_controller_id.clone())
         .services(
             IBPartitionStateHandlerServices {
-                db_pool: handler_services.db_pool.clone(),
-                ib_fabric_manager: handler_services.ib_fabric_manager.clone(),
-                ib_pools: handler_services.ib_pools.clone(),
+                db_pool: db_pool.clone(),
+                ib_fabric_manager: ib_fabric_manager.clone(),
+                ib_pools: common_pools.infiniband.clone(),
             }
             .into(),
         )
@@ -1837,7 +1801,7 @@ pub async fn create_test_env_with_overrides(
         .processor_id(state_controller_id.clone())
         .services(
             NetworkSegmentStateHandlerServices {
-                db_pool: handler_services.db_pool.clone(),
+                db_pool: db_pool.clone(),
             }
             .into(),
         )
@@ -1851,9 +1815,9 @@ pub async fn create_test_env_with_overrides(
         .processor_id(state_controller_id.clone())
         .services(
             PowerShelfStateHandlerServices {
-                db_pool: handler_services.db_pool.clone(),
-                rms_client: handler_services.rms_client.clone(),
-                credential_manager: handler_services.credential_manager.clone(),
+                db_pool: db_pool.clone(),
+                rms_client: rms_sim.as_rms_client(),
+                credential_manager: credential_manager.clone(),
             }
             .into(),
         )
@@ -1867,9 +1831,9 @@ pub async fn create_test_env_with_overrides(
         .processor_id(state_controller_id.clone())
         .services(
             SwitchStateHandlerServices {
-                db_pool: handler_services.db_pool.clone(),
-                rms_client: handler_services.rms_client.clone(),
-                credential_manager: handler_services.credential_manager.clone(),
+                db_pool: db_pool.clone(),
+                rms_client: rms_sim.as_rms_client(),
+                credential_manager: credential_manager.clone(),
             }
             .into(),
         )
@@ -1883,21 +1847,16 @@ pub async fn create_test_env_with_overrides(
         .processor_id(state_controller_id.clone())
         .services(
             RackStateHandlerServices {
-                db_pool: handler_services.db_pool.clone(),
-                rms_client: handler_services.rms_client.clone(),
+                db_pool: db_pool.clone(),
+                rms_client: rms_sim.as_rms_client(),
                 site_config: RackConfig {
-                    rms: handler_services.site_config.rms.clone(),
-                    rack_validation_config: handler_services
-                        .site_config
-                        .rack_validation_config
-                        .clone(),
-                    rack_profiles: handler_services.site_config.rack_profiles.clone(),
+                    rms: config.rms.clone(),
+                    rack_validation_config: config.rack_validation_config.clone(),
+                    rack_profiles: config.rack_profiles.clone(),
                 }
                 .into(),
-                switch_system_image_rms_client: handler_services
-                    .switch_system_image_rms_client
-                    .clone(),
-                credential_manager: handler_services.credential_manager.clone(),
+                switch_system_image_rms_client: rms_sim.as_switch_system_image_rms_client(),
+                credential_manager: credential_manager.clone(),
             }
             .into(),
         )
