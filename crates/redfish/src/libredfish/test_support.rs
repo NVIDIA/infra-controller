@@ -16,7 +16,6 @@
  */
 
 use std::collections::{HashMap, VecDeque};
-use std::net::IpAddr;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -24,9 +23,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::Utc;
-use forge_secrets::credentials::{
-    BmcCredentialType, CredentialKey, CredentialReader, TestCredentialManager,
-};
+use forge_secrets::credentials::{CredentialReader, TestCredentialManager};
 use libredfish::model::certificate::Certificate;
 use libredfish::model::component_integrity::{ComponentIntegrities, ComponentIntegrity};
 use libredfish::model::oem::nvidia_dpu::{HostPrivilegeLevel, NicMode};
@@ -42,8 +39,6 @@ use libredfish::{
     Assembly, Chassis, Collection, EnabledDisabled, JobState, NetworkAdapter, PowerState, Redfish,
     RedfishError, Resource, SystemPowerControl,
 };
-use mac_address::MacAddress;
-use sqlx::PgPool;
 
 use crate::libredfish::{RedfishAuth, RedfishClientCreationError, RedfishClientPool};
 
@@ -1798,25 +1793,6 @@ impl RedfishClientPool for RedfishSim {
 
     fn credential_reader(&self) -> &dyn CredentialReader {
         &self.credential_manager
-    }
-
-    async fn create_client_for_ingested_host(
-        &self,
-        ip: IpAddr,
-        port: Option<u16>,
-        _txn: &PgPool,
-    ) -> Result<Box<dyn Redfish>, RedfishClientCreationError> {
-        self.create_client(
-            &ip.to_string(),
-            port,
-            RedfishAuth::Key(CredentialKey::BmcCredentials {
-                credential_type: BmcCredentialType::BmcRoot {
-                    bmc_mac_address: MacAddress::default(),
-                },
-            }),
-            None,
-        )
-        .await
     }
 
     async fn uefi_setup(
