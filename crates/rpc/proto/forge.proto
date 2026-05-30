@@ -15,6 +15,7 @@ import "health.proto";
 import "machine_discovery.proto";
 import "measured_boot.proto";
 import "mlx_device.proto";
+import "scout_firmware_upgrade.proto";
 import "site_explorer.proto";
 
 service Forge {
@@ -2994,6 +2995,11 @@ message InstanceInterfaceConfig {
   // Optional IPv6 configuration for dual-stack interfaces. When set alongside
   // vpc_prefix_id (field 6), both prefixes are allocated to a single network segment.
   optional InstanceInterfaceIpv6Config ipv6_interface_config = 11;
+
+  // Optional per-interface routing profile overrides. API callers can only
+  // narrow prefix-list options that are already allowed by the owning VPC's
+  // routing profile.
+  optional InstanceInterfaceRoutingProfile routing_profile = 12;
 }
 
 // IPv6 configuration for a dual-stack instance interface.
@@ -3003,6 +3009,14 @@ message InstanceInterfaceIpv6Config {
   common.VpcPrefixId vpc_prefix_id = 1;
   // Explicit host IPv6 address requested for this interface.
   optional string ip_address = 2;
+}
+
+// Routing-profile options API callers may narrow on an instance interface.
+message InstanceInterfaceRoutingProfile {
+  // IP prefixes this interface is allowed to announce as anycast routes.
+  // Every entry must be contained by an allowed_anycast_prefixes entry on the
+  // owning VPC's routing profile.
+  repeated PrefixFilterPolicyEntry allowed_anycast_prefixes = 1;
 }
 
 // The configuration that a customer desires for an instances IB interface
@@ -3975,7 +3989,7 @@ message ManagedHostNetworkConfigResponse {
 
   // Route imports and tagging details for exports
   // used by FNN configs.
-  // Deprecated: use FlatInterfaceConfig.routing_profile for per-VPC routing.
+  // Deprecated: use FlatInterfaceConfig.vpc_routing_profile for per-VPC routing.
   // NOTE: This will replace internet_l3_vni and common_internal_route_target but could allow
   //       common_internal_route_target to be renamed/repurposed as a site-level RT.
   //       to become a site-level common route target.
@@ -4202,7 +4216,11 @@ message FlatInterfaceConfig {
 
   // Route imports and tagging details for exports used by FNN configs.
   // This is scoped to the VPC that owns this interface.
-  optional RoutingProfile routing_profile = 20;
+  optional RoutingProfile vpc_routing_profile = 20;
+
+  // Interface-local routing profile details. These narrow the VPC routing
+  // profile for this interface.
+  optional FlatInterfaceRoutingProfile interface_routing_profile = 21;
 
   // The details of the network security group associated with
   // either the instance or its parent VPC.
@@ -4216,6 +4234,10 @@ message FlatInterfaceConfig {
 
   // A UUID used to associate a network status with an interface config.
   optional common.UUID internal_uuid = 108;
+}
+
+message FlatInterfaceRoutingProfile {
+  repeated PrefixFilterPolicyEntry allowed_anycast_prefixes = 1;
 }
 
 // IPv6 configuration for a dual-stack FNN interface, sent from the API to
@@ -4565,23 +4587,9 @@ message ForgeAgentControlResponse {
   }
 
   message FirmwareUpgrade {
-    ScoutFirmwareUpgradeTask task = 1;
+    scout_firmware_upgrade.ScoutFirmwareUpgradeTask task = 1;
   }
 
-  message ScoutFirmwareUpgradeTask {
-    string upgrade_task_id = 1;
-    string component_type = 2;
-    string target_version = 3;
-    FileArtifact script = 4;
-    uint32 execution_timeout_seconds = 5;
-    uint32 artifact_download_timeout_seconds = 6;
-    repeated FileArtifact file_artifacts = 7;
-  }
-
-  message FileArtifact {
-    string url = 1;
-    string sha256 = 2;
-  }
 
   oneof action {
     Noop noop = 3;

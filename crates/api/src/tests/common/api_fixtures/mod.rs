@@ -33,6 +33,16 @@ use carbide_ib_partition_controller::context::IBPartitionStateHandlerServices;
 use carbide_ib_partition_controller::handler::IBPartitionStateHandler;
 use carbide_ib_partition_controller::io::IBPartitionStateControllerIO;
 use carbide_ipmi::IPMITool;
+use carbide_machine_controller::config::{
+    BomValidationConfig, FirmwareGlobal, MachineStateControllerConfig, MachineValidationConfig,
+    PowerManagerOptions,
+};
+use carbide_machine_controller::context::MachineStateHandlerServices;
+use carbide_machine_controller::dpf::DpfOperations;
+use carbide_machine_controller::handler::{
+    MachineStateHandler, MachineStateHandlerBuilder, PowerOptionConfig, ReachabilityParams,
+};
+use carbide_machine_controller::io::MachineStateControllerIO;
 use carbide_network_segment_controller::context::NetworkSegmentStateHandlerServices;
 use carbide_network_segment_controller::handler::NetworkSegmentStateHandler;
 use carbide_network_segment_controller::io::NetworkSegmentStateControllerIO;
@@ -124,11 +134,10 @@ use crate::api::metrics::ApiMetricsEmitter;
 use crate::cfg::file::{
     CarbideConfig, ComputeAllocationEnforcement, DpaConfig, DpaInterfaceStateControllerConfig,
     DpuConfig as InitialDpuConfig, FnnConfig, IbPartitionStateControllerConfig, ListenMode,
-    MachineUpdater, MachineValidationConfig, MeasuredBootMetricsCollectorConfig, MqttAuthConfig,
-    NetworkSecurityGroupConfig, NetworkSegmentStateControllerConfig,
-    PowerShelfStateControllerConfig, RackStateControllerConfig, SpdmConfig,
-    SpdmStateControllerConfig, SwitchStateControllerConfig, VmaasConfig, VpcPeeringPolicy,
-    default_max_find_by_ids,
+    MachineUpdater, MeasuredBootMetricsCollectorConfig, MqttAuthConfig, NetworkSecurityGroupConfig,
+    NetworkSegmentStateControllerConfig, PowerShelfStateControllerConfig,
+    RackStateControllerConfig, SpdmConfig, SpdmStateControllerConfig, SwitchStateControllerConfig,
+    VmaasConfig, VpcPeeringPolicy, default_max_find_by_ids,
 };
 use crate::ethernet_virtualization::{EthVirtData, SiteFabricPrefixList};
 use crate::logging::level_filter::ActiveLevel;
@@ -136,15 +145,6 @@ use crate::logging::log_limiter::LogLimiter;
 use crate::measured_boot::convert_vec;
 use crate::scout_stream;
 use crate::state_controller::common_services::CommonStateHandlerServices;
-use crate::state_controller::machine::config::{
-    BomValidationConfig, FirmwareGlobal, MachineStateControllerConfig, PowerManagerOptions,
-};
-use crate::state_controller::machine::context::MachineStateHandlerServices;
-use crate::state_controller::machine::dpf::DpfOperations;
-use crate::state_controller::machine::handler::{
-    MachineStateHandler, MachineStateHandlerBuilder, PowerOptionConfig, ReachabilityParams,
-};
-use crate::state_controller::machine::io::MachineStateControllerIO;
 use crate::tests::common::api_fixtures::endpoint_explorer::MockEndpointExplorer;
 use crate::tests::common::api_fixtures::managed_host::ManagedHostConfig;
 use crate::tests::common::api_fixtures::network_segment::{
@@ -256,7 +256,6 @@ lazy_static! {
 
 #[derive(Clone, Debug, Default)]
 pub struct TestEnvOverrides {
-    pub allow_zero_dpu_hosts: Option<bool>,
     pub site_prefixes: Option<Vec<IpNetwork>>,
     pub config: Option<CarbideConfig>,
     pub create_network_segments: Option<bool>,
@@ -485,7 +484,7 @@ impl TestEnv {
                     model::machine::MachineState::WaitingForPlatformConfiguration { .. } => {
                         machine_state
                     }
-                    model::machine::MachineState::PollingBiosSetup => machine_state,
+                    model::machine::MachineState::PollingBiosSetup { .. } => machine_state,
                     model::machine::MachineState::SetBootOrder { .. } => machine_state,
                     model::machine::MachineState::UefiSetup { .. } => machine_state,
                     model::machine::MachineState::WaitingForDiscovery => machine_state,
@@ -921,7 +920,32 @@ impl TestEnv {
         Option<u32>,
         NetworkSegmentId,
     ) {
-        let vpc_details = VpcCreationRequest::builder("2829bbe3-c169-4cd9-8b2a-19a8b1618a93")
+        self.create_vpc_and_peer_vpc_with_tenant_segments_for_tenants(
+            "2829bbe3-c169-4cd9-8b2a-19a8b1618a93",
+            vtype1,
+            "e65a9d69-39d2-4872-a53e-e5cb87c84e75",
+            vtype2,
+        )
+        .await
+    }
+
+    /// Creates two VPCs for the provided tenants and attaches one tenant segment to each.
+    pub async fn create_vpc_and_peer_vpc_with_tenant_segments_for_tenants(
+        &self,
+        tenant_organization_id: &str,
+        vtype1: VpcVirtualizationType,
+        peer_tenant_organization_id: &str,
+        vtype2: VpcVirtualizationType,
+    ) -> (
+        Option<VpcId>,
+        Option<u32>,
+        NetworkSegmentId,
+        Option<VpcId>,
+        Option<u32>,
+        NetworkSegmentId,
+    ) {
+        // Create the primary VPC and tenant segment.
+        let vpc_details = VpcCreationRequest::builder(tenant_organization_id)
             .metadata(Metadata {
                 name: "test vpc".to_string(),
                 description: "".to_string(),
@@ -941,11 +965,12 @@ impl TestEnv {
         )
         .await;
 
-        // Get the tenant segment into ready state
+        // Drive the primary tenant segment to ready state.
         self.run_network_segment_controller_iteration().await;
         self.run_network_segment_controller_iteration().await;
 
-        let peer_vpc_details = VpcCreationRequest::builder("e65a9d69-39d2-4872-a53e-e5cb87c84e75")
+        // Create the peer VPC and tenant segment.
+        let peer_vpc_details = VpcCreationRequest::builder(peer_tenant_organization_id)
             .metadata(Metadata {
                 name: "test peer vpc".to_string(),
                 ..Default::default()
@@ -969,7 +994,7 @@ impl TestEnv {
         )
         .await;
 
-        // Get the tenant segment into ready state
+        // Drive the peer tenant segment to ready state.
         self.run_network_segment_controller_iteration().await;
         self.run_network_segment_controller_iteration().await;
 
@@ -1167,6 +1192,7 @@ pub fn get_config() -> CarbideConfig {
     CarbideConfig {
         default_tenant_routing_profile_type: "EXTERNAL".to_string(),
         web_ui_sidebar_tools: vec![],
+        log_history: Default::default(),
         bgp_leaf_session_password: None,
         rack_validation_config: RackValidationConfig {
             enabled: true,
@@ -1241,6 +1267,10 @@ pub fn get_config() -> CarbideConfig {
             controller: StateControllerConfig::default(),
             scout_reporting_timeout: Duration::weeks(52),
             uefi_boot_wait: Duration::seconds(0),
+            max_bios_config_retries: MachineStateControllerConfig::max_bios_config_retries_default(
+            ),
+            polling_bios_setup_stuck_threshold:
+                MachineStateControllerConfig::polling_bios_setup_stuck_threshold_default(),
         },
         network_segment_state_controller: NetworkSegmentStateControllerConfig {
             network_segment_drain_time: Duration::seconds(2),
@@ -1618,6 +1648,7 @@ pub async fn create_test_env_with_overrides(
         create_machines: config.site_explorer.create_machines.clone(),
         bmc_proxy: config.site_explorer.bmc_proxy.clone(),
         tracing_enabled: Arc::new(false.into()),
+        log_stream: Default::default(),
     };
 
     let bmc_proxy = Arc::new(ArcSwap::new(None.into()));
@@ -1898,7 +1929,6 @@ pub async fn create_test_env_with_overrides(
             machines_created_per_run: 1,
             override_target_ip: None,
             override_target_port: None,
-            allow_zero_dpu_hosts: overrides.allow_zero_dpu_hosts.unwrap_or(false),
             bmc_proxy: Arc::new(Default::default()),
             allow_changing_bmc_proxy: None,
             reset_rate_limit: Duration::hours(1),

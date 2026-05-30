@@ -108,7 +108,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .type_attribute("forge.FabricManagerStatus", "#[derive(serde::Serialize)]")
         .type_attribute("forge.FlatInterfaceConfig", "#[derive(serde::Serialize)]")
         .type_attribute("forge.FlatInterfaceIpv6Config", "#[derive(serde::Serialize)]")
+        .type_attribute("forge.FlatInterfaceRoutingProfile", "#[derive(serde::Serialize)]")
         .type_attribute("forge.InstanceInterfaceIpv6Config", "#[derive(serde::Serialize, serde::Deserialize)]")
+        .type_attribute(
+            "forge.InstanceInterfaceRoutingProfile",
+            "#[derive(serde::Serialize)]",
+        )
         .type_attribute(
             "forge.InstanceInterfaceConfig",
             "#[derive(serde::Serialize)]",
@@ -859,8 +864,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "forge.SpdmAttestationDetails",
             "#[derive(serde::Serialize)]",
         )
-        .type_attribute("forge.ForgeAgentControlResponse.ScoutFirmwareUpgradeTask", "#[derive(serde::Serialize, serde::Deserialize)]")
-        .type_attribute("forge.ForgeAgentControlResponse.FileArtifact", "#[derive(serde::Serialize, serde::Deserialize)]")
+        .type_attribute(
+            "scout_firmware_upgrade.ScoutFirmwareUpgradeTask",
+            "#[derive(serde::Serialize, serde::Deserialize)]",
+        )
+        .type_attribute(
+            "scout_firmware_upgrade.FileArtifact",
+            "#[derive(serde::Serialize, serde::Deserialize)]",
+        )
         .build_server(true)
         .build_client(true)
         .protoc_arg("--experimental_allow_proto3_optional")
@@ -868,6 +879,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .compile_protos(
             &[
                 "proto/common.proto",
+                "proto/scout_firmware_upgrade.proto",
                 "proto/forge.proto",
                 "proto/machine_discovery.proto",
                 "proto/mlx_device.proto",

@@ -31,6 +31,8 @@ use ::rpc::protos::dns::{
 };
 use ::rpc::protos::{measured_boot as measured_boot_pb, mlx_device as mlx_device_pb};
 use carbide_ib_fabric::ib::IBFabricManager;
+use carbide_machine_controller::dpf::DpfOperations;
+use carbide_machine_controller::io::MachineStateControllerIO;
 use carbide_rack::bms_client::BmsDsxExchangeHandle;
 use carbide_redfish::libredfish::RedfishClientPool;
 use carbide_site_explorer::EndpointExplorer;
@@ -57,8 +59,6 @@ use crate::dynamic_settings::DynamicSettings;
 use crate::ethernet_virtualization::EthVirtData;
 use crate::logging::log_limiter::LogLimiter;
 use crate::scout_stream::ConnectionRegistry;
-use crate::state_controller::machine::dpf::DpfOperations;
-use crate::state_controller::machine::io::MachineStateControllerIO;
 use crate::{CarbideError, CarbideResult};
 
 pub struct Api {

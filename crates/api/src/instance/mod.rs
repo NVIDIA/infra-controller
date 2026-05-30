@@ -54,6 +54,7 @@ use sqlx::PgConnection;
 
 use crate::api::Api;
 use crate::cfg::file::ComputeAllocationEnforcement;
+use crate::ethernet_virtualization::validate_instance_interface_routing_profiles;
 use crate::network_segment::allocate::PrefixAllocator;
 
 /// Validate a requested IP address for a linknet allocation and wrap it as
@@ -860,12 +861,18 @@ pub async fn batch_allocate_instances(
                 .map(|vc| vc.allow_instance_vf)
                 .unwrap_or(true),
         )?;
+        validate_instance_interface_routing_profiles(
+            &mut txn,
+            &request.config.network,
+            api.runtime_config.fnn.as_ref(),
+        )
+        .await?;
 
         // Zero-DPU hosts (no DPU, or DPU in NIC mode) MUST use `auto`, because
         // their only valid attachments are HostInband segments, and NICo knows
         // which one(s) the host is on. Conversely, hosts with DPUs cannot use
         // `auto`, and are expected to enumerate their interfaces explicitly.
-        if mh_snapshot.is_zero_dpu() {
+        if !mh_snapshot.has_managed_dpus() {
             if !request.config.network.auto {
                 return Err(CarbideError::InvalidArgument(format!(
                     "zero-DPU host {} requires `InstanceNetworkConfig.auto = true`; cannot allocate an instance with explicitly-listed interfaces or with `auto = false`",
