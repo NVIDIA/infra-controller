@@ -67,7 +67,7 @@ css:
 navbar-links:
   - type: filled
     text: GitHub
-    href: https://github.com/NVIDIA/infra-controller-core
+    href: https://github.com/NVIDIA/infra-controller
 
 products:
   - display-name: NVIDIA Infra Controller
@@ -88,6 +88,7 @@ redirects:
     destination: "infra-controller/documentation/getting-started/quick-start-guide"
   - source: "/infra-controller/documentation/getting-started/building-ni-co-containers"
     destination: "/infra-controller/documentation/getting-started/building-nico-containers"
+
 experimental:
   mdx-components:
     - ./components
