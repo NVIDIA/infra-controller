@@ -73,12 +73,13 @@ use model::machine::{
     DpuInitState, FailureCause, FailureDetails, FailureSource, HostPlatformConfigurationState,
     HostReprovisionState, InitialResetPhase, InstallDpuOsState, InstanceNextStateResolver,
     InstanceState, LockdownInfo, LockdownState, Machine, MachineLastRebootRequested,
-    MachineLastRebootRequestedMode, MachineNextStateResolver, MachineState, ManagedHostState,
-    ManagedHostStateSnapshot, MeasuringState, NetworkConfigUpdateState, NextStateBFBSupport,
-    PerformPowerOperation, PowerDrainState, PowerState, ReprovisionState, RetryInfo,
-    SecureEraseBossContext, SecureEraseBossState, SetBootOrderInfo, SetBootOrderState,
-    SetSecureBootState, SpdmMeasuringState, StateMachineArea, UefiSetupInfo, UefiSetupState,
-    UnlockHostState, ValidationState, dpf_based_dpu_provisioning_possible, get_display_ids,
+    MachineLastRebootRequestedMode, MachineNextStateResolver, MachineState,
+    MachineValidationContext, ManagedHostState, ManagedHostStateSnapshot, MeasuringState,
+    NetworkConfigUpdateState, NextStateBFBSupport, PerformPowerOperation, PowerDrainState,
+    PowerState, ReprovisionState, RetryInfo, SecureEraseBossContext, SecureEraseBossState,
+    SetBootOrderInfo, SetBootOrderState, SetSecureBootState, SpdmMeasuringState, StateMachineArea,
+    UefiSetupInfo, UefiSetupState, UnlockHostState, ValidationState,
+    dpf_based_dpu_provisioning_possible, get_display_ids,
 };
 use model::power_manager::PowerHandlingOutcome;
 use model::resource_pool::common::CommonPools;
@@ -4464,7 +4465,7 @@ fn post_cleanup_state(cleanup_context: CleanupContext) -> ManagedHostState {
     match cleanup_context {
         CleanupContext::Deprovision => ManagedHostState::BomValidating {
             bom_validating_state: BomValidating::UpdatingInventory(BomValidatingContext {
-                machine_validation_context: Some("Cleanup".to_string()),
+                machine_validation_context: Some(MachineValidationContext::Cleanup),
                 ..BomValidatingContext::default()
             }),
         },
@@ -5123,7 +5124,7 @@ impl StateHandler for HostMachineStateHandler {
                                         bom_validating_state: BomValidating::MatchingSku(
                                             BomValidatingContext {
                                                 machine_validation_context: Some(
-                                                    "Discovery".to_string(),
+                                                    MachineValidationContext::Discovery,
                                                 ),
                                                 ..BomValidatingContext::default()
                                             },
@@ -5183,7 +5184,7 @@ impl StateHandler for HostMachineStateHandler {
                                     bom_validating_state: BomValidating::MatchingSku(
                                         BomValidatingContext {
                                             machine_validation_context: Some(
-                                                "Discovery".to_string(),
+                                                MachineValidationContext::Discovery,
                                             ),
                                             reboot_retry_count: None,
                                         },
@@ -5255,7 +5256,7 @@ impl StateHandler for HostMachineStateHandler {
                                     bom_validating_state: BomValidating::MatchingSku(
                                         BomValidatingContext {
                                             machine_validation_context: Some(
-                                                "Discovery".to_string(),
+                                                MachineValidationContext::Discovery,
                                             ),
                                             ..BomValidatingContext::default()
                                         },

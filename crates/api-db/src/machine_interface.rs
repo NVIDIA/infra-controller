@@ -28,7 +28,6 @@ use carbide_uuid::switch::SwitchId;
 use chrono::{DateTime, Utc};
 use ipnetwork::IpNetwork;
 use itertools::Itertools;
-use lazy_static::lazy_static;
 use mac_address::MacAddress;
 use model::address_selection_strategy::AddressSelectionStrategy;
 use model::allocation_type::AllocationType;
@@ -141,7 +140,9 @@ impl ColumnInfo<'_> for SwitchIdColumn {
 /// A denormalized view on machine_interfaces that aggregates the addresses and vendors using
 /// JSON_AGG. This query is also used by machines.rs as a subquery when collecting machine
 /// snapshots.
-pub const MACHINE_INTERFACE_SNAPSHOT_QUERY: &str = r#"
+macro_rules! machine_interface_snapshot_query {
+    () => {
+        r#"
     SELECT mi.*,
         COALESCE(addresses_agg.json, '[]'::json) AS addresses,
         COALESCE(vendors_agg.json, '[]'::json) AS vendors,
@@ -161,8 +162,9 @@ pub const MACHINE_INTERFACE_SNAPSHOT_QUERY: &str = r#"
         FROM dhcp_entries d
         WHERE d.machine_interface_id = mi.id
         GROUP BY d.machine_interface_id
-    ) AS vendors_agg ON true
-"#;
+    ) AS vendors_agg ON true"#
+    };
+}
 
 /// Sets current machine interface primary attribute to provided value.
 pub async fn set_primary_interface(
@@ -240,18 +242,24 @@ pub async fn associate_interface_with_machine(
     association: MachineInterfaceAssociation,
     txn: &mut PgConnection,
 ) -> DatabaseResult<MachineInterfaceId> {
-    let (column_name, association_type, id_value) = match association {
-        MachineInterfaceAssociation::Machine(id) => ("machine_id", "Machine", id.to_string()),
-        MachineInterfaceAssociation::Switch(id) => ("switch_id", "Switch", id.to_string()),
-        MachineInterfaceAssociation::PowerShelf(id) => {
-            ("power_shelf_id", "PowerShelf", id.to_string())
-        }
+    let (query, association_type, id_value) = match association {
+        MachineInterfaceAssociation::Machine(id) => (
+            "UPDATE machine_interfaces SET machine_id=$1, association_type=$2::association_type where id=$3::uuid RETURNING id",
+            "Machine",
+            id.to_string(),
+        ),
+        MachineInterfaceAssociation::Switch(id) => (
+            "UPDATE machine_interfaces SET switch_id=$1, association_type=$2::association_type where id=$3::uuid RETURNING id",
+            "Switch",
+            id.to_string(),
+        ),
+        MachineInterfaceAssociation::PowerShelf(id) => (
+            "UPDATE machine_interfaces SET power_shelf_id=$1, association_type=$2::association_type where id=$3::uuid RETURNING id",
+            "PowerShelf",
+            id.to_string(),
+        ),
     };
-    let query = format!(
-        "UPDATE machine_interfaces SET {}=$1, association_type=$2::association_type where id=$3::uuid RETURNING id",
-        column_name
-    );
-    sqlx::query_as(&query)
+    sqlx::query_as(query)
         .bind(id_value)
         .bind(association_type)
         .bind(*interface_id)
@@ -268,7 +276,7 @@ pub async fn associate_interface_with_machine(
             {
                 DatabaseError::MaxOneInterfaceAssociation
             }
-            _ => DatabaseError::query(&query, err),
+            _ => DatabaseError::query(query, err),
         })
 }
 
@@ -299,19 +307,16 @@ pub async fn find_by_ip(
     txn: impl DbReader<'_>,
     ip: IpAddr,
 ) -> Result<Option<MachineInterfaceSnapshot>, DatabaseError> {
-    lazy_static! {
-        static ref query: String = format!(
-            r#"{}
-            INNER JOIN machine_interface_addresses mia on mia.interface_id=mi.id
-            WHERE mia.address = $1::inet"#,
-            MACHINE_INTERFACE_SNAPSHOT_QUERY
-        );
-    }
-    sqlx::query_as(&query)
+    static QUERY: &str = concat!(
+        machine_interface_snapshot_query!(),
+        r#" INNER JOIN machine_interface_addresses mia on mia.interface_id=mi.id
+        WHERE mia.address = $1::inet"#,
+    );
+    sqlx::query_as(QUERY)
         .bind(ip)
         .fetch_optional(txn)
         .await
-        .map_err(|e| DatabaseError::query(&query, e))
+        .map_err(|e| DatabaseError::query(QUERY, e))
 }
 
 pub async fn find_all(txn: &mut PgConnection) -> DatabaseResult<Vec<MachineInterfaceSnapshot>> {
@@ -1284,7 +1289,7 @@ async fn find_by<'a, C: ColumnInfo<'a, TableType = MachineInterfaceSnapshot>>(
     txn: impl DbReader<'_>,
     filter: ObjectColumnFilter<'a, C>,
 ) -> Result<Vec<MachineInterfaceSnapshot>, DatabaseError> {
-    let mut query = FilterableQueryBuilder::new(MACHINE_INTERFACE_SNAPSHOT_QUERY)
+    let mut query = FilterableQueryBuilder::new(machine_interface_snapshot_query!())
         .filter_relation(&filter, Some("mi"));
     let interfaces = query
         .build_query_as::<MachineInterfaceSnapshot>()
@@ -1942,18 +1947,16 @@ pub async fn find_by_machine_and_segment(
     machine_id: &MachineId,
     segment_id: NetworkSegmentId,
 ) -> Result<Vec<MachineInterfaceSnapshot>, DatabaseError> {
-    lazy_static! {
-        static ref query: String = format!(
-            "{} WHERE mi.machine_id = $1 AND mi.segment_id = $2::uuid",
-            MACHINE_INTERFACE_SNAPSHOT_QUERY
-        );
-    }
-    sqlx::query_as::<_, MachineInterfaceSnapshot>(&query)
+    static QUERY: &str = concat!(
+        machine_interface_snapshot_query!(),
+        " WHERE mi.machine_id = $1 AND mi.segment_id = $2::uuid",
+    );
+    sqlx::query_as::<_, MachineInterfaceSnapshot>(QUERY)
         .bind(machine_id)
         .bind(segment_id)
         .fetch_all(txn)
         .await
-        .map_err(|e| DatabaseError::query(&query, e))
+        .map_err(|e| DatabaseError::query(QUERY, e))
         .map(|interfaces| interfaces.into_iter().collect())
 }
 
