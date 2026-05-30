@@ -101,7 +101,8 @@ pub async fn find_ids(
     txn: impl DbReader<'_>,
     filter: model::spx_partition::SpxPartitionSearchFilter,
 ) -> Result<Vec<SpxPartitionId>, DatabaseError> {
-    let mut builder = sqlx::QueryBuilder::new("SELECT id FROM spx_partitions WHERE deleted IS NULL");
+    let mut builder =
+        sqlx::QueryBuilder::new("SELECT id FROM spx_partitions WHERE deleted IS NULL");
 
     if let Some(tenant_org_id) = &filter.tenant_org_id {
         builder.push(" AND tenant_organization_id = ");
