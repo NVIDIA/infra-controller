@@ -502,13 +502,7 @@ async fn test_waiting_for_rack_firmware_upgrade_advances_on_completion(
     )
     .await?
     .expect("machine should exist");
-    assert!(matches!(
-        machine.current_state(),
-        ManagedHostState::HostReprovision {
-            reprovision_state: model::machine::HostReprovisionState::CheckingFirmwareRepeatV2 { .. },
-            ..
-        }
-    ));
+    assert!(matches!(machine.current_state(), ManagedHostState::Ready));
     assert!(machine.host_reprovision_requested.is_none());
 
     Ok(())
@@ -569,13 +563,7 @@ async fn test_waiting_for_rack_firmware_upgrade_accepts_completion_when_only_end
     )
     .await?
     .expect("machine should exist");
-    assert!(matches!(
-        machine.current_state(),
-        ManagedHostState::HostReprovision {
-            reprovision_state: model::machine::HostReprovisionState::CheckingFirmwareRepeatV2 { .. },
-            ..
-        }
-    ));
+    assert!(matches!(machine.current_state(), ManagedHostState::Ready));
     assert!(machine.host_reprovision_requested.is_none());
 
     Ok(())
