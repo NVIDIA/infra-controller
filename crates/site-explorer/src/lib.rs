@@ -3055,7 +3055,6 @@ fn should_alert_power_state(power_state: PowerState) -> bool {
         PowerState::On | PowerState::PoweringOn | PowerState::PoweringOff
     )
 }
-
 #[cfg(test)]
 mod tests {
     use config_version::ConfigVersion;
