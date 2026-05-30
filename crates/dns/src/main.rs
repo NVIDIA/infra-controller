@@ -152,6 +152,12 @@ pub struct RunCommand {
     #[clap(short = 'k', long, help = "Path to the client key for the API server")]
     pub client_key_path: Option<PathBuf>,
 
+    #[clap(
+        long,
+        help = "Upstream resolver consulted when carbide-api answers NXDOMAIN (e.g., 8.8.8.8:53). When unset, NXDOMAIN/Refused responses are returned to the client as-is."
+    )]
+    pub upstream_resolver: Option<std::net::SocketAddr>,
+
     // Backward compatibility alias
     #[clap(
         long,
@@ -230,6 +236,10 @@ impl TryInto<Config> for RunCommand {
         }
         if let Some(client_key_path) = self.client_key_path {
             config.client_key_path = client_key_path;
+        }
+
+        if let Some(upstream) = self.upstream_resolver {
+            config.upstream_resolver = Some(upstream);
         }
 
         Ok(config)

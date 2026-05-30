@@ -21,6 +21,8 @@
 //! them to carbide-api via the `lookup_record` RPC.
 
 use std::iter;
+use std::net::IpAddr;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -34,6 +36,8 @@ use rpc::protos::dns::DnsResourceRecordLookupRequest;
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::Mutex;
 use tracing::{error, info, warn};
+use trust_dns_resolver::TokioAsyncResolver;
+use trust_dns_resolver::config::{NameServerConfigGroup, ResolverConfig, ResolverOpts};
 use trust_dns_resolver::proto::op::{Header, ResponseCode};
 use trust_dns_resolver::proto::rr::{DNSClass, Name, RData};
 use trust_dns_server::ServerFuture;
@@ -85,6 +89,7 @@ pub struct DnsServer {
     forge_client: Mutex<ForgeClientT>,
     negative_cache: Arc<NegativeCache>,
     metrics: DnsMetrics,
+    upstream_resolver: Option<TokioAsyncResolver>,
 }
 
 #[async_trait::async_trait]
@@ -156,27 +161,35 @@ impl RequestHandler for DnsServer {
                     };
 
                     if matches!(code, ResponseCode::NXDomain | ResponseCode::Refused) {
-                        // Count the upstream negative regardless of whether it
-                        // ends up cached below.
-                        self.metrics
-                            .negative_cache_miss
-                            .add(1, &[KeyValue::new("response_code", format!("{code:?}"))]);
-
-                        if self.negative_cache.record(cache_key, code).await {
-                            tracing::debug!(%code, "Caching negative response");
+                        // Consult the configured upstream resolver before returning
+                        // the negative, so we can still resolve names outside NICo's
+                        // own zone (e.g., public hostnames a VM needs).
+                        if let Some(record) = self.try_upstream(&qname, qtype).await {
+                            (ResponseCode::NoError, vec![record])
                         } else {
+                            // Count the upstream negative regardless of whether it
+                            // ends up cached below.
                             self.metrics
-                                .negative_cache_drop
+                                .negative_cache_miss
                                 .add(1, &[KeyValue::new("response_code", format!("{code:?}"))]);
-                            warn!(
-                                %code,
-                                max_entries = self.negative_cache.max_entries(),
-                                "Negative cache full; not caching this response"
-                            );
-                        }
-                    }
 
-                    (code, vec![])
+                            if self.negative_cache.record(cache_key, code).await {
+                                tracing::debug!(%code, "Caching negative response");
+                            } else {
+                                self.metrics
+                                    .negative_cache_drop
+                                    .add(1, &[KeyValue::new("response_code", format!("{code:?}"))]);
+                                warn!(
+                                    %code,
+                                    max_entries = self.negative_cache.max_entries(),
+                                    "Negative cache full; not caching this response"
+                                );
+                            }
+                            (code, vec![])
+                        }
+                    } else {
+                        (code, vec![])
+                    }
                 }
             }
         };
@@ -204,6 +217,11 @@ impl RequestHandler for DnsServer {
 
 impl DnsServer {
     pub fn new(forge_client: Mutex<ForgeClientT>, meter: &Meter, config: &Config) -> Self {
+        let upstream_resolver = config.upstream_resolver.map(|addr| {
+            let ns = NameServerConfigGroup::from_ips_clear(&[addr.ip()], addr.port(), true);
+            let resolver_config = ResolverConfig::from_parts(None, vec![], ns);
+            TokioAsyncResolver::tokio(resolver_config, ResolverOpts::default())
+        });
         Self {
             forge_client,
             negative_cache: Arc::new(NegativeCache::new(
@@ -211,7 +229,48 @@ impl DnsServer {
                 config.negative_cache_entries_max_count as usize,
             )),
             metrics: DnsMetrics::new(meter),
+            upstream_resolver,
         }
+    }
+
+    /// Resolve `qname` via the configured upstream resolver (if any). Used as a
+    /// fallback when carbide-api answers NXDOMAIN/Refused so names outside
+    /// NICo's own zone (e.g., public hostnames) still resolve.
+    async fn try_upstream(&self, qname: &str, qtype: RecordType) -> Option<Record> {
+        Self::resolve_upstream(self.upstream_resolver.as_ref()?, qname, qtype).await
+    }
+
+    /// Look `qname` up via `resolver` and build a `Record` from the first IP
+    /// in the answer (preferring the family matching `qtype`). Returns `None`
+    /// if the resolver fails or has no usable address. Factored out of
+    /// `try_upstream` so it can be unit-tested against a stub DNS server
+    /// without needing a full `DnsServer` instance.
+    async fn resolve_upstream(
+        resolver: &TokioAsyncResolver,
+        qname: &str,
+        qtype: RecordType,
+    ) -> Option<Record> {
+        let lookup = resolver.lookup_ip(qname).await.ok()?;
+        let want_v6 = matches!(qtype, RecordType::AAAA);
+        let ip = lookup
+            .iter()
+            .find(|ip| ip.is_ipv6() == want_v6)
+            .or_else(|| lookup.iter().next())?;
+        let (rtype, rdata) = match ip {
+            IpAddr::V4(v4) => (RecordType::A, RData::A(v4.into())),
+            IpAddr::V6(v6) => (RecordType::AAAA, RData::AAAA(v6.into())),
+        };
+        let name = Name::from_str(qname).ok()?;
+        info!(%qname, %qtype, %ip, "upstream resolver answered for NXDOMAIN");
+        Some(
+            Record::new()
+                .set_ttl(30)
+                .set_name(name)
+                .set_record_type(rtype)
+                .set_dns_class(DNSClass::IN)
+                .set_data(Some(rdata))
+                .clone(),
+        )
     }
 
     /// Queries carbide-api for DNS records matching `qname` and `qtype`, then
@@ -371,5 +430,93 @@ impl DnsServer {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::Ipv4Addr;
+    use std::time::Duration;
+
+    use trust_dns_resolver::proto::op::{Message, MessageType};
+
+    use super::*;
+
+    /// Spawn a tiny UDP DNS server on a random local port that answers any A
+    /// query with `answer` and returns NoError with no answers for any other
+    /// type. Simulates an upstream resolver without external network.
+    async fn spawn_stub_dns_with_a(answer: Ipv4Addr) -> std::net::SocketAddr {
+        let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let addr = socket.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut buf = vec![0u8; 1024];
+            loop {
+                let (len, peer) = match socket.recv_from(&mut buf).await {
+                    Ok(v) => v,
+                    Err(_) => return,
+                };
+                let Ok(query) = Message::from_vec(&buf[..len]) else {
+                    continue;
+                };
+                let mut resp = Message::new();
+                resp.set_id(query.id());
+                resp.set_message_type(MessageType::Response);
+                resp.set_op_code(query.op_code());
+                resp.set_recursion_desired(query.recursion_desired());
+                resp.set_recursion_available(true);
+                resp.set_response_code(ResponseCode::NoError);
+                for q in query.queries() {
+                    resp.add_query(q.clone());
+                    if matches!(q.query_type(), RecordType::A) {
+                        let rec = Record::new()
+                            .set_ttl(30)
+                            .set_name(q.name().clone())
+                            .set_record_type(RecordType::A)
+                            .set_dns_class(DNSClass::IN)
+                            .set_data(Some(RData::A(answer.into())))
+                            .clone();
+                        resp.add_answer(rec);
+                    }
+                }
+                let Ok(out) = resp.to_vec() else {
+                    continue;
+                };
+                let _ = socket.send_to(&out, peer).await;
+            }
+        });
+        addr
+    }
+
+    #[tokio::test]
+    async fn upstream_fallback_returns_record_when_resolver_answers() {
+        let answer_ip: Ipv4Addr = "192.0.2.42".parse().unwrap();
+        let addr = spawn_stub_dns_with_a(answer_ip).await;
+        let ns = NameServerConfigGroup::from_ips_clear(&[addr.ip()], addr.port(), true);
+        let cfg = ResolverConfig::from_parts(None, vec![], ns);
+        let resolver = TokioAsyncResolver::tokio(cfg, ResolverOpts::default());
+
+        let record = DnsServer::resolve_upstream(&resolver, "host.example.", RecordType::A)
+            .await
+            .expect("upstream stub answered, expected fallback to return a record");
+        assert_eq!(record.record_type(), RecordType::A);
+        match record.data() {
+            Some(RData::A(a)) => assert_eq!(a.0, answer_ip),
+            other => panic!("expected A RData, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn upstream_fallback_returns_none_when_resolver_unreachable() {
+        // Point the resolver at a port nothing's listening on, with a short
+        // timeout so the test fails fast rather than waiting on retries.
+        let mut opts = ResolverOpts::default();
+        opts.timeout = Duration::from_millis(100);
+        opts.attempts = 1;
+        let ns = NameServerConfigGroup::from_ips_clear(&["127.0.0.1".parse().unwrap()], 1, true);
+        let cfg = ResolverConfig::from_parts(None, vec![], ns);
+        let resolver = TokioAsyncResolver::tokio(cfg, opts);
+
+        let result = DnsServer::resolve_upstream(&resolver, "host.example.", RecordType::A).await;
+        assert!(result.is_none());
     }
 }

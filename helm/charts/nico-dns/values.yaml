@@ -33,6 +33,11 @@ annotations:
 ## listener; set to "0.0.0.0:53" for IPv4-only Kubernetes clusters.
 listenAddress: "[::]:53"
 
+## Upstream resolver consulted when carbide-api answers NXDOMAIN. Lets
+## VM-facing DNS resolve hostnames outside NICo's own zone (e.g. public
+## DNS for sslip.io). Empty value disables the fallback.
+upstreamResolver: ""
+
 service:
   ports:
     - port: 53

@@ -31,10 +31,14 @@ spec:
             - /bin/sh
             - -c
             - |
+              UPSTREAM_FLAG=""
+              if [ -n "${UPSTREAM_RESOLVER:-}" ]; then
+                UPSTREAM_FLAG="--upstream-resolver=${UPSTREAM_RESOLVER}"
+              fi
               if [ -x /opt/nico/nico-dns ]; then
-                exec /opt/nico/nico-dns run --nico-url="${NICO_API}" --listen={{ .Values.listenAddress | default "[::]:53" | quote }}
+                exec /opt/nico/nico-dns run --nico-url="${NICO_API}" --listen={{ .Values.listenAddress | default "[::]:53" | quote }} ${UPSTREAM_FLAG}
               else
-                exec /opt/carbide/carbide-dns run --carbide-url="${NICO_API}" --listen={{ .Values.listenAddress | default "[::]:53" | quote }}
+                exec /opt/carbide/carbide-dns run --carbide-url="${NICO_API}" --listen={{ .Values.listenAddress | default "[::]:53" | quote }} ${UPSTREAM_FLAG}
               fi
           env:
             - name: NICO_API
@@ -42,6 +46,10 @@ spec:
                 configMapKeyRef:
                   name: {{ .Values.envFrom.nicoDnsConfig.configMapName }}
                   key: NICO_API
+            {{- if .Values.upstreamResolver }}
+            - name: UPSTREAM_RESOLVER
+              value: {{ .Values.upstreamResolver | quote }}
+            {{- end }}
             {{- range $key, $value := .Values.env }}
             - name: {{ $key }}
               value: {{ $value | quote }}
