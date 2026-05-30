@@ -21,18 +21,34 @@ use carbide_utils::HostPortPair;
 use eyre::WrapErr;
 use forge_secrets::credentials::{CredentialManager, CredentialReader};
 use forge_secrets::{
-    CredentialConfig, MemoryCredentialStore, create_credential_manager_from, create_vault_client,
+    CredentialConfig, MemoryCredentialStore, VaultConfig, create_credential_manager_from,
+    create_vault_client,
 };
 use tokio::sync::oneshot::Sender;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::subscriber::NoSubscriber;
 
+use crate::cfg::file::CarbideConfig;
 use crate::logging::metrics_endpoint::{MetricsEndpointConfig, run_metrics_endpoint};
 use crate::logging::setup::{
     Logging, create_metric_for_spancount_reader, create_metrics, setup_logging,
 };
 use crate::{CarbideError, dynamic_settings, setup};
+
+/// Vault machine PKI URI SANs must match `[auth.trust]` when site auth config is present.
+fn vault_config_for_site(vault: &VaultConfig, carbide_config: &CarbideConfig) -> VaultConfig {
+    let mut config = vault.clone();
+    if let Some(trust) = carbide_config
+        .auth
+        .as_ref()
+        .and_then(|auth| auth.trust.as_ref())
+    {
+        config.spiffe_trust_domain = Some(trust.spiffe_trust_domain.clone());
+        config.spiffe_machine_base_path = Some(trust.spiffe_machine_base_path.clone());
+    }
+    config
+}
 
 pub async fn run(
     debug: u8,
@@ -153,8 +169,9 @@ pub async fn run(
         "Start carbide-api",
     );
 
-    let certificate_provider =
-        create_vault_client(&credential_config.vault, metrics.meter.clone())?;
+    let vault_config = vault_config_for_site(&credential_config.vault, &carbide_config);
+
+    let certificate_provider = create_vault_client(&vault_config, metrics.meter.clone())?;
 
     // Pick a credential store based on CARBIDE_CREDENTIAL_STORE (default: "vault").
     // Set to "memory" to use an in-memory store with no persistence or shared state between
@@ -165,7 +182,7 @@ pub async fn run(
     .as_deref()
     .unwrap_or("vault")
     {
-        "vault" => create_vault_client(&credential_config.vault, metrics.meter.clone())?,
+        "vault" => create_vault_client(&vault_config, metrics.meter.clone())?,
         "memory" => Arc::new(MemoryCredentialStore::default()),
         other => {
             return Err(eyre::eyre!(
