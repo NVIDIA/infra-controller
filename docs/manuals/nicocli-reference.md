@@ -21,7 +21,7 @@ nicocli --version
 
 If `nicocli` is not on `$PATH`, add `$(go env GOPATH)/bin` to it.
 
-> **Note on CLI naming**: older docs and shipped binaries reference `carbidecli` (built via `make carbide-cli`). It's the same source under a previous name; the binary was renamed during the transition from carbide-core to NICo. The Makefile retains both `make nico-cli` and `make carbide-cli` targets. Prefer `nicocli` for new work.
+> **Note on CLI naming**: older docs and shipped binaries reference `nicocli` (built via `make nico-cli`). It's the same source under a previous name; the binary was renamed during the transition from nico-core to NICo. The Makefile retains both `make nico-cli` and `make nico-cli` targets. Prefer `nicocli` for new work.
 
 ## Configuration
 
@@ -65,7 +65,7 @@ HTTP/1.1 404 Not Found
 {"message":"The requested path could not be found"}
 ```
 
-your `api.name` does not match the deployment. Find the deployment's expected value in the API server's running config (the `api.name` key in the carbide-rest-api configmap for `carbide-rest`-namespace deployments) and set it in your config.
+your `api.name` does not match the deployment. Find the deployment's expected value in the API server's running config (the `api.name` key in the nico-rest-api configmap for `nico-rest`-namespace deployments) and set it in your config.
 
 ### Sample config
 

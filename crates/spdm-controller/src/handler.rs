@@ -60,15 +60,19 @@ async fn redfish_client(
     bmc_info: &BmcInfo,
     ctx: &mut StateHandlerContext<'_, SpdmStateHandlerContextObjects>,
 ) -> Result<Box<dyn Redfish>, StateHandlerError> {
+    let ip_addr = bmc_info
+        .ip_addr()
+        .map_err(StateHandlerError::GenericError)?;
+    let bmc_access_info = db::machine_interface::lookup_bmc_access_info(
+        &ctx.services.db_pool,
+        ip_addr,
+        bmc_info.port,
+    )
+    .await?;
+
     ctx.services
         .redfish_client_pool
-        .create_client_for_ingested_host(
-            bmc_info
-                .ip_addr()
-                .map_err(StateHandlerError::GenericError)?,
-            bmc_info.port,
-            &ctx.services.db_pool,
-        )
+        .client_by_info(&bmc_access_info)
         .await
         .map_err(StateHandlerError::from)
 }
