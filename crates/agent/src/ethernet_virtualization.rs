@@ -34,6 +34,7 @@ use carbide_network::ip::prefix::Ipv4Net;
 use carbide_network::virtualization::{VpcVirtualizationType, build_dual_stack_list};
 use eyre::WrapErr;
 use mac_address::MacAddress;
+use nvue_client::client::NvueClientError;
 use nvue_client::{NvueClient, NvueConfig};
 use serde::Deserialize;
 use tokio::process::Command as TokioCommand;
@@ -145,8 +146,54 @@ struct PostAction {
 }
 
 pub enum NvueUpdateFlavor<'a> {
-    StartupFile { hbn_root: &'a Path, skip_post: bool },
-    RestApi { nvue_client: &'a NvueClient },
+    StartupFile {
+        hbn_root: &'a Path,
+        skip_post: bool,
+    },
+    RestApi {
+        nvue_context: &'a mut NvueClientContext,
+    },
+}
+
+/// The NVUE client and other information associated with it.
+pub struct NvueClientContext {
+    pub nvue_client: NvueClient,
+    pub last_applied_hash: Option<u64>,
+}
+
+impl NvueClientContext {
+    pub fn new(nvue_client: NvueClient) -> Self {
+        let last_applied_hash = None;
+        Self {
+            nvue_client,
+            last_applied_hash,
+        }
+    }
+
+    // Wrap the inner nvue_client's `push_config()` and try to avoid re-applying
+    // a configuration we're already using. Returns Ok(Some(revision_id)) on
+    // a change, Ok(None) if the config was unchanged, and otherwise passes
+    // through errors from the inner client.
+    pub async fn update_config(
+        &mut self,
+        config: &NvueConfig,
+    ) -> Result<Option<String>, NvueClientError> {
+        let new_hash = config.u64_hash();
+
+        if let Some(last_applied_hash) = self.last_applied_hash
+            && new_hash == last_applied_hash
+        {
+            Ok(None)
+        } else {
+            self.nvue_client
+                .push_config(config)
+                .await
+                .map(|revision_id| {
+                    self.last_applied_hash.replace(new_hash);
+                    Some(revision_id)
+                })
+        }
+    }
 }
 
 /// Converts an RPC routing profile into the NVUE renderer model.
@@ -197,7 +244,8 @@ pub async fn update_nvue(
 ) -> eyre::Result<bool> {
     let hbn_version = match update_flavor {
         NvueUpdateFlavor::StartupFile { .. } => hbn::read_version().await?,
-        NvueUpdateFlavor::RestApi { nvue_client } => nvue_client
+        NvueUpdateFlavor::RestApi { ref nvue_context } => nvue_context
+            .nvue_client
             .system_build_info()
             .await
             .map_err(|e| eyre::eyre!("Couldn't get HBN version from NVUE: {e}"))
@@ -570,15 +618,19 @@ pub async fn update_nvue(
             }
             Ok(true)
         }
-        NvueUpdateFlavor::RestApi { nvue_client } => {
+        NvueUpdateFlavor::RestApi { nvue_context } => {
             let config = NvueConfig::from_yaml(&next_contents)
                 .map_err(|e| eyre::eyre!("Couldn't parse NVUE config as YAML: {e}"))?;
-            let revision_id = nvue_client
-                .push_config(&config)
+            let revision_id = nvue_context
+                .update_config(&config)
                 .await
                 .map_err(|e| eyre::eyre!("Couldn't push new config to NVUE server: {e}"))?;
-            tracing::debug!(revision_id, "Applied NVUE config via REST API");
-            Ok(true)
+            if let Some(revision_id) = revision_id {
+                tracing::debug!(revision_id, "Applied NVUE config via REST API");
+                Ok(true)
+            } else {
+                Ok(false)
+            }
         }
     }
 }
