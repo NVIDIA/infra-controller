@@ -1434,9 +1434,16 @@ impl SiteExplorer {
     ) -> SiteExplorerResult<ExploredEndpointIndex> {
         let mut txn = self.txn_begin().await?;
 
-        let underlay_segments =
+        // BMCs that share a host network end up preallocated on a HostInband
+        // segment; include those alongside Underlay so the BMC interface stays
+        // visible to the to-be-scanned set.
+        let mut underlay_segments =
             db::network_segment::list_segment_ids(&mut txn, Some(NetworkSegmentType::Underlay))
                 .await?;
+        underlay_segments.extend(
+            db::network_segment::list_segment_ids(&mut txn, Some(NetworkSegmentType::HostInband))
+                .await?,
+        );
         let explored_endpoints = db::explored_endpoints::find_all(txn.as_pgconn()).await?;
         let expected_switches = db::expected_switch::find_all(&mut txn).await?;
         let expected_machines = db::expected_machine::find_all(&mut txn).await?;

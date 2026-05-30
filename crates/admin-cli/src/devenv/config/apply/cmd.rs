@@ -27,9 +27,21 @@ use crate::rpc::ApiClient;
 struct DevEnvFileConfig {
     #[serde(default)]
     overlay_networks: Vec<Ipv4Network>,
+    /// Networks for HostInband segments (zero-DPU hosts). `reserve_first` is
+    /// the number of leading IPs to skip in the gateway/infra range.
+    #[serde(default)]
+    host_inband_networks: Vec<HostInbandNetwork>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct HostInbandNetwork {
+    prefix: Ipv4Network,
+    #[serde(default)]
+    reserve_first: i32,
 }
 
 const DEVENV_VPC_NAME: &str = "devenv_tenant_vpc";
+const DEVENV_FLAT_VPC_NAME: &str = "devenv_flat_vpc";
 
 async fn get_or_create_vpc(api_client: &ApiClient) -> CarbideCliResult<Vpc> {
     // Get or create VPC with name "devenv_tenant_vpc"
@@ -135,12 +147,97 @@ async fn handle_devenv_config(
     config: DevEnvFileConfig,
     api_client: &ApiClient,
 ) -> eyre::Result<()> {
-    if !config.overlay_networks.is_empty() {
-        if mode == NetworkChoice::NetworkSegment {
+    match mode {
+        NetworkChoice::NetworkSegment if !config.overlay_networks.is_empty() => {
             handle_overlay_segment_creation(api_client, &config.overlay_networks).await?;
-        } else {
+        }
+        NetworkChoice::VpcPrefix if !config.overlay_networks.is_empty() => {
             handle_overlay_vpc_prefix_creation(api_client, &config.overlay_networks).await?;
         }
+        NetworkChoice::HostInbandSegment if !config.host_inband_networks.is_empty() => {
+            handle_host_inband_segment_creation(api_client, &config.host_inband_networks).await?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+async fn get_or_create_flat_vpc(api_client: &ApiClient) -> CarbideCliResult<Vpc> {
+    let vpcs = api_client.get_vpc_by_name(DEVENV_FLAT_VPC_NAME).await?;
+    if let Some(vpc) = vpcs.vpcs.first().cloned() {
+        return Ok(vpc);
+    }
+    let vpc_id = uuid::Uuid::new_v4().into();
+    let vpc = api_client
+        .create_flat_vpc(DEVENV_FLAT_VPC_NAME, vpc_id)
+        .await?;
+    println!(
+        "Created Flat VPC with ID: {}, name: {}",
+        vpc.id.unwrap(),
+        vpc.metadata
+            .as_ref()
+            .map(|x| x.name.as_str())
+            .unwrap_or_default()
+    );
+    Ok(vpc)
+}
+
+async fn handle_host_inband_segment_creation(
+    api_client: &ApiClient,
+    networks: &[HostInbandNetwork],
+) -> CarbideCliResult<()> {
+    let vpc = get_or_create_flat_vpc(api_client).await?;
+    let vpc_id = vpc.id.ok_or_else(|| {
+        CarbideCliError::GenericError("Flat VPC missing id after creation".to_string())
+    })?;
+
+    for net in networks {
+        let prefix = net.prefix;
+        let name = format!("devenv_host_inband_{prefix}");
+        let existing = api_client
+            .get_all_segments(None, Some(name.clone()), 2)
+            .await?;
+
+        #[allow(deprecated)]
+        if let Some(ns) = existing.network_segments.first() {
+            let ns_name = ns
+                .metadata
+                .as_ref()
+                .map(|m| m.name.as_str())
+                .unwrap_or(ns.name.as_str());
+            println!(
+                "Found HostInband segment id: {}, name: {} for prefix: {}",
+                ns.id.unwrap(),
+                ns_name,
+                prefix,
+            );
+            continue;
+        }
+
+        let ns_id: NetworkSegmentId = uuid::Uuid::new_v4().into();
+        let ns = api_client
+            .create_host_inband_segment(
+                ns_id,
+                vpc_id,
+                name,
+                prefix.to_string(),
+                prefix.nth(1).map(|x| x.to_string()),
+                net.reserve_first,
+            )
+            .await?;
+
+        #[allow(deprecated)]
+        let ns_name = ns
+            .metadata
+            .as_ref()
+            .map(|m| m.name.as_str())
+            .unwrap_or(ns.name.as_str());
+        println!(
+            "Created HostInband segment id: {}, name: {} for prefix: {}",
+            ns.id.unwrap(),
+            ns_name,
+            prefix,
+        );
     }
     Ok(())
 }

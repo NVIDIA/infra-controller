@@ -24,7 +24,11 @@ pub struct Args {
     )]
     pub path: String,
 
-    #[clap(long, short, help = "Vpc prefix or network segment?")]
+    #[clap(
+        long,
+        short,
+        help = "Vpc prefix, tenant network segment, or HostInband segment?"
+    )]
     pub mode: NetworkChoice,
 }
 
@@ -32,4 +36,6 @@ pub struct Args {
 pub enum NetworkChoice {
     NetworkSegment,
     VpcPrefix,
+    /// Flat VPC + HostInband segment (zero-DPU hosts).
+    HostInbandSegment,
 }

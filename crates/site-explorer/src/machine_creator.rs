@@ -385,9 +385,12 @@ impl MachineCreator {
             {
                 // There's already a machine_interface with this MAC...
                 if let Some(existing_machine_id) = machine_interface.machine_id {
-                    // ...If it has a MachineId, something's gone wrong. We already checked db::machine::find_by_mac()
-                    // above for all mac addresses, and returned Ok(false) if any were found. Finding an interface
-                    // with this MAC with a non-nil machine_id is a contradiction.
+                    // Same machine_id: the preallocated BMC interface row we just
+                    // attached via update_machine_topology(). Not a contradiction.
+                    if existing_machine_id == *machine_id {
+                        continue;
+                    }
+                    // Different machine_id: contradicts the find_by_mac() above.
                     tracing::error!(
                         %mac_address,
                         %machine_id,
