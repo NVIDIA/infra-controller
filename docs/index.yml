@@ -53,6 +53,9 @@ navigation:
               path: getting-started/installation-options/reference-install.md
             - page: Day 0 IP and Network Configuration
               path: getting-started/installation-options/day0-ip-network-config.md
+            - page: DPF Setup for NICo Integration
+              path: manuals/dpf.md
+              slug: dpf-setup
           slug: installation-options
 
     - section: Provisioning (Day 0 Operations)
