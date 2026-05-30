@@ -27,9 +27,10 @@ use crate::collectors::{
     LeakDetectorCollectorConfig, LogsCollector, LogsCollectorConfig, NmxtCollector,
     NmxtCollectorConfig, NvueRestCollector, NvueRestCollectorConfig, SensorCollector,
     SensorCollectorConfig, SseLogCollector, SseLogCollectorConfig, StreamingCollectorStartContext,
+    spawn_gnmi_collector,
 };
 use crate::config::{Configurable, LogCollectionMode, PeriodicLogConfig};
-use crate::endpoint::{BmcEndpoint, SwitchEndpointRole};
+use crate::endpoint::{BmcEndpoint, EndpointMetadata, SwitchEndpointRole};
 use crate::sink::DataSink;
 
 fn logs_state_file_path(template: &str, endpoint_id: &str) -> PathBuf {
@@ -415,6 +416,35 @@ fn spawn_switch_host_collectors(
                     "Could not start NVUE REST collector for switch host: {:?}",
                     endpoint.addr
                 )
+            }
+        }
+    }
+
+    if let Configurable::Enabled(nvue_cfg) = &ctx.nvue_config
+        && let Configurable::Enabled(gnmi_cfg) = &nvue_cfg.gnmi
+        && !ctx.collectors.contains(CollectorKind::NvueGnmi, &key)
+        && matches!(endpoint.metadata, Some(EndpointMetadata::Switch(_)))
+    {
+        let collector_registry = Arc::new(
+            ctx.metrics_manager
+                .create_collector_registry(format!("nvue_gnmi_collector_{key}"), metrics_prefix)?,
+        );
+        match spawn_gnmi_collector(endpoint, gnmi_cfg, collector_registry, data_sink.clone()) {
+            Ok(handle) => {
+                ctx.collectors
+                    .insert(CollectorKind::NvueGnmi, key.clone().into(), handle);
+                tracing::info!(
+                    endpoint_key = %key,
+                    total_nvue_gnmi_collectors = ctx.collectors.len(CollectorKind::NvueGnmi),
+                    "Started NVUE gNMI streaming collection for switch endpoint"
+                );
+            }
+            Err(error) => {
+                tracing::error!(
+                    ?error,
+                    endpoint_key = %key,
+                    "Could not start NVUE gNMI collector for switch"
+                );
             }
         }
     }

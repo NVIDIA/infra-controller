@@ -19,10 +19,15 @@ use std::collections::HashMap;
 use std::time::SystemTime;
 
 use super::collector_logs::ExportLogsServiceRequest;
+use super::collector_metrics::ExportMetricsServiceRequest;
 use super::common::{AnyValue, KeyValue, any_value};
 use super::logs::{LogRecord as OtlpLogRecord, ResourceLogs, ScopeLogs, SeverityNumber};
+use super::metrics::{
+    Gauge as OtlpGauge, Metric as OtlpMetric, NumberDataPoint, ResourceMetrics, ScopeMetrics,
+    metric, number_data_point,
+};
 use super::resource::Resource;
-use crate::sink::{CollectorEvent, EventContext};
+use crate::sink::{CollectorEvent, EventContext, SensorHealthData};
 
 fn severity_text_to_number(severity: &str) -> i32 {
     match severity.to_uppercase().as_str() {
@@ -73,6 +78,9 @@ fn resource_attributes(context: &EventContext) -> Vec<KeyValue> {
     }
     if let Some(switch_id) = context.switch_id() {
         attrs.push(kv("switch.id", switch_id.to_string()));
+    }
+    if let Some(rack_id) = context.rack_id() {
+        attrs.push(kv("rack.id", rack_id.to_string()));
     }
     if let Some(slot) = context.slot_number() {
         attrs.push(int_kv("machine.slot_number", i64::from(slot)));
@@ -193,6 +201,66 @@ pub fn build_export_request(batch: &[(EventContext, CollectorEvent)]) -> ExportL
     ExportLogsServiceRequest { resource_logs }
 }
 
+/// group metric samples by endpoint and build an ExportMetricsServiceRequest.
+/// every sample maps to an OTLP `Gauge` point; Sum/Histogram is a follow-up.
+pub fn build_metrics_export_request(
+    batch: &[(EventContext, SensorHealthData)],
+) -> ExportMetricsServiceRequest {
+    let observed_nanos = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64;
+
+    let mut by_endpoint: HashMap<String, (Vec<KeyValue>, Vec<OtlpMetric>)> = HashMap::new();
+
+    for (context, sample) in batch {
+        let data_point = NumberDataPoint {
+            attributes: sample
+                .labels
+                .iter()
+                .map(|(k, v)| kv(k, v.clone()))
+                .collect(),
+            time_unix_nano: observed_nanos,
+            value: Some(number_data_point::Value::AsDouble(sample.value)),
+            ..Default::default()
+        };
+
+        let otlp_metric = OtlpMetric {
+            name: sample.metric_type.clone(),
+            description: String::new(),
+            unit: sample.unit.clone(),
+            data: Some(metric::Data::Gauge(OtlpGauge {
+                data_points: vec![data_point],
+            })),
+            ..Default::default()
+        };
+
+        by_endpoint
+            .entry(context.endpoint_key.clone())
+            .or_insert_with(|| (resource_attributes(context), Vec::new()))
+            .1
+            .push(otlp_metric);
+    }
+
+    let resource_metrics = by_endpoint
+        .into_values()
+        .map(|(attrs, metrics)| ResourceMetrics {
+            resource: Some(Resource {
+                attributes: attrs,
+                dropped_attributes_count: 0,
+            }),
+            scope_metrics: vec![ScopeMetrics {
+                scope: None,
+                metrics,
+                schema_url: String::new(),
+            }],
+            schema_url: String::new(),
+        })
+        .collect();
+
+    ExportMetricsServiceRequest { resource_metrics }
+}
+
 #[cfg(test)]
 mod tests {
     use std::borrow::Cow;
@@ -200,6 +268,7 @@ mod tests {
     use std::str::FromStr;
 
     use carbide_uuid::nvlink::NvLinkDomainId;
+    use carbide_uuid::rack::RackId;
     use carbide_uuid::switch::{SwitchId, SwitchIdSource, SwitchType};
     use mac_address::MacAddress;
 
@@ -272,11 +341,12 @@ mod tests {
                 tray_index: Some(5),
                 nvlink_domain_uuid: Some(domain_uuid),
             })),
-            rack_id: None,
+            rack_id: Some(RackId::new("RACK_1")),
         };
 
         let attrs = resource_attributes(&context);
 
+        assert_eq!(attr_value(&attrs, "rack.id"), Some("RACK_1"));
         assert_eq!(attr_int_value(&attrs, "machine.slot_number"), Some(15));
         assert_eq!(attr_int_value(&attrs, "machine.tray_index"), Some(5));
         assert_eq!(
@@ -306,7 +376,7 @@ mod tests {
                 is_primary: false,
                 nmxt_enabled: false,
             })),
-            rack_id: None,
+            rack_id: Some(RackId::new("RACK_2")),
         };
 
         let attrs = resource_attributes(&context);
@@ -315,6 +385,7 @@ mod tests {
             attr_value(&attrs, "switch.id"),
             Some(switch_id_attr.as_str())
         );
+        assert_eq!(attr_value(&attrs, "rack.id"), Some("RACK_2"));
         assert_eq!(attr_int_value(&attrs, "switch.slot_number"), Some(7));
         assert_eq!(attr_int_value(&attrs, "switch.tray_index"), Some(3));
     }
