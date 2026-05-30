@@ -60,7 +60,6 @@ mod network_segment;
 mod run;
 mod scout_stream;
 mod setup;
-mod state_controller;
 mod storage;
 #[cfg(test)]
 mod tests;

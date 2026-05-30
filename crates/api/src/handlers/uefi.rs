@@ -80,12 +80,20 @@ pub(crate) async fn clear_host_uefi_password(
         id: machine_id.to_string(),
     })?;
 
+    let addr = snapshot.host_snapshot.bmc_addr().ok_or_else(|| {
+        CarbideError::InvalidArgument("Specified machine does not have BMC address".into())
+    })?;
+
+    let bmc_access_info =
+        db::machine_interface::lookup_bmc_access_info(&mut txn, addr.ip(), Some(addr.port()))
+            .await?;
+
     // Don't hold the transaction across an await point
     txn.commit().await?;
 
     let redfish_client = api
         .redfish_pool
-        .create_client_from_machine(&snapshot.host_snapshot, &api.database_connection)
+        .client_by_info(&bmc_access_info)
         .await
         .map_err(|e| {
             tracing::error!("unable to create redfish client: {}", e);
@@ -165,12 +173,21 @@ pub(crate) async fn set_host_uefi_password(
         kind: "machine",
         id: machine_id.to_string(),
     })?;
+
+    let addr = snapshot.host_snapshot.bmc_addr().ok_or_else(|| {
+        CarbideError::InvalidArgument("Specified machine does not have BMC address".into())
+    })?;
+
+    let bmc_access_info =
+        db::machine_interface::lookup_bmc_access_info(&mut txn, addr.ip(), Some(addr.port()))
+            .await?;
+
     // Let txn drop so we don't hold it across a redfish request
     txn.commit().await?;
 
     let redfish_client = api
         .redfish_pool
-        .create_client_from_machine(&snapshot.host_snapshot, &api.database_connection)
+        .client_by_info(&bmc_access_info)
         .await
         .map_err(|e| {
             tracing::error!("unable to create redfish client: {}", e);

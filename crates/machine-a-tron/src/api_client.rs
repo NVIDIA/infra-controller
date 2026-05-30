@@ -265,6 +265,7 @@ impl ApiClient {
             virtual_function_id: None,
             ip_address: None,
             ipv6_interface_config: None,
+            routing_profile: None,
         };
 
         let tenant_config = rpc::TenantConfig {

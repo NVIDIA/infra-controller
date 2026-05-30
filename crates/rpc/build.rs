@@ -109,7 +109,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .type_attribute("forge.FabricManagerStatus", "#[derive(serde::Serialize)]")
         .type_attribute("forge.FlatInterfaceConfig", "#[derive(serde::Serialize)]")
         .type_attribute("forge.FlatInterfaceIpv6Config", "#[derive(serde::Serialize)]")
+        .type_attribute("forge.FlatInterfaceRoutingProfile", "#[derive(serde::Serialize)]")
         .type_attribute("forge.InstanceInterfaceIpv6Config", "#[derive(serde::Serialize, serde::Deserialize)]")
+        .type_attribute(
+            "forge.InstanceInterfaceRoutingProfile",
+            "#[derive(serde::Serialize)]",
+        )
         .type_attribute(
             "forge.InstanceInterfaceConfig",
             "#[derive(serde::Serialize)]",

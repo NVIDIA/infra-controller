@@ -15,4 +15,14 @@
  * limitations under the License.
  */
 
-pub mod common_services;
+use mac_address::MacAddress;
+
+/// Data needed to access BMC via Redfish.
+///
+/// It is regular host, port pair + MAC address that identifies auth
+/// key identifier for the access.
+pub struct BmcAccessInfo {
+    pub host: String,
+    pub port: Option<u16>,
+    pub mac_address: MacAddress,
+}

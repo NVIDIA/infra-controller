@@ -462,7 +462,8 @@ async fn handle_netconf(AxumState(state): AxumState<Arc<Mutex<State>>>) -> impl 
         internal_uuid: None,
         mtu: None,
         ipv6_interface_config: None,
-        routing_profile: None,
+        vpc_routing_profile: None,
+        interface_routing_profile: None,
     };
     assert_eq!(admin_interface.svi_ip, None);
 
@@ -632,7 +633,8 @@ async fn handle_netconf(AxumState(state): AxumState<Arc<Mutex<State>>>) -> impl 
         internal_uuid: None,
         mtu: None,
         ipv6_interface_config: None,
-        routing_profile: None,
+        vpc_routing_profile: None,
+        interface_routing_profile: None,
     };
 
     let network_security_policy_overrides = vec![
@@ -777,6 +779,7 @@ async fn handle_netconf(AxumState(state): AxumState<Arc<Mutex<State>>>) -> impl 
                     virtual_function_id: None,
                     ip_address: None,
                     ipv6_interface_config: None,
+                    routing_profile: None,
                 }],
                 auto: false,
             }),
