@@ -13,7 +13,6 @@ pub enum RvsError {
     InvalidMachineId(#[from] MachineIdParseError),
 
     /// An ID string couldn't be parsed as a UUID-based type.
-    #[allow(dead_code)]
     #[error("Failed to parse ID: {0}")]
     InvalidId(String),
 
@@ -36,4 +35,16 @@ pub enum RvsError {
     /// I/O error (e.g. binding a TCP listener).
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// An operation exceeded its deadline.
+    #[error("Timeout: {0}")]
+    Timeout(String),
+
+    /// Downloaded file digest does not match the server-advertised checksum.
+    #[error("Checksum mismatch for {path}: expected {expected}, got {actual}")]
+    ChecksumMismatch {
+        path: String,
+        expected: String,
+        actual: String,
+    },
 }
