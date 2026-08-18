@@ -449,7 +449,7 @@ func (oscr *APIOperatingSystemCreateRequest) ValidateAndSetUserData(phonehomeUrl
 		// counts as valid YAML.
 		if len(userDataMap.Content) > 0 {
 			documentRoot = userDataMap.Content[0]
-			if documentRoot.Kind == yaml.MappingNode {
+			if util.PhoneHomeSupportsUserDataRoot(documentRoot) {
 				isUserDataValidYAML = true
 			}
 		}
@@ -797,7 +797,7 @@ func (osur *APIOperatingSystemUpdateRequest) ValidateAndSetUserData(phonehomeUrl
 		// counts as valid YAML.
 		if len(userDataMap.Content) > 0 {
 			documentRoot = userDataMap.Content[0]
-			if documentRoot.Kind == yaml.MappingNode {
+			if util.PhoneHomeSupportsUserDataRoot(documentRoot) {
 				isUserDataValidYAML = true
 			}
 		}
