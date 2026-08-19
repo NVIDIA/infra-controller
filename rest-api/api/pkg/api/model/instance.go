@@ -824,7 +824,7 @@ func (icr *APIInstanceCreateRequest) ValidateAndSetOperatingSystemData(cfg *conf
 			}
 
 			// If there's still user-data, marshal so that it can be stored in the DB later
-			if isUserDataValidYAML && len(documentRoot.Content) > 0 {
+			if isUserDataValidYAML && (documentRoot.Kind == yaml.SequenceNode || len(documentRoot.Content) > 0) {
 
 				byteUserData, err := yaml.Marshal(userDataMap)
 				if err != nil {
@@ -1143,7 +1143,7 @@ func (bicr *APIBatchInstanceCreateRequest) ValidateAndSetOperatingSystemData(cfg
 			}
 
 			// If there's still user-data, marshal so that it can be stored in the DB later
-			if isUserDataValidYAML && len(documentRoot.Content) > 0 {
+			if isUserDataValidYAML && (documentRoot.Kind == yaml.SequenceNode || len(documentRoot.Content) > 0) {
 
 				byteUserData, err := yaml.Marshal(userDataMap)
 				if err != nil {
@@ -1435,7 +1435,7 @@ func (iur *APIInstanceUpdateRequest) ValidateAndSetOperatingSystemData(cfg *conf
 			}
 
 			// If there's still user-data, marshal so that it can be stored in the DB later
-			if isUserDataValidYAML && len(documentRoot.Content) > 0 {
+			if isUserDataValidYAML && (documentRoot.Kind == yaml.SequenceNode || len(documentRoot.Content) > 0) {
 
 				byteUserData, err := yaml.Marshal(userDataMap)
 				if err != nil {
