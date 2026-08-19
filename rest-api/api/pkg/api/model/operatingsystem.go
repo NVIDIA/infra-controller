@@ -824,7 +824,7 @@ func (osur *APIOperatingSystemUpdateRequest) ValidateAndSetUserData(phonehomeUrl
 		// but the UI will always send false if phone-home is unchecked,
 		// so we want to do this check silently and not alert people who
 		// are using non-YAML user-data.
-		if err := util.RemovePhoneHomeFromUserData(documentRoot, &phonehomeUrl); err != nil {
+		if _, err := util.RemovePhoneHomeFromUserData(documentRoot, &phonehomeUrl); err != nil {
 			return validation.Errors{
 				"userData": errors.New("failed to remove phone home config from userData"),
 			}

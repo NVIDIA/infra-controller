@@ -815,7 +815,7 @@ func (icr *APIInstanceCreateRequest) ValidateAndSetOperatingSystemData(cfg *conf
 				// so we want to do this check silently and not alert people who
 				// are using non-YAML user-data.
 
-				if err := util.RemovePhoneHomeFromUserData(documentRoot, cutil.GetPtr(cfg.GetSitePhoneHomeUrl())); err != nil {
+				if _, err := util.RemovePhoneHomeFromUserData(documentRoot, cutil.GetPtr(cfg.GetSitePhoneHomeUrl())); err != nil {
 					return validation.Errors{
 						"userData": errors.New("failed to disable phone-home in userData after processing phone home config"),
 					}
@@ -1135,7 +1135,7 @@ func (bicr *APIBatchInstanceCreateRequest) ValidateAndSetOperatingSystemData(cfg
 				}
 
 			} else if isUserDataValidYAML {
-				if err := util.RemovePhoneHomeFromUserData(documentRoot, cutil.GetPtr(cfg.GetSitePhoneHomeUrl())); err != nil {
+				if _, err := util.RemovePhoneHomeFromUserData(documentRoot, cutil.GetPtr(cfg.GetSitePhoneHomeUrl())); err != nil {
 					return validation.Errors{
 						"userData": errors.New("failed to disable phone-home in userData after processing phone home config"),
 					}
@@ -1427,7 +1427,7 @@ func (iur *APIInstanceUpdateRequest) ValidateAndSetOperatingSystemData(cfg *conf
 				// so we want to do this check silently and not alert people who
 				// are using non-YAML user-data.
 
-				if err := util.RemovePhoneHomeFromUserData(documentRoot, cutil.GetPtr(cfg.GetSitePhoneHomeUrl())); err != nil {
+				if _, err := util.RemovePhoneHomeFromUserData(documentRoot, cutil.GetPtr(cfg.GetSitePhoneHomeUrl())); err != nil {
 					return validation.Errors{
 						"userData": errors.New("failed to disable phone-home in userData after processing phone home config"),
 					}
