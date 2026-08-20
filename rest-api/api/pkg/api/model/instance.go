@@ -16,7 +16,6 @@ import (
 	goset "github.com/deckarep/golang-set/v2"
 	validation "github.com/go-ozzo/ozzo-validation/v4"
 	validationis "github.com/go-ozzo/ozzo-validation/v4/is"
-	"gopkg.in/yaml.v3"
 
 	cutil "github.com/NVIDIA/infra-controller/rest-api/common/pkg/util"
 	corev1 "github.com/NVIDIA/infra-controller/rest-api/proto/core/gen/v1"
@@ -36,12 +35,6 @@ const (
 )
 
 var (
-	// SitePhoneHomeCloudInit default cloudinit with phone home config
-	SitePhoneHomeCloudInit = `#cloud-config
-     phone_home:
-        url: %s
-        post: all`
-
 	// MachineIssueCategoriesFromAPIToProtobuf is the map of instance issue categories to their corresponding values
 	MachineIssueCategoriesFromAPIToProtobuf = map[string]int32{
 		MachineIssueCategoryHardware:    int32(corev1.IssueCategory_HARDWARE),
@@ -771,84 +764,33 @@ func (icr *APIInstanceCreateRequest) ValidateAndSetOperatingSystemData(cfg *conf
 
 	// If the request is setting PhoneHomeEnabled
 	if icr.PhoneHomeEnabled != nil {
-		// If there's some existing user-data,
-		// we'll need to modify it to either insert phone-home
-		// settings or snip them out
-		if mergedUserData != nil && *mergedUserData != "" {
-			userDataMap := &yaml.Node{}
+		var userData *string
+		var err error
 
-			var documentRoot *yaml.Node
-
-			isUserDataValidYAML := false
-			err := yaml.Unmarshal([]byte(*mergedUserData), userDataMap)
-
-			if err == nil {
-
-				// We have a slightly more restrictive view of what
-				// counts as valid YAML.
-				if len(userDataMap.Content) > 0 {
-					documentRoot = userDataMap.Content[0]
-
-					if util.PhoneHomeSupportsUserDataRoot(documentRoot) {
-						isUserDataValidYAML = true
-					}
-				}
-			}
-
-			if *mergedPhoneHomeEnabled {
-				// Phone home can only be enabled if the user-data is valid YAML
-				if !isUserDataValidYAML {
-					return validation.Errors{
-						"userData": errors.New("userData specified in request must be valid CloudInit YAML to enable phone home"),
-					}
-				}
-
-				if err := util.InsertPhoneHomeIntoUserData(documentRoot, cfg.GetSitePhoneHomeUrl()); err != nil {
-					return validation.Errors{
-						"userData": errors.New("failed to insert phone-home into userData"),
-					}
-				}
-
-			} else if isUserDataValidYAML {
-				// We have to make sure we don't try to remove from invalid yaml,
-				// but the UI will always send false if phone-home is unchecked,
-				// so we want to do this check silently and not alert people who
-				// are using non-YAML user-data.
-
-				if _, err := util.RemovePhoneHomeFromUserData(documentRoot, cutil.GetPtr(cfg.GetSitePhoneHomeUrl())); err != nil {
-					return validation.Errors{
-						"userData": errors.New("failed to disable phone-home in userData after processing phone home config"),
-					}
-				}
-
-			}
-
-			// If there's still user-data, marshal so that it can be stored in the DB later
-			if isUserDataValidYAML && (documentRoot.Kind == yaml.SequenceNode || len(documentRoot.Content) > 0) {
-
-				byteUserData, err := yaml.Marshal(userDataMap)
-				if err != nil {
-					return validation.Errors{
-						"userData": errors.New("failed to re-construct userData after processing phone home config"),
-					}
-				}
-				icr.UserData = cutil.GetPtr(string(byteUserData))
-			} else if isUserDataValidYAML && !*mergedPhoneHomeEnabled {
-				// This would be a case of valid YAML where the user
-				// disabled phone-home.
-				// If the only user-data _was_ the phone-home data but phone-home
-				// is being disabled, then we'll blank out the field in the DB.
-				icr.UserData = cutil.GetPtr("")
-			}
-			// There's an implied case here of invalid YAML
-			// In that case, we do nothing, and icr.UserData will stay untouched.
+		if *mergedPhoneHomeEnabled {
+			userData, err = util.EnablePhoneHomeInUserData(mergedUserData, cfg.GetSitePhoneHomeUrl())
 		} else {
-			// If user-data is nil or empty, but phone-home is being enabled,
-			// we need to set the default phone-home settings string.
-			// (Nothing to do if user-data is nil or empty and phone-home is being disabled.)
+			userData, err = util.DisablePhoneHomeInUserData(mergedUserData, cfg.GetSitePhoneHomeUrl())
+		}
+
+		switch {
+		case errors.Is(err, util.ErrUnsupportedUserData):
+			// Phone-home can only be enabled in cloud-init user-data. The UI
+			// always sends false when the box is unchecked, so on disable such
+			// user-data is left alone rather than rejected.
 			if *mergedPhoneHomeEnabled {
-				icr.UserData = cutil.GetPtr(fmt.Sprintf(SitePhoneHomeCloudInit, cfg.GetSitePhoneHomeUrl()))
+				return validation.Errors{
+					"userData": errors.New("userData specified in request must be valid CloudInit YAML to enable phone home"),
+				}
 			}
+		case err != nil:
+			return validation.Errors{
+				"userData": errors.New("failed to insert phone-home into userData"),
+			}
+		case userData != nil:
+			// Empty means phone-home was all the user-data held, so the field is
+			// blanked.
+			icr.UserData = userData
 		}
 	}
 
@@ -1096,71 +1038,33 @@ func (bicr *APIBatchInstanceCreateRequest) ValidateAndSetOperatingSystemData(cfg
 
 	// If the request is setting PhoneHomeEnabled
 	if bicr.PhoneHomeEnabled != nil {
-		// If there's some existing user-data,
-		// we'll need to modify it to either insert phone-home
-		// settings or snip them out
-		if mergedUserData != nil && *mergedUserData != "" {
-			userDataMap := &yaml.Node{}
+		var userData *string
+		var err error
 
-			var documentRoot *yaml.Node
-
-			isUserDataValidYAML := false
-			err := yaml.Unmarshal([]byte(*mergedUserData), userDataMap)
-
-			if err == nil {
-
-				// We have a slightly more restrictive view of what
-				// counts as valid YAML.
-				if len(userDataMap.Content) > 0 {
-					documentRoot = userDataMap.Content[0]
-
-					if util.PhoneHomeSupportsUserDataRoot(documentRoot) {
-						isUserDataValidYAML = true
-					}
-				}
-			}
-
-			if *mergedPhoneHomeEnabled {
-				// Phone home can only be enabled if the user-data is valid YAML
-				if !isUserDataValidYAML {
-					return validation.Errors{
-						"userData": errors.New("userData specified in request must be valid CloudInit YAML to enable phone home"),
-					}
-				}
-
-				if err := util.InsertPhoneHomeIntoUserData(documentRoot, cfg.GetSitePhoneHomeUrl()); err != nil {
-					return validation.Errors{
-						"userData": errors.New("failed to insert phone-home into userData"),
-					}
-				}
-
-			} else if isUserDataValidYAML {
-				if _, err := util.RemovePhoneHomeFromUserData(documentRoot, cutil.GetPtr(cfg.GetSitePhoneHomeUrl())); err != nil {
-					return validation.Errors{
-						"userData": errors.New("failed to disable phone-home in userData after processing phone home config"),
-					}
-				}
-			}
-
-			// If there's still user-data, marshal so that it can be stored in the DB later
-			if isUserDataValidYAML && (documentRoot.Kind == yaml.SequenceNode || len(documentRoot.Content) > 0) {
-
-				byteUserData, err := yaml.Marshal(userDataMap)
-				if err != nil {
-					return validation.Errors{
-						"userData": errors.New("failed to re-construct userData after processing phone home config"),
-					}
-				}
-				bicr.UserData = cutil.GetPtr(string(byteUserData))
-			} else if isUserDataValidYAML && !*mergedPhoneHomeEnabled {
-				bicr.UserData = cutil.GetPtr("")
-			}
+		if *mergedPhoneHomeEnabled {
+			userData, err = util.EnablePhoneHomeInUserData(mergedUserData, cfg.GetSitePhoneHomeUrl())
 		} else {
-			// If user-data is nil or empty, but phone-home is being enabled,
-			// we need to set the default phone-home settings string.
+			userData, err = util.DisablePhoneHomeInUserData(mergedUserData, cfg.GetSitePhoneHomeUrl())
+		}
+
+		switch {
+		case errors.Is(err, util.ErrUnsupportedUserData):
+			// Phone-home can only be enabled in cloud-init user-data. The UI
+			// always sends false when the box is unchecked, so on disable such
+			// user-data is left alone rather than rejected.
 			if *mergedPhoneHomeEnabled {
-				bicr.UserData = cutil.GetPtr(fmt.Sprintf(SitePhoneHomeCloudInit, cfg.GetSitePhoneHomeUrl()))
+				return validation.Errors{
+					"userData": errors.New("userData specified in request must be valid CloudInit YAML to enable phone home"),
+				}
 			}
+		case err != nil:
+			return validation.Errors{
+				"userData": errors.New("failed to insert phone-home into userData"),
+			}
+		case userData != nil:
+			// Empty means phone-home was all the user-data held, so the field is
+			// blanked.
+			bicr.UserData = userData
 		}
 	}
 
@@ -1383,83 +1287,33 @@ func (iur *APIInstanceUpdateRequest) ValidateAndSetOperatingSystemData(cfg *conf
 	// which could have updated the user-data,
 	// then we'll need to make sure we update user-data accordingly.
 	if iur.PhoneHomeEnabled != nil || iur.UserData != nil || iur.OperatingSystemID != nil {
-		// If there's some existing user-data,
-		// we'll need to modify it to either insert phone-home
-		// settings or snip them out
-		if mergedUserData != nil && *mergedUserData != "" {
-			userDataMap := &yaml.Node{}
+		var userData *string
+		var err error
 
-			var documentRoot *yaml.Node
-
-			isUserDataValidYAML := false
-			err := yaml.Unmarshal([]byte(*mergedUserData), userDataMap)
-
-			if err == nil {
-
-				// We have a slightly more restrictive view of what
-				// counts as valid YAML.
-				if len(userDataMap.Content) > 0 {
-					documentRoot = userDataMap.Content[0]
-
-					if util.PhoneHomeSupportsUserDataRoot(documentRoot) {
-						isUserDataValidYAML = true
-					}
-				}
-			}
-
-			if *mergedPhoneHomeEnabled {
-				// Phone home can only be enabled if the user-data is valid YAML
-				if !isUserDataValidYAML {
-					return validation.Errors{
-						"userData": errors.New("must be valid CloudInit YAML to enable phone home"),
-					}
-				}
-
-				if err := util.InsertPhoneHomeIntoUserData(documentRoot, cfg.GetSitePhoneHomeUrl()); err != nil {
-					return validation.Errors{
-						"userData": errors.New("failed to insert phone-home into userData"),
-					}
-				}
-
-			} else if isUserDataValidYAML {
-				// We have to make sure we don't try to remove from invalid yaml,
-				// but the UI will always send false if phone-home is unchecked,
-				// so we want to do this check silently and not alert people who
-				// are using non-YAML user-data.
-
-				if _, err := util.RemovePhoneHomeFromUserData(documentRoot, cutil.GetPtr(cfg.GetSitePhoneHomeUrl())); err != nil {
-					return validation.Errors{
-						"userData": errors.New("failed to disable phone-home in userData after processing phone home config"),
-					}
-				}
-			}
-
-			// If there's still user-data, marshal so that it can be stored in the DB later
-			if isUserDataValidYAML && (documentRoot.Kind == yaml.SequenceNode || len(documentRoot.Content) > 0) {
-
-				byteUserData, err := yaml.Marshal(userDataMap)
-				if err != nil {
-					return validation.Errors{
-						"userData": errors.New("failed to re-construct userData after processing phone home config"),
-					}
-				}
-				iur.UserData = cutil.GetPtr(string(byteUserData))
-			} else if isUserDataValidYAML && !*mergedPhoneHomeEnabled {
-				// This would be a case of valid YAML where the user
-				// disabled phone-home.
-				// If the only user-data _was_ the phone-home data but phone-home
-				// is being disabled, then we'll blank out the field in the DB.
-				iur.UserData = cutil.GetPtr("")
-			}
-			// There's an implied case here of invalid YAML
-			// In that case, we do nothing, and iur.UserData will stay untouche
+		if *mergedPhoneHomeEnabled {
+			userData, err = util.EnablePhoneHomeInUserData(mergedUserData, cfg.GetSitePhoneHomeUrl())
 		} else {
-			// If user-data is nil or empty, but phone-home is being enabled,
-			// we need to set the default phone-home settings string.
-			// (Nothing to do if user-data is nil or empty and phone-home is being disabled.)
+			userData, err = util.DisablePhoneHomeInUserData(mergedUserData, cfg.GetSitePhoneHomeUrl())
+		}
+
+		switch {
+		case errors.Is(err, util.ErrUnsupportedUserData):
+			// Phone-home can only be enabled in cloud-init user-data. The UI
+			// always sends false when the box is unchecked, so on disable such
+			// user-data is left alone rather than rejected.
 			if *mergedPhoneHomeEnabled {
-				iur.UserData = cutil.GetPtr(fmt.Sprintf(SitePhoneHomeCloudInit, cfg.GetSitePhoneHomeUrl()))
+				return validation.Errors{
+					"userData": errors.New("must be valid CloudInit YAML to enable phone home"),
+				}
 			}
+		case err != nil:
+			return validation.Errors{
+				"userData": errors.New("failed to insert phone-home into userData"),
+			}
+		case userData != nil:
+			// Empty means phone-home was all the user-data held, so the field is
+			// blanked.
+			iur.UserData = userData
 		}
 	}
 
