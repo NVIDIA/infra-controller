@@ -61,8 +61,8 @@ var commonConfigDescriptions = []struct {
 }
 
 // resolvedConfig is the result of resolving Options with the per-call values
-// for one tool invocation. It is consumed by registerOperation to construct a
-// fresh appcli.Client.
+// for one tool invocation. It is consumed by registerGET to construct a fresh
+// appcli.Client.
 type resolvedConfig struct {
 	BaseURL string
 	Org     string

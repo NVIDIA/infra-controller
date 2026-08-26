@@ -8,16 +8,10 @@ import (
 	"net/http"
 	"net/url"
 	"testing"
-	"time"
 
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/stretchr/testify/require"
 )
-
-func TestTimeoutLadder(t *testing.T) {
-	require.Greater(t, restRequestTimeout, time.Minute)
-	require.Greater(t, mcpWriteTimeout, restRequestTimeout)
-}
 
 func TestToolName(t *testing.T) {
 	cases := []struct {
@@ -186,15 +180,6 @@ func TestJSONResult_AttachesPagination(t *testing.T) {
 	require.Nil(t, jsonResult([]byte(`[]`), http.Header{}).Meta)
 }
 
-func TestJSONResult_AttachesStructuredObject(t *testing.T) {
-	res := jsonResult([]byte(`{"id":"machine-1","relatedIds":["dpu-1"]}`), http.Header{})
-	require.Equal(t, "machine-1", res.StructuredContent.(map[string]any)["id"])
-	require.Equal(t, []any{"dpu-1"}, res.StructuredContent.(map[string]any)["relatedIds"])
-
-	require.Nil(t, jsonResult([]byte(`["machine-1"]`), http.Header{}).StructuredContent)
-	require.Nil(t, jsonResult(nil, http.Header{}).StructuredContent)
-}
-
 // TestBuildServer_SyntheticSpec exercises BuildServer end-to-end on a
 // hand-crafted YAML spec to assert tool registration does not panic and
 // no error escapes for any combination of GET, POST, and parameterless
@@ -253,7 +238,7 @@ paths:
         required: true
     post:
       operationId: create-skip
-      summary: Create a skipped resource
+      summary: Excluded mutation
 `)
 
 	server, err := BuildServer(specYAML, Options{BaseURL: "http://example.test", Org: "demo"})

@@ -7,19 +7,16 @@ import (
 	"encoding/json"
 	"maps"
 	"slices"
-	"strconv"
-	"strings"
 
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/google/jsonschema-go/jsonschema"
 )
 
 // NicoOpenApiHandler builds the MCP tool input schema for a single OpenAPI
-// operation, combining path/query parameters, a JSON request body when one is
-// defined, and the common per-call config fields.
+// GET operation, combining the path-item and operation-level parameters with
+// the common per-call config fields.
 type NicoOpenApiHandler struct {
 	schema jsonschema.Schema
-	defs   map[string]*jsonschema.Schema
 }
 
 type paramKey struct {
@@ -59,7 +56,6 @@ func mergeParameters(item *openapi3.PathItem, op *openapi3.Operation) []*openapi
 func (h *NicoOpenApiHandler) buildInput(item *openapi3.PathItem, op *openapi3.Operation) *jsonschema.Schema {
 	props := map[string]*jsonschema.Schema{}
 	requiredSet := map[string]struct{}{}
-	h.defs = map[string]*jsonschema.Schema{}
 
 	for _, p := range mergeParameters(item, op) {
 		if p.Name == "org" {
@@ -73,15 +69,6 @@ func (h *NicoOpenApiHandler) buildInput(item *openapi3.PathItem, op *openapi3.Op
 		props[p.Name] = h.fromParam(p)
 		if p.In == "path" || p.Required {
 			requiredSet[p.Name] = struct{}{}
-		}
-	}
-	if op.RequestBody != nil && op.RequestBody.Value != nil {
-		mediaType := op.RequestBody.Value.GetMediaType("application/json")
-		if mediaType != nil && mediaType.Schema != nil {
-			props["body"] = h.fromSchemaRef(mediaType.Schema)
-			if op.RequestBody.Value.Required {
-				requiredSet["body"] = struct{}{}
-			}
 		}
 	}
 
@@ -100,60 +87,8 @@ func (h *NicoOpenApiHandler) buildInput(item *openapi3.PathItem, op *openapi3.Op
 		Properties:           props,
 		Required:             slices.Sorted(maps.Keys(requiredSet)),
 		AdditionalProperties: falseJSONSchema(),
-		Defs:                 h.defs,
 	}
 	return &h.schema
-}
-
-// buildOutput combines the JSON object representations from the first
-// successful response into the MCP tool's structured output schema. MCP output
-// schemas must describe objects, so array and empty responses remain available
-// as JSON text only.
-func (h *NicoOpenApiHandler) buildOutput(op *openapi3.Operation) *jsonschema.Schema {
-	if op.Responses == nil {
-		return nil
-	}
-
-	for _, status := range slices.Sorted(maps.Keys(op.Responses.Map())) {
-		code, err := strconv.Atoi(status)
-		if err != nil || code < 200 || code >= 300 {
-			continue
-		}
-		response := op.Responses.Value(status)
-		if response == nil || response.Value == nil {
-			continue
-		}
-		h.defs = map[string]*jsonschema.Schema{}
-		var schemas []*jsonschema.Schema
-		var sources []*openapi3.Schema
-		for _, mediaName := range slices.Sorted(maps.Keys(response.Value.Content)) {
-			baseMediaName, _, _ := strings.Cut(mediaName, ";")
-			if baseMediaName != "application/json" && !strings.HasSuffix(baseMediaName, "+json") {
-				continue
-			}
-			mediaType := response.Value.Content.Get(mediaName)
-			if mediaType == nil || mediaType.Schema == nil || mediaType.Schema.Value == nil || !mediaType.Schema.Value.Type.Is("object") {
-				continue
-			}
-			schemas = append(schemas, h.fromSchemaRef(mediaType.Schema))
-			sources = append(sources, mediaType.Schema.Value)
-		}
-		if len(schemas) == 0 {
-			continue
-		}
-		if len(schemas) == 1 {
-			schema := h.fromSchema(sources[0])
-			schema.Defs = h.defs
-			return schema
-		}
-		return &jsonschema.Schema{
-			Type:  "object",
-			OneOf: schemas,
-			Defs:  h.defs,
-		}
-	}
-
-	return nil
 }
 
 func falseJSONSchema() *jsonschema.Schema {
@@ -208,125 +143,4 @@ func (*NicoOpenApiHandler) fromParam(p *openapi3.Parameter) *jsonschema.Schema {
 		}
 	}
 	return s
-}
-
-func (h *NicoOpenApiHandler) fromSchemaRef(ref *openapi3.SchemaRef) *jsonschema.Schema {
-	if ref == nil || ref.Value == nil {
-		return &jsonschema.Schema{}
-	}
-	const componentPrefix = "#/components/schemas/"
-	if name, ok := strings.CutPrefix(ref.Ref, componentPrefix); ok {
-		if _, exists := h.defs[name]; !exists {
-			h.defs[name] = &jsonschema.Schema{}
-			*h.defs[name] = *h.fromSchema(ref.Value)
-		}
-		return &jsonschema.Schema{Ref: "#/$defs/" + name}
-	}
-	return h.fromSchema(ref.Value)
-}
-
-func (h *NicoOpenApiHandler) fromSchema(source *openapi3.Schema) *jsonschema.Schema {
-	target := &jsonschema.Schema{
-		Title:       source.Title,
-		Description: source.Description,
-		Format:      source.Format,
-		Deprecated:  source.Deprecated,
-		ReadOnly:    source.ReadOnly,
-		WriteOnly:   source.WriteOnly,
-		Enum:        slices.Clone(source.Enum),
-		Pattern:     source.Pattern,
-		UniqueItems: source.UniqueItems,
-		Minimum:     source.Min,
-		Maximum:     source.Max,
-		MultipleOf:  source.MultipleOf,
-		Required:    slices.Clone(source.Required),
-	}
-
-	types := slices.Clone(source.Type.Slice())
-	if source.Nullable && !slices.Contains(types, "null") {
-		types = append(types, "null")
-	}
-	if len(types) == 1 {
-		target.Type = types[0]
-	} else if len(types) > 1 {
-		target.Types = types
-	}
-
-	if source.Default != nil {
-		if encoded, err := json.Marshal(source.Default); err == nil {
-			target.Default = encoded
-		}
-	}
-	if source.MinLength > 0 {
-		value := int(source.MinLength)
-		target.MinLength = &value
-	}
-	if source.MaxLength != nil {
-		value := int(*source.MaxLength)
-		target.MaxLength = &value
-	}
-	if source.MinItems > 0 {
-		value := int(source.MinItems)
-		target.MinItems = &value
-	}
-	if source.MaxItems != nil {
-		value := int(*source.MaxItems)
-		target.MaxItems = &value
-	}
-	if source.MinProps > 0 {
-		value := int(source.MinProps)
-		target.MinProperties = &value
-	}
-	if source.MaxProps != nil {
-		value := int(*source.MaxProps)
-		target.MaxProperties = &value
-	}
-	if source.ExclusiveMin.Value != nil {
-		target.ExclusiveMinimum = source.ExclusiveMin.Value
-	} else if source.ExclusiveMin.IsTrue() {
-		target.ExclusiveMinimum = source.Min
-		target.Minimum = nil
-	}
-	if source.ExclusiveMax.Value != nil {
-		target.ExclusiveMaximum = source.ExclusiveMax.Value
-	} else if source.ExclusiveMax.IsTrue() {
-		target.ExclusiveMaximum = source.Max
-		target.Maximum = nil
-	}
-	if source.Items != nil {
-		target.Items = h.fromSchemaRef(source.Items)
-	}
-	if len(source.Properties) > 0 {
-		target.Properties = make(map[string]*jsonschema.Schema, len(source.Properties))
-		for name, property := range source.Properties {
-			target.Properties[name] = h.fromSchemaRef(property)
-		}
-	}
-	if source.AdditionalProperties.Has != nil {
-		if *source.AdditionalProperties.Has {
-			target.AdditionalProperties = &jsonschema.Schema{}
-		} else {
-			target.AdditionalProperties = falseJSONSchema()
-		}
-	} else if source.AdditionalProperties.Schema != nil {
-		target.AdditionalProperties = h.fromSchemaRef(source.AdditionalProperties.Schema)
-	}
-	target.AllOf = h.fromSchemaRefs(source.AllOf)
-	target.AnyOf = h.fromSchemaRefs(source.AnyOf)
-	target.OneOf = h.fromSchemaRefs(source.OneOf)
-	if source.Not != nil {
-		target.Not = h.fromSchemaRef(source.Not)
-	}
-	return target
-}
-
-func (h *NicoOpenApiHandler) fromSchemaRefs(refs openapi3.SchemaRefs) []*jsonschema.Schema {
-	if len(refs) == 0 {
-		return nil
-	}
-	result := make([]*jsonschema.Schema, 0, len(refs))
-	for _, ref := range refs {
-		result = append(result, h.fromSchemaRef(ref))
-	}
-	return result
 }
