@@ -8,10 +8,16 @@ import (
 	"net/http"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/stretchr/testify/require"
 )
+
+func TestTimeoutLadder(t *testing.T) {
+	require.Greater(t, restRequestTimeout, time.Minute)
+	require.Greater(t, mcpWriteTimeout, restRequestTimeout)
+}
 
 func TestToolName(t *testing.T) {
 	cases := []struct {

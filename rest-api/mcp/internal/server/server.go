@@ -31,6 +31,13 @@ import (
 	appcli "github.com/NVIDIA/infra-controller/rest-api/cli/pkg"
 )
 
+const (
+	// The REST API allows handlers up to 60 seconds to produce a response.
+	restRequestTimeout = 65 * time.Second
+	// Leave time to encode and deliver the MCP result after REST returns.
+	mcpWriteTimeout = 70 * time.Second
+)
+
 // BuildServer constructs an *mcp.Server with one tool registered for every
 // supported operation in the supplied OpenAPI spec. Tool names follow
 // the SDD: nico_<snake_case(operationId)>. Each tool handler builds a
@@ -183,7 +190,7 @@ func Run(c *urfave.Context, specData []byte) error {
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      60 * time.Second,
+		WriteTimeout:      mcpWriteTimeout,
 		IdleTimeout:       120 * time.Second,
 	}
 
@@ -252,6 +259,7 @@ func registerOperation(server *mcp.Server, method, path string, item *openapi3.P
 			return errorResult(err), nil, nil
 		}
 		client := appcli.NewClient(cfg.BaseURL, cfg.Org, cfg.Token, opts.Log, opts.Debug)
+		client.HTTPClient.Timeout = restRequestTimeout
 		client.HTTPClient.CheckRedirect = sameOriginRedirectPolicy
 		client.APIName = cfg.APIName
 

@@ -16,5 +16,6 @@ gateway:
 upstreams:
   nico-mcp:
     namespace: nico-rest
+    requestTimeout: 75s
     serviceLabels:
       app.kubernetes.io/name: nico-mcp
