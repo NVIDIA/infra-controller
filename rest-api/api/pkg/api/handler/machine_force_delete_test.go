@@ -107,6 +107,14 @@ func TestDeleteMachineHandlerForce(t *testing.T) {
 		rec := fixture.Request(t, handler.Handle, http.MethodDelete, "/?force=definitely", nil, "")
 		require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
 		require.Empty(t, fixture.ProxiedReq.FullMethod)
-		require.Contains(t, rec.Body.String(), "force")
+
+		var apiErr struct {
+			Source  string `json:"source"`
+			Message string `json:"message"`
+			Data    any    `json:"data"`
+		}
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &apiErr))
+		require.Equal(t, "Invalid force query parameter, expected a boolean value", apiErr.Message)
+		require.Nil(t, apiErr.Data)
 	})
 }
