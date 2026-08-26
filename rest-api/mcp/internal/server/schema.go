@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/getkin/kin-openapi/openapi3"
@@ -102,6 +103,57 @@ func (h *NicoOpenApiHandler) buildInput(item *openapi3.PathItem, op *openapi3.Op
 		Defs:                 h.defs,
 	}
 	return &h.schema
+}
+
+// buildOutput combines the JSON object representations from the first
+// successful response into the MCP tool's structured output schema. MCP output
+// schemas must describe objects, so array and empty responses remain available
+// as JSON text only.
+func (h *NicoOpenApiHandler) buildOutput(op *openapi3.Operation) *jsonschema.Schema {
+	if op.Responses == nil {
+		return nil
+	}
+
+	for _, status := range slices.Sorted(maps.Keys(op.Responses.Map())) {
+		code, err := strconv.Atoi(status)
+		if err != nil || code < 200 || code >= 300 {
+			continue
+		}
+		response := op.Responses.Value(status)
+		if response == nil || response.Value == nil {
+			continue
+		}
+		h.defs = map[string]*jsonschema.Schema{}
+		var schemas []*jsonschema.Schema
+		var sources []*openapi3.Schema
+		for _, mediaName := range slices.Sorted(maps.Keys(response.Value.Content)) {
+			baseMediaName, _, _ := strings.Cut(mediaName, ";")
+			if baseMediaName != "application/json" && !strings.HasSuffix(baseMediaName, "+json") {
+				continue
+			}
+			mediaType := response.Value.Content.Get(mediaName)
+			if mediaType == nil || mediaType.Schema == nil || mediaType.Schema.Value == nil || !mediaType.Schema.Value.Type.Is("object") {
+				continue
+			}
+			schemas = append(schemas, h.fromSchemaRef(mediaType.Schema))
+			sources = append(sources, mediaType.Schema.Value)
+		}
+		if len(schemas) == 0 {
+			continue
+		}
+		if len(schemas) == 1 {
+			schema := h.fromSchema(sources[0])
+			schema.Defs = h.defs
+			return schema
+		}
+		return &jsonschema.Schema{
+			Type:  "object",
+			OneOf: schemas,
+			Defs:  h.defs,
+		}
+	}
+
+	return nil
 }
 
 func falseJSONSchema() *jsonschema.Schema {

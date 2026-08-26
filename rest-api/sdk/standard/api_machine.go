@@ -221,6 +221,13 @@ type ApiDeleteMachineRequest struct {
 	ApiService *MachineAPIService
 	org        string
 	machineId  string
+	force      *bool
+}
+
+// Force deletion through NICo Core, including deletion of an attached Instance. This explicit override also deletes the Machine&#39;s host, DPU, and BMC interfaces.
+func (r ApiDeleteMachineRequest) Force(force bool) ApiDeleteMachineRequest {
+	r.force = &force
+	return r
 }
 
 func (r ApiDeleteMachineRequest) Execute() (*MessageResponse, *http.Response, error) {
@@ -230,7 +237,7 @@ func (r ApiDeleteMachineRequest) Execute() (*MessageResponse, *http.Response, er
 /*
 DeleteMachine Delete a Machine from a Site
 
-Org must have an Infrastructure Provider entity. Machine must belong to the Provider. User must have authorization role with `PROVIDER_ADMIN` suffix. Machine must meet certain criteria to be eligible for deletion.
+Org must have an Infrastructure Provider entity. Machine must belong to the Provider. User must have authorization role with `PROVIDER_ADMIN` suffix. Without `force=true`, the Machine must meet the existing deletion eligibility criteria. With `force=true`, NICo Core deletes the Machine and any attached Instance and returns the identifiers of affected resources.
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param org Name of the Org
@@ -270,6 +277,13 @@ func (a *MachineAPIService) DeleteMachineExecute(r ApiDeleteMachineRequest) (*Me
 	localVarQueryParams := url.Values{}
 	localVarFormParams := url.Values{}
 
+	if r.force != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "force", r.force, "form", "")
+	} else {
+		var defaultValue bool = false
+		parameterAddToHeaderOrQuery(localVarQueryParams, "force", defaultValue, "form", "")
+		r.force = &defaultValue
+	}
 	// to determine the Content-Type header
 	localVarHTTPContentTypes := []string{}
 
@@ -280,7 +294,7 @@ func (a *MachineAPIService) DeleteMachineExecute(r ApiDeleteMachineRequest) (*Me
 	}
 
 	// to determine the Accept header
-	localVarHTTPHeaderAccepts := []string{"application/json"}
+	localVarHTTPHeaderAccepts := []string{"application/json", "application/vnd.nvidia.nico.machine-force-delete+json"}
 
 	// set Accept header
 	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)

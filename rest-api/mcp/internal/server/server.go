@@ -233,12 +233,17 @@ func registerOperation(server *mcp.Server, method, path string, item *openapi3.P
 	h := &NicoOpenApiHandler{}
 	allParams := mergeParameters(item, op)
 	annotations := toolAnnotations(method, op.Summary)
+	var outputSchema any
+	if schema := h.buildOutput(op); schema != nil {
+		outputSchema = schema
+	}
 
 	tool := &mcp.Tool{
-		Name:        toolName(op.OperationID),
-		Description: toolDescription(op),
-		InputSchema: h.buildInput(item, op),
-		Annotations: annotations,
+		Name:         toolName(op.OperationID),
+		Description:  toolDescription(op),
+		InputSchema:  h.buildInput(item, op),
+		OutputSchema: outputSchema,
+		Annotations:  annotations,
 	}
 
 	mcp.AddTool(server, tool, func(ctx context.Context, req *mcp.CallToolRequest, in map[string]any) (*mcp.CallToolResult, any, error) {
@@ -422,7 +427,8 @@ func errorResult(err error) *mcp.CallToolResult {
 }
 
 // jsonResult wraps a successful REST response body as a single JSON text
-// content block. When the upstream response carries pagination metadata
+// content block and exposes JSON objects as structured content. When the
+// upstream response carries pagination metadata
 // (the X-Pagination header NICo REST sets on list endpoints), it is
 // surfaced under the result's _meta.pagination so MCP clients can page
 // without the metadata polluting the tool's primary JSON payload.
@@ -432,6 +438,10 @@ func jsonResult(body []byte, header http.Header) *mcp.CallToolResult {
 	}
 	res := &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: string(body)}},
+	}
+	var structured map[string]any
+	if err := json.Unmarshal(body, &structured); err == nil && structured != nil {
+		res.StructuredContent = structured
 	}
 	if meta := paginationMeta(header); meta != nil {
 		res.Meta = meta

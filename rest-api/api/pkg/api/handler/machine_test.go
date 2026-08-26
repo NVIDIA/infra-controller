@@ -3140,9 +3140,6 @@ func TestMachineHandler_Delete(t *testing.T) {
 	)
 	assert.NoError(t, err)
 
-	cfg := common.GetTestConfig()
-	tempClient := &tmocks.Client{}
-
 	// OTEL Spanner configuration
 	tracer, _, ctx := common.TestCommonTraceProviderSetup(t, ctx)
 
@@ -3231,9 +3228,8 @@ func TestMachineHandler_Delete(t *testing.T) {
 			ec.SetRequest(ec.Request().WithContext(ctx))
 
 			mh := DeleteMachineHandler{
-				dbSession: dbSession,
-				tc:        tempClient,
-				cfg:       cfg,
+				dbSession:  dbSession,
+				tracerSpan: cutil.NewTracerSpan(),
 			}
 			err := mh.Handle(ec)
 			assert.Nil(t, err)

@@ -180,6 +180,15 @@ func TestJSONResult_AttachesPagination(t *testing.T) {
 	require.Nil(t, jsonResult([]byte(`[]`), http.Header{}).Meta)
 }
 
+func TestJSONResult_AttachesStructuredObject(t *testing.T) {
+	res := jsonResult([]byte(`{"id":"machine-1","relatedIds":["dpu-1"]}`), http.Header{})
+	require.Equal(t, "machine-1", res.StructuredContent.(map[string]any)["id"])
+	require.Equal(t, []any{"dpu-1"}, res.StructuredContent.(map[string]any)["relatedIds"])
+
+	require.Nil(t, jsonResult([]byte(`["machine-1"]`), http.Header{}).StructuredContent)
+	require.Nil(t, jsonResult(nil, http.Header{}).StructuredContent)
+}
+
 // TestBuildServer_SyntheticSpec exercises BuildServer end-to-end on a
 // hand-crafted YAML spec to assert tool registration does not panic and
 // no error escapes for any combination of GET, POST, and parameterless

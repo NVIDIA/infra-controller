@@ -122,6 +122,54 @@ func TestBuildInput_ConfigArgDoesNotOverrideOpenAPIParam(t *testing.T) {
 	require.Equal(t, "API-specific token query param", schema.Properties["token"].Description)
 }
 
+func TestBuildOutput_JSONObjectResponse(t *testing.T) {
+	doc, err := openapi3.NewLoader().LoadFromData([]byte(`
+openapi: 3.0.0
+info: {title: Test, version: 1.0.0}
+paths:
+  /foo:
+    post:
+      operationId: create-foo
+      responses:
+        '202':
+          description: accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+            application/vnd.test.mutation+json:
+              schema:
+                $ref: '#/components/schemas/MutationResponse'
+components:
+  schemas:
+    MessageResponse:
+      type: object
+      required: [message]
+      properties:
+        message: {type: string}
+    MutationResponse:
+      type: object
+      required: [id]
+      properties:
+        id: {type: string}
+        relatedIds:
+          type: array
+          items: {type: string}
+`))
+	require.NoError(t, err)
+
+	schema := (&NicoOpenApiHandler{}).buildOutput(doc.Paths.Find("/foo").Post)
+	require.NotNil(t, schema)
+	require.Equal(t, "object", schema.Type)
+	require.Len(t, schema.OneOf, 2)
+	require.Equal(t, "#/$defs/MessageResponse", schema.OneOf[0].Ref)
+	require.Equal(t, "#/$defs/MutationResponse", schema.OneOf[1].Ref)
+	require.Contains(t, schema.Defs["MutationResponse"].Required, "id")
+	require.Equal(t, "string", schema.Defs["MutationResponse"].Properties["id"].Type)
+	require.Equal(t, "array", schema.Defs["MutationResponse"].Properties["relatedIds"].Type)
+	require.Equal(t, "string", schema.Defs["MutationResponse"].Properties["relatedIds"].Items.Type)
+}
+
 func TestFromParam_TypeMapping(t *testing.T) {
 	cases := []struct {
 		openapiType string

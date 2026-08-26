@@ -231,6 +231,13 @@ func TestHandler_EmbeddedSpecMutation(t *testing.T) {
 	require.Equal(t, "#/$defs/InstanceDeleteRequest", deleteTool.InputSchema.Properties["body"].Ref)
 	require.ElementsMatch(t, []any{"boolean", "null"}, deleteTool.InputSchema.Defs["InstanceDeleteRequest"].Properties["isRepairTenant"].Type)
 	require.Contains(t, byName, "nico_reprovision_machine_dpu")
+	deleteMachineTool, ok := byName["nico_delete_machine"]
+	require.True(t, ok)
+	require.Len(t, deleteMachineTool.OutputSchema.OneOf, 2)
+	require.Contains(t, deleteMachineTool.OutputSchema.Defs, "MessageResponse")
+	require.Contains(t, deleteMachineTool.OutputSchema.Defs, "MachineForceDeleteResponse")
+	require.Contains(t, deleteMachineTool.OutputSchema.Defs["MachineForceDeleteResponse"].Required, "managedHostMachineId")
+	require.Contains(t, deleteMachineTool.OutputSchema.Defs["MachineForceDeleteResponse"].Required, "instanceId")
 
 	callResp := mcpPost(t, ts.URL, "", jsonrpcRequest(12, "tools/call", map[string]any{
 		"name": "nico_reset_machine_bmc",
@@ -836,10 +843,11 @@ func jsonrpcRequest(id int, method string, params map[string]any) []byte {
 }
 
 type rpcTool struct {
-	Name        string        `json:"name"`
-	Description string        `json:"description"`
-	Annotations rpcAnnotation `json:"annotations"`
-	InputSchema rpcSchema     `json:"inputSchema"`
+	Name         string        `json:"name"`
+	Description  string        `json:"description"`
+	Annotations  rpcAnnotation `json:"annotations"`
+	InputSchema  rpcSchema     `json:"inputSchema"`
+	OutputSchema rpcSchema     `json:"outputSchema"`
 }
 
 type rpcAnnotation struct {
@@ -854,6 +862,7 @@ type rpcSchema struct {
 	Required   []string             `json:"required"`
 	Properties map[string]rpcSchema `json:"properties"`
 	Defs       map[string]rpcSchema `json:"$defs"`
+	OneOf      []rpcSchema          `json:"oneOf"`
 }
 
 func decodeToolList(t *testing.T, body []byte) []rpcTool {
