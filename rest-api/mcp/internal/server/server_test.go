@@ -238,7 +238,7 @@ paths:
         required: true
     post:
       operationId: create-skip
-      summary: Excluded mutation
+      summary: Create a skipped resource
 `)
 
 	server, err := BuildServer(specYAML, Options{BaseURL: "http://example.test", Org: "demo"})

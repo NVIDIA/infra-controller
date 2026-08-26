@@ -1,13 +1,14 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// Package server serves the NICo REST read surface as MCP tools over
-// streamable-HTTP. Tools are projected 1:1 from the embedded OpenAPI
-// spec's GET operations. The server is stateless and never emits SSE:
+// Package server serves the NICo REST API as MCP tools over streamable-HTTP.
+// Tools are projected 1:1 from the embedded OpenAPI spec's GET, POST, PUT,
+// PATCH, and DELETE operations. The server is stateless and never emits SSE:
 // every tool/call returns a single application/json body.
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -30,8 +31,8 @@ import (
 	appcli "github.com/NVIDIA/infra-controller/rest-api/cli/pkg"
 )
 
-// BuildServer constructs an *mcp.Server with one tool registered for
-// every GET operation in the supplied OpenAPI spec. Tool names follow
+// BuildServer constructs an *mcp.Server with one tool registered for every
+// supported operation in the supplied OpenAPI spec. Tool names follow
 // the SDD: nico_<snake_case(operationId)>. Each tool handler builds a
 // fresh appcli.Client per call from resolvedConfig.FromCallConfig. Inbound
 // bearer tokens are forwarded unchanged only to the configured NICo REST
@@ -60,10 +61,13 @@ func BuildServer(specData []byte, opts Options) (*mcp.Server, error) {
 	paths := doc.Paths.Map()
 	for _, path := range sortedPaths(paths) {
 		item := paths[path]
-		if item.Get == nil || item.Get.OperationID == "" {
-			continue
+		for _, method := range supportedMethods {
+			op := item.GetOperation(method)
+			if op == nil || op.OperationID == "" {
+				continue
+			}
+			registerOperation(server, method, path, item, op, opts)
 		}
-		registerGET(server, path, item, opts)
 	}
 	return server, nil
 }
@@ -217,19 +221,24 @@ func sortedPaths(paths map[string]*openapi3.PathItem) []string {
 	return slices.Sorted(maps.Keys(paths))
 }
 
-func registerGET(server *mcp.Server, path string, item *openapi3.PathItem, opts Options) {
-	op := item.Get
+var supportedMethods = []string{
+	http.MethodGet,
+	http.MethodPost,
+	http.MethodPut,
+	http.MethodPatch,
+	http.MethodDelete,
+}
+
+func registerOperation(server *mcp.Server, method, path string, item *openapi3.PathItem, op *openapi3.Operation, opts Options) {
 	h := &NicoOpenApiHandler{}
 	allParams := mergeParameters(item, op)
+	annotations := toolAnnotations(method, op.Summary)
 
 	tool := &mcp.Tool{
 		Name:        toolName(op.OperationID),
 		Description: toolDescription(op),
 		InputSchema: h.buildInput(item, op),
-		Annotations: &mcp.ToolAnnotations{
-			ReadOnlyHint: true,
-			Title:        op.Summary,
-		},
+		Annotations: annotations,
 	}
 
 	mcp.AddTool(server, tool, func(ctx context.Context, req *mcp.CallToolRequest, in map[string]any) (*mcp.CallToolResult, any, error) {
@@ -245,12 +254,48 @@ func registerGET(server *mcp.Server, path string, item *openapi3.PathItem, opts 
 		if err != nil {
 			return errorResult(err), nil, nil
 		}
-		body, respHeader, err := client.Do(http.MethodGet, path, pathParams, queryParams, nil)
+		requestBody, err := encodeRequestBody(in)
+		if err != nil {
+			return errorResult(err), nil, nil
+		}
+		body, respHeader, err := client.Do(method, path, pathParams, queryParams, requestBody)
 		if err != nil {
 			return errorResult(err), nil, nil
 		}
 		return jsonResult(body, respHeader), nil, nil
 	})
+}
+
+func toolAnnotations(method, title string) *mcp.ToolAnnotations {
+	annotations := &mcp.ToolAnnotations{Title: title}
+	switch method {
+	case http.MethodGet:
+		annotations.ReadOnlyHint = true
+	case http.MethodPut:
+		destructive := true
+		annotations.DestructiveHint = &destructive
+		annotations.IdempotentHint = true
+	case http.MethodDelete:
+		destructive := true
+		annotations.DestructiveHint = &destructive
+		annotations.IdempotentHint = true
+	default:
+		destructive := true
+		annotations.DestructiveHint = &destructive
+	}
+	return annotations
+}
+
+func encodeRequestBody(in map[string]any) ([]byte, error) {
+	body, ok := in["body"]
+	if !ok {
+		return nil, nil
+	}
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("encoding request body: %w", err)
+	}
+	return encoded, nil
 }
 
 // sameOriginRedirectPolicy preserves net/http's redirect limit while refusing
@@ -348,6 +393,28 @@ func splitArgs(in map[string]any, params []*openapi3.Parameter) (pathParams, que
 }
 
 func errorResult(err error) *mcp.CallToolResult {
+	var apiErr *appcli.APIError
+	if errors.As(err, &apiErr) {
+		message := apiErr.Message
+		if message == "" {
+			message = apiErr.Body
+		}
+		content := map[string]any{
+			"message":    message,
+			"status":     apiErr.Status,
+			"statusCode": apiErr.StatusCode,
+		}
+		if apiErr.Data != nil {
+			content["details"] = apiErr.Data
+		}
+		if encoded, marshalErr := json.Marshal(content); marshalErr == nil {
+			return &mcp.CallToolResult{
+				IsError:           true,
+				Content:           []mcp.Content{&mcp.TextContent{Text: string(encoded)}},
+				StructuredContent: content,
+			}
+		}
+	}
 	return &mcp.CallToolResult{
 		IsError: true,
 		Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
@@ -360,6 +427,9 @@ func errorResult(err error) *mcp.CallToolResult {
 // surfaced under the result's _meta.pagination so MCP clients can page
 // without the metadata polluting the tool's primary JSON payload.
 func jsonResult(body []byte, header http.Header) *mcp.CallToolResult {
+	if len(bytes.TrimSpace(body)) == 0 {
+		body = []byte("null")
+	}
 	res := &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: string(body)}},
 	}

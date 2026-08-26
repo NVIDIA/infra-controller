@@ -15,8 +15,8 @@ import (
 func main() {
 	app := &cli.App{
 		Name:  "nico-mcp",
-		Usage: "Serve the NICo REST read surface as MCP tools over streamable-HTTP",
-		Description: "Serves the NICo REST read surface as MCP tools at the configured\n" +
+		Usage: "Serve the NICo REST API as MCP tools over streamable-HTTP",
+		Description: "Serves NICo REST operations as MCP tools at the configured\n" +
 			"path and listen address. The server is stateless and never emits\n" +
 			"text/event-stream responses; every tool/call returns a single JSON\n" +
 			"body. Inbound or default credentials are forwarded only to the\n" +

@@ -14,10 +14,11 @@ import (
 	"sync/atomic"
 	"testing"
 
+	nicoopenapi "github.com/NVIDIA/infra-controller/rest-api/openapi"
 	"github.com/stretchr/testify/require"
 )
 
-// synthSpec is a minimal three-operation OpenAPI document that drives
+// synthSpec is a minimal OpenAPI document that drives
 // the integration tests. The org path param is required because that's
 // the real shape of NICo REST routes (/v2/org/{org}/...).
 const synthSpec = `
@@ -34,6 +35,15 @@ paths:
       summary: List foos
       parameters:
         - {name: pageSize, in: query, schema: {type: integer}}
+    post:
+      operationId: create-foo
+      summary: Create a foo
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FooMutationRequest'
   /v2/org/{org}/nico/foo/{fooId}:
     parameters:
       - {name: org, in: path, required: true, schema: {type: string}}
@@ -41,6 +51,34 @@ paths:
     get:
       operationId: get-foo
       summary: Retrieve a foo
+    put:
+      operationId: replace-foo
+      summary: Replace a foo
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FooMutationRequest'
+    patch:
+      operationId: update-foo
+      summary: Update a foo
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FooMutationRequest'
+    delete:
+      operationId: delete-foo
+      summary: Delete a foo
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                force: {type: boolean}
   /v2/org/{org}/nico/foo/{fooId}/status-history:
     parameters:
       - {name: org, in: path, required: true, schema: {type: string}}
@@ -48,6 +86,25 @@ paths:
     get:
       operationId: get-foo-status-history
       summary: Foo status history
+components:
+  schemas:
+    FooMutationRequest:
+      type: object
+      required: [name, settings]
+      properties:
+        name: {type: string}
+        settings:
+          $ref: '#/components/schemas/FooSettings'
+      additionalProperties: false
+    FooSettings:
+      type: object
+      required: [acknowledgeAttachedInstance]
+      properties:
+        acknowledgeAttachedInstance: {type: boolean}
+        labels:
+          type: array
+          items: {type: string}
+      additionalProperties: false
 `
 
 func TestHandler_RejectsLongPollGET(t *testing.T) {
@@ -61,7 +118,7 @@ func TestHandler_RejectsLongPollGET(t *testing.T) {
 	req.Header.Set("Accept", "text/event-stream")
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// In Stateless mode the SDK rejects long-poll GETs because there is
 	// no session for the server to push notifications onto. The exact
@@ -78,7 +135,7 @@ func TestHandler_ToolsListAndJSONResponse(t *testing.T) {
 	defer ts.Close()
 
 	resp := mcpPost(t, ts.URL, "", jsonrpcRequest(1, "tools/list", map[string]any{}))
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	ctype := resp.Header.Get("Content-Type")
@@ -90,15 +147,281 @@ func TestHandler_ToolsListAndJSONResponse(t *testing.T) {
 	tools := decodeToolList(t, body)
 
 	wantNames := []string{
+		"nico_create_foo",
+		"nico_delete_foo",
 		"nico_get_all_foo",
 		"nico_get_foo",
 		"nico_get_foo_status_history",
+		"nico_replace_foo",
+		"nico_update_foo",
 	}
 	gotNames := make([]string, 0, len(tools))
 	for _, tool := range tools {
 		gotNames = append(gotNames, tool.Name)
 	}
 	require.ElementsMatch(t, wantNames, gotNames)
+
+	byName := map[string]rpcTool{}
+	for _, tool := range tools {
+		byName[tool.Name] = tool
+	}
+	require.True(t, byName["nico_get_foo"].Annotations.ReadOnlyHint)
+	require.False(t, byName["nico_create_foo"].Annotations.ReadOnlyHint)
+	require.NotNil(t, byName["nico_create_foo"].Annotations.DestructiveHint)
+	require.True(t, *byName["nico_create_foo"].Annotations.DestructiveHint)
+	require.NotNil(t, byName["nico_delete_foo"].Annotations.DestructiveHint)
+	require.True(t, *byName["nico_delete_foo"].Annotations.DestructiveHint)
+	require.True(t, byName["nico_delete_foo"].Annotations.IdempotentHint)
+
+	createSchema := byName["nico_create_foo"].InputSchema
+	require.Contains(t, createSchema.Required, "body")
+	bodySchema := createSchema.Properties["body"]
+	require.Equal(t, "#/$defs/FooMutationRequest", bodySchema.Ref)
+	bodySchema = createSchema.Defs["FooMutationRequest"]
+	require.Equal(t, "object", bodySchema.Type)
+	require.Contains(t, bodySchema.Required, "settings")
+	settingsSchema := bodySchema.Properties["settings"]
+	require.Equal(t, "#/$defs/FooSettings", settingsSchema.Ref)
+	settingsSchema = createSchema.Defs["FooSettings"]
+	require.Equal(t, "object", settingsSchema.Type)
+	require.Equal(t, "boolean", settingsSchema.Properties["acknowledgeAttachedInstance"].Type)
+}
+
+func TestHandler_EmbeddedSpecMutation(t *testing.T) {
+	var (
+		gotMethod string
+		gotPath   string
+		gotBody   string
+	)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		gotBody = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"message":"Machine BMC reset request was accepted"}`))
+	}))
+	defer upstream.Close()
+
+	server, err := BuildServer(nicoopenapi.Spec, Options{BaseURL: upstream.URL, Org: "tester"})
+	require.NoError(t, err)
+	ts := httptest.NewServer(NewHandler(server))
+	defer ts.Close()
+
+	listResp := mcpPost(t, ts.URL, "", jsonrpcRequest(11, "tools/list", map[string]any{}))
+	listBody, err := io.ReadAll(listResp.Body)
+	require.NoError(t, listResp.Body.Close())
+	require.NoError(t, err)
+	tools := decodeToolList(t, listBody)
+	byName := map[string]rpcTool{}
+	for _, tool := range tools {
+		byName[tool.Name] = tool
+	}
+	resetTool, ok := byName["nico_reset_machine_bmc"]
+	require.True(t, ok)
+	require.Contains(t, resetTool.InputSchema.Required, "body")
+	require.Contains(t, resetTool.InputSchema.Required, "machineId")
+	require.Equal(t, "#/$defs/BMCResetRequest", resetTool.InputSchema.Properties["body"].Ref)
+	require.Equal(t, "boolean", resetTool.InputSchema.Defs["BMCResetRequest"].Properties["acknowledgeAttachedInstance"].Type)
+	deleteTool, ok := byName["nico_delete_instance"]
+	require.True(t, ok)
+	require.NotContains(t, deleteTool.InputSchema.Required, "body")
+	require.Equal(t, "#/$defs/InstanceDeleteRequest", deleteTool.InputSchema.Properties["body"].Ref)
+	require.ElementsMatch(t, []any{"boolean", "null"}, deleteTool.InputSchema.Defs["InstanceDeleteRequest"].Properties["isRepairTenant"].Type)
+	require.Contains(t, byName, "nico_reprovision_machine_dpu")
+
+	callResp := mcpPost(t, ts.URL, "", jsonrpcRequest(12, "tools/call", map[string]any{
+		"name": "nico_reset_machine_bmc",
+		"arguments": map[string]any{
+			"machineId": "machine-1",
+			"body": map[string]any{
+				"useIpmiTool":                 false,
+				"acknowledgeAttachedInstance": true,
+			},
+		},
+	}))
+	defer func() { _ = callResp.Body.Close() }()
+	callBody, err := io.ReadAll(callResp.Body)
+	require.NoError(t, err)
+	result := decodeToolCallResult(t, callBody)
+	require.False(t, result.IsError, "tool call should succeed: %s", callBody)
+	require.Equal(t, http.MethodPatch, gotMethod)
+	require.Equal(t, "/v2/org/tester/nico/machine/machine-1/bmc/reset", gotPath)
+	require.JSONEq(t, `{"acknowledgeAttachedInstance":true,"useIpmiTool":false}`, gotBody)
+}
+
+func TestHandler_ToolsCall_MutationMethodsAndBodies(t *testing.T) {
+	tests := []struct {
+		name       string
+		tool       string
+		arguments  map[string]any
+		wantMethod string
+		wantPath   string
+		wantBody   string
+	}{
+		{
+			name: "post",
+			tool: "nico_create_foo",
+			arguments: map[string]any{"body": map[string]any{
+				"name": "created",
+				"settings": map[string]any{
+					"acknowledgeAttachedInstance": true,
+					"labels":                      []any{"one", "two"},
+				},
+			}},
+			wantMethod: http.MethodPost,
+			wantPath:   "/v2/org/tester/nico/foo",
+			wantBody:   `{"name":"created","settings":{"acknowledgeAttachedInstance":true,"labels":["one","two"]}}`,
+		},
+		{
+			name: "put",
+			tool: "nico_replace_foo",
+			arguments: map[string]any{
+				"fooId": "foo-1",
+				"body": map[string]any{
+					"name":     "replaced",
+					"settings": map[string]any{"acknowledgeAttachedInstance": false},
+				},
+			},
+			wantMethod: http.MethodPut,
+			wantPath:   "/v2/org/tester/nico/foo/foo-1",
+			wantBody:   `{"name":"replaced","settings":{"acknowledgeAttachedInstance":false}}`,
+		},
+		{
+			name: "patch",
+			tool: "nico_update_foo",
+			arguments: map[string]any{
+				"fooId": "foo-1",
+				"body": map[string]any{
+					"name":     "updated",
+					"settings": map[string]any{"acknowledgeAttachedInstance": true},
+				},
+			},
+			wantMethod: http.MethodPatch,
+			wantPath:   "/v2/org/tester/nico/foo/foo-1",
+			wantBody:   `{"name":"updated","settings":{"acknowledgeAttachedInstance":true}}`,
+		},
+		{
+			name: "delete",
+			tool: "nico_delete_foo",
+			arguments: map[string]any{
+				"fooId": "foo-1",
+				"body":  map[string]any{"force": true},
+			},
+			wantMethod: http.MethodDelete,
+			wantPath:   "/v2/org/tester/nico/foo/foo-1",
+			wantBody:   `{"force":true}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var (
+				gotMethod string
+				gotPath   string
+				gotBody   string
+			)
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotMethod = r.Method
+				gotPath = r.URL.Path
+				body, err := io.ReadAll(r.Body)
+				require.NoError(t, err)
+				gotBody = string(body)
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			defer upstream.Close()
+
+			server, err := BuildServer([]byte(synthSpec), Options{BaseURL: upstream.URL, Org: "tester"})
+			require.NoError(t, err)
+			ts := httptest.NewServer(NewHandler(server))
+			defer ts.Close()
+
+			resp := mcpPost(t, ts.URL, "", jsonrpcRequest(8, "tools/call", map[string]any{
+				"name":      tt.tool,
+				"arguments": tt.arguments,
+			}))
+			defer func() { _ = resp.Body.Close() }()
+			require.Equal(t, http.StatusOK, resp.StatusCode)
+
+			body, err := io.ReadAll(resp.Body)
+			require.NoError(t, err)
+			result := decodeToolCallResult(t, body)
+			require.False(t, result.IsError, "tool call should succeed: %s", body)
+			require.Equal(t, "null", firstText(result))
+			require.Equal(t, tt.wantMethod, gotMethod)
+			require.Equal(t, tt.wantPath, gotPath)
+			require.JSONEq(t, tt.wantBody, gotBody)
+		})
+	}
+}
+
+func TestHandler_ToolsCall_RejectsInvalidNestedMutationBody(t *testing.T) {
+	server, err := BuildServer([]byte(synthSpec), Options{BaseURL: "http://example.test", Org: "tester"})
+	require.NoError(t, err)
+	ts := httptest.NewServer(NewHandler(server))
+	defer ts.Close()
+
+	resp := mcpPost(t, ts.URL, "", jsonrpcRequest(9, "tools/call", map[string]any{
+		"name": "nico_update_foo",
+		"arguments": map[string]any{
+			"fooId": "foo-1",
+			"body": map[string]any{
+				"name":     "updated",
+				"settings": map[string]any{"acknowledgeAttachedInstance": "yes"},
+			},
+		},
+	}))
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	var env struct {
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(body, &env))
+	require.NotNil(t, env.Error)
+	require.Contains(t, env.Error.Message, "invalid params")
+	require.Contains(t, env.Error.Message, "acknowledgeAttachedInstance")
+}
+
+func TestHandler_ToolsCall_ReturnsStructuredAPIError(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"message":"Instance is attached","data":{"field":"acknowledgeAttachedInstance"}}`))
+	}))
+	defer upstream.Close()
+
+	server, err := BuildServer([]byte(synthSpec), Options{BaseURL: upstream.URL, Org: "tester"})
+	require.NoError(t, err)
+	ts := httptest.NewServer(NewHandler(server))
+	defer ts.Close()
+
+	resp := mcpPost(t, ts.URL, "", jsonrpcRequest(10, "tools/call", map[string]any{
+		"name": "nico_update_foo",
+		"arguments": map[string]any{
+			"fooId": "foo-1",
+			"body": map[string]any{
+				"name":     "updated",
+				"settings": map[string]any{"acknowledgeAttachedInstance": false},
+			},
+		},
+	}))
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	result := decodeToolCallResult(t, body)
+	require.True(t, result.IsError)
+	require.Equal(t, float64(http.StatusConflict), result.StructuredContent["statusCode"])
+	require.Equal(t, "409 Conflict", result.StructuredContent["status"])
+	require.Equal(t, "Instance is attached", result.StructuredContent["message"])
+	require.Equal(t, "acknowledgeAttachedInstance", result.StructuredContent["details"].(map[string]any)["field"])
+	require.JSONEq(t, `{"details":{"field":"acknowledgeAttachedInstance"},"message":"Instance is attached","status":"409 Conflict","statusCode":409}`, firstText(result))
 }
 
 func TestHandler_ToolsCall_RejectsOutOfRangeParam(t *testing.T) {
@@ -116,7 +439,7 @@ func TestHandler_ToolsCall_RejectsOutOfRangeParam(t *testing.T) {
 		"name":      "nico_get_all_foo",
 		"arguments": map[string]any{"pageSize": 101},
 	}))
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	body, err := io.ReadAll(resp.Body)
@@ -142,7 +465,7 @@ func TestHandler_ToolsCall_RejectsUnknownArg(t *testing.T) {
 		"name":      "nico_get_all_foo",
 		"arguments": map[string]any{"page_size": 1},
 	}))
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	body, err := io.ReadAll(resp.Body)
@@ -184,7 +507,7 @@ func TestHandler_ToolsCall_BearerPassthrough(t *testing.T) {
 		"name":      "nico_get_foo",
 		"arguments": map[string]any{"fooId": "foo-1"},
 	}))
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	body, err := io.ReadAll(resp.Body)
@@ -222,7 +545,7 @@ func TestHandler_ToolsCall_TokenArgWins(t *testing.T) {
 			"token": "explicit-tool-arg-token",
 		},
 	}))
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	require.Equal(t, "Bearer explicit-tool-arg-token", recordedAuth.Load())
@@ -280,7 +603,7 @@ func TestHandler_ToolsCall_RejectsUnapprovedCredentialDestination(t *testing.T) 
 					"base_url": capture.URL,
 				},
 			}))
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 			require.Equal(t, http.StatusOK, resp.StatusCode)
 
 			body, err := io.ReadAll(resp.Body)
@@ -314,7 +637,7 @@ func TestHandler_ToolsCall_DynamicDestinationUsesExplicitToken(t *testing.T) {
 			"token":    "explicit-tool-arg-token",
 		},
 	}))
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	body, err := io.ReadAll(resp.Body)
@@ -363,7 +686,7 @@ func TestHandler_ToolsCall_CrossOriginRedirectRejected(t *testing.T) {
 				"name":      "nico_get_all_foo",
 				"arguments": map[string]any{},
 			}))
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 			require.Equal(t, http.StatusOK, resp.StatusCode)
 
 			body, err := io.ReadAll(resp.Body)
@@ -405,7 +728,7 @@ func TestHandler_ToolsCall_SameOriginRedirectAllowed(t *testing.T) {
 		"name":      "nico_get_all_foo",
 		"arguments": map[string]any{},
 	}))
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	body, err := io.ReadAll(resp.Body)
@@ -460,7 +783,7 @@ func TestHandler_ConcurrentCallersDoNotBleedTokens(t *testing.T) {
 						"fooId": "foo-" + itoa(i),
 					},
 				}))
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 			require.Equal(t, http.StatusOK, resp.StatusCode)
 		}(i)
 	}
@@ -513,8 +836,24 @@ func jsonrpcRequest(id int, method string, params map[string]any) []byte {
 }
 
 type rpcTool struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
+	Name        string        `json:"name"`
+	Description string        `json:"description"`
+	Annotations rpcAnnotation `json:"annotations"`
+	InputSchema rpcSchema     `json:"inputSchema"`
+}
+
+type rpcAnnotation struct {
+	ReadOnlyHint    bool  `json:"readOnlyHint"`
+	DestructiveHint *bool `json:"destructiveHint"`
+	IdempotentHint  bool  `json:"idempotentHint"`
+}
+
+type rpcSchema struct {
+	Type       any                  `json:"type"`
+	Ref        string               `json:"$ref"`
+	Required   []string             `json:"required"`
+	Properties map[string]rpcSchema `json:"properties"`
+	Defs       map[string]rpcSchema `json:"$defs"`
 }
 
 func decodeToolList(t *testing.T, body []byte) []rpcTool {
@@ -534,8 +873,9 @@ type rpcContent struct {
 }
 
 type rpcToolCallResult struct {
-	IsError bool         `json:"isError"`
-	Content []rpcContent `json:"content"`
+	IsError           bool           `json:"isError"`
+	Content           []rpcContent   `json:"content"`
+	StructuredContent map[string]any `json:"structuredContent"`
 }
 
 func decodeToolCallResult(t *testing.T, body []byte) rpcToolCallResult {
