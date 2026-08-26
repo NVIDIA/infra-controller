@@ -64,6 +64,7 @@ func TestDeleteMachineHandlerForce(t *testing.T) {
 		require.False(t, coreReq.GetAllowDeleteWithOrphanedDpfCrds())
 		require.False(t, coreReq.GetDeleteBmcSuppressions())
 		require.False(t, coreReq.GetDeleteRetainedBootInterfaces())
+		require.True(t, coreReq.GetAllowDeleteWithInstanceType())
 
 		var apiResp model.APIMachineForceDeleteResponse
 		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &apiResp))

@@ -412,6 +412,7 @@ async fn test_admin_force_delete_orders_locks_against_exploration(pool: sqlx::Pg
             allow_delete_with_orphaned_dpf_crds: false,
             delete_bmc_suppressions: false,
             delete_retained_boot_interfaces: false,
+            allow_delete_with_instance_type: false,
         }))
         .await
     });
@@ -495,6 +496,7 @@ async fn test_admin_force_delete_orders_endpoint_locks_by_address(pool: sqlx::Pg
             allow_delete_with_orphaned_dpf_crds: false,
             delete_bmc_suppressions: false,
             delete_retained_boot_interfaces: false,
+            allow_delete_with_instance_type: false,
         }))
         .await
     });
@@ -570,6 +572,7 @@ async fn test_admin_force_delete_orders_topology_before_endpoint(pool: sqlx::PgP
             allow_delete_with_orphaned_dpf_crds: false,
             delete_bmc_suppressions: false,
             delete_retained_boot_interfaces: false,
+            allow_delete_with_instance_type: false,
         }))
         .await
     });
@@ -636,6 +639,7 @@ async fn force_delete(
             allow_delete_with_orphaned_dpf_crds: false,
             delete_bmc_suppressions: false,
             delete_retained_boot_interfaces: false,
+            allow_delete_with_instance_type: false,
         }))
         .await
         .unwrap()
@@ -791,6 +795,7 @@ async fn test_admin_force_delete_reads_instance_after_machine_lock(pool: sqlx::P
             allow_delete_with_orphaned_dpf_crds: false,
             delete_bmc_suppressions: false,
             delete_retained_boot_interfaces: false,
+            allow_delete_with_instance_type: false,
         }))
         .await
     });
@@ -1190,8 +1195,8 @@ async fn test_admin_force_delete_with_instance_type(pool: sqlx::PgPool) {
         .await
         .unwrap();
 
-    // The request should fail because the machine is associated with an
-    // instance type.
+    // The default request should fail because the machine is associated with
+    // an instance type.
     env.api
         .admin_force_delete_machine(tonic::Request::new(AdminForceDeleteMachineRequest {
             host_query: tmp_machine_id.to_string(),
@@ -1201,26 +1206,30 @@ async fn test_admin_force_delete_with_instance_type(pool: sqlx::PgPool) {
             allow_delete_with_orphaned_dpf_crds: false,
             delete_bmc_suppressions: false,
             delete_retained_boot_interfaces: false,
+            allow_delete_with_instance_type: false,
         }))
         .await
         .unwrap_err();
 
-    // Now clear the instance type
-    let _ = env
+    // An explicit override should remove the associated machine.
+    let response = env
         .api
-        .remove_machine_instance_type_association(tonic::Request::new(
-            rpc::forge::RemoveMachineInstanceTypeAssociationRequest {
-                machine_id: tmp_machine_id.to_string(),
-            },
-        ))
+        .admin_force_delete_machine(tonic::Request::new(AdminForceDeleteMachineRequest {
+            host_query: tmp_machine_id.to_string(),
+            delete_interfaces: false,
+            delete_bmc_interfaces: false,
+            delete_bmc_credentials: false,
+            allow_delete_with_orphaned_dpf_crds: false,
+            delete_bmc_suppressions: false,
+            delete_retained_boot_interfaces: false,
+            allow_delete_with_instance_type: true,
+        }))
         .await
-        .unwrap();
-
-    // Delete should succeed now.
-    let response = force_delete(&env, &tmp_machine_id).await;
+        .unwrap()
+        .into_inner();
     assert!(
         response.all_done,
-        "the machine should delete once its instance type association is cleared"
+        "the machine should delete when the instance type override is set"
     );
     assert!(env.find_machine(tmp_machine_id).await.is_empty());
 }
@@ -1365,6 +1374,7 @@ async fn test_admin_force_delete_retains_boot_interface_ids(pool: sqlx::PgPool) 
             allow_delete_with_orphaned_dpf_crds: false,
             delete_bmc_suppressions: false,
             delete_retained_boot_interfaces: false,
+            allow_delete_with_instance_type: false,
         }))
         .await
         .unwrap()
@@ -1448,6 +1458,7 @@ async fn test_admin_force_delete_clears_suppressions_and_retained_boot(pool: sql
             allow_delete_with_orphaned_dpf_crds: false,
             delete_bmc_suppressions: true,
             delete_retained_boot_interfaces: true,
+            allow_delete_with_instance_type: false,
         }))
         .await
         .unwrap()

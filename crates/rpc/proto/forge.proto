@@ -5224,6 +5224,10 @@ message AdminForceDeleteMachineRequest {
   // machine can recover its boot target; set this when a clean rediscovery
   // without prior boot-target memory is intended.
   bool delete_retained_boot_interfaces = 7;
+
+  // Allow deletion while the Machine is associated with an Instance Type.
+  // The association is removed with the Machine.
+  bool allow_delete_with_instance_type = 8;
 }
 
 message DecommissionManagedHostRequest {

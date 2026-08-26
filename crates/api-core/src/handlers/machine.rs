@@ -628,7 +628,7 @@ pub(crate) async fn admin_force_delete_machine(
         "Admin force-delete machine request",
     );
 
-    if machine.config.instance_type_id.is_some() {
+    if machine.config.instance_type_id.is_some() && !request.allow_delete_with_instance_type {
         return Err(CarbideError::FailedPrecondition(format!(
             "association with instance type must be removed before deleting machine {}",
             machine.id

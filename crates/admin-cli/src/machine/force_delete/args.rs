@@ -96,6 +96,7 @@ impl From<&Args> for AdminForceDeleteMachineRequest {
             allow_delete_with_orphaned_dpf_crds: args.allow_delete_with_orphaned_dpf_crds,
             delete_bmc_suppressions: args.delete_bmc_suppressions,
             delete_retained_boot_interfaces: args.delete_retained_boot_interfaces,
+            allow_delete_with_instance_type: args.allow_delete_with_instance,
         }
     }
 }

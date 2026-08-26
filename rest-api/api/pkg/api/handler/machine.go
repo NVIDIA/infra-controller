@@ -1804,9 +1804,10 @@ func (umh DeleteMachineHandler) Handle(c echo.Context) error {
 
 		coreResp := &corev1.AdminForceDeleteMachineResponse{}
 		apiErr := common.ExecuteCoreGRPC(ctx, stc, corev1.Forge_AdminForceDeleteMachine_FullMethodName, &corev1.AdminForceDeleteMachineRequest{
-			HostQuery:           machine.ControllerMachineID,
-			DeleteInterfaces:    true,
-			DeleteBmcInterfaces: true,
+			HostQuery:                   machine.ControllerMachineID,
+			DeleteInterfaces:            true,
+			DeleteBmcInterfaces:         true,
+			AllowDeleteWithInstanceType: true,
 		}, coreResp, machine.Site.ID.String())
 		if apiErr != nil {
 			logAPIError(logger, apiErr, "Failed to force delete Machine via Core gRPC proxy")
