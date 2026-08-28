@@ -28,6 +28,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/uptrace/bun/extra/bundebug"
 	oteltrace "go.opentelemetry.io/otel/trace"
+	"google.golang.org/protobuf/encoding/protojson"
 
 	cdb "github.com/NVIDIA/infra-controller/rest-api/db/pkg/db"
 	cdbm "github.com/NVIDIA/infra-controller/rest-api/db/pkg/db/model"
@@ -673,6 +674,7 @@ func TestMachineHandler_Get(t *testing.T) {
 			}
 		})
 	}
+
 }
 
 func TestMachineHandler_GetAll(t *testing.T) {
@@ -3239,6 +3241,48 @@ func TestMachineHandler_Delete(t *testing.T) {
 				span := oteltrace.SpanFromContext(ec.Request().Context())
 				assert.True(t, span.SpanContext().IsValid())
 			}
+		})
+	}
+
+	forceTests := []struct {
+		name        string
+		query       string
+		wantStatus  int
+		wantMessage string
+	}{
+		{name: "true proxies the complete force-delete request", query: "/?force=true", wantStatus: http.StatusAccepted},
+		{name: "invalid value is rejected before deletion", query: "/?force=definitely", wantStatus: http.StatusBadRequest, wantMessage: "Invalid force query parameter, expected a boolean value"},
+	}
+	for _, tc := range forceTests {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := common.NewTestSetupProviderMachineHandlerFixture(t, &corev1.AdminForceDeleteMachineResponse{})
+			handler := NewDeleteMachineHandler(fixture.DBSession, fixture.SiteClientPool, fixture.Config)
+
+			if tc.wantStatus == http.StatusAccepted {
+				isAssigned := true
+				_, err := cdbm.NewMachineDAO(fixture.DBSession).Update(context.Background(), nil, cdbm.MachineUpdateInput{
+					MachineID:  fixture.MachineID,
+					IsAssigned: &isAssigned,
+				})
+				require.NoError(t, err)
+			}
+
+			rec := fixture.Request(t, handler.Handle, http.MethodDelete, tc.query, nil, "")
+			require.Equal(t, tc.wantStatus, rec.Code, rec.Body.String())
+			if tc.wantStatus != http.StatusAccepted {
+				require.Empty(t, fixture.ProxiedReq.FullMethod)
+				require.Contains(t, rec.Body.String(), tc.wantMessage)
+				return
+			}
+
+			require.Equal(t, corev1.Forge_AdminForceDeleteMachine_FullMethodName, fixture.ProxiedReq.FullMethod)
+			var coreReq corev1.AdminForceDeleteMachineRequest
+			require.NoError(t, protojson.Unmarshal(fixture.ProxiedReq.RequestJSON, &coreReq))
+			require.Equal(t, fixture.MachineID, coreReq.GetHostQuery())
+			require.True(t, coreReq.GetDeleteInterfaces())
+			require.True(t, coreReq.GetDeleteBmcInterfaces())
+			require.True(t, coreReq.GetAllowDeleteWithInstanceType())
+			require.JSONEq(t, `{"message":"Deletion request was accepted"}`, rec.Body.String())
 		})
 	}
 }

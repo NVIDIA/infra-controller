@@ -1475,35 +1475,20 @@ async fn test_admin_force_delete_with_instance_type(pool: sqlx::PgPool) {
         .await
         .unwrap();
 
+    let mut request = force_delete_request(&tmp_machine_id);
+
     // The default request should fail because the machine is associated with
     // an instance type.
     env.api
-        .admin_force_delete_machine(tonic::Request::new(AdminForceDeleteMachineRequest {
-            host_query: tmp_machine_id.to_string(),
-            delete_interfaces: false,
-            delete_bmc_interfaces: false,
-            delete_bmc_credentials: false,
-            allow_delete_with_orphaned_dpf_crds: false,
-            delete_bmc_suppressions: false,
-            delete_retained_boot_interfaces: false,
-            allow_delete_with_instance_type: false,
-        }))
+        .admin_force_delete_machine(tonic::Request::new(request.clone()))
         .await
         .unwrap_err();
 
     // An explicit override should remove the associated machine.
+    request.allow_delete_with_instance_type = true;
     let response = env
         .api
-        .admin_force_delete_machine(tonic::Request::new(AdminForceDeleteMachineRequest {
-            host_query: tmp_machine_id.to_string(),
-            delete_interfaces: false,
-            delete_bmc_interfaces: false,
-            delete_bmc_credentials: false,
-            allow_delete_with_orphaned_dpf_crds: false,
-            delete_bmc_suppressions: false,
-            delete_retained_boot_interfaces: false,
-            allow_delete_with_instance_type: true,
-        }))
+        .admin_force_delete_machine(tonic::Request::new(request))
         .await
         .unwrap()
         .into_inner();

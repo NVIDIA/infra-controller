@@ -1767,55 +1767,8 @@ func (umh DeleteMachineHandler) Handle(c echo.Context) error {
 	if err != nil {
 		return cutil.NewAPIErrorResponse(c, http.StatusBadRequest, "Invalid force query parameter, expected a boolean value", nil)
 	}
-	if force != nil && *force {
-		machine, derr := cdbm.NewMachineDAO(umh.dbSession).GetByID(ctx, nil, mID, []string{cdbm.SiteRelationName}, false)
-		if derr != nil {
-			if errors.Is(derr, cdb.ErrDoesNotExist) {
-				return cutil.NewAPIErrorResponse(c, http.StatusNotFound, "Could not find Machine specified in URL", nil)
-			}
-			logger.Error().Err(derr).Msg("error retrieving Machine DB entity")
-			return cutil.NewAPIErrorResponse(c, http.StatusInternalServerError, "Failed to retrieve Machine specified in URL", nil)
-		}
 
-		provider, derr := common.GetInfrastructureProviderForOrg(ctx, nil, umh.dbSession, org)
-		if derr != nil {
-			if errors.Is(derr, common.ErrOrgInstrastructureProviderNotFound) {
-				return cutil.NewAPIErrorResponse(c, http.StatusBadRequest, "Org doesn't have an Infrastructure Provider associated", nil)
-			}
-			logger.Error().Err(derr).Msg("error getting Infrastructure Provider for org")
-			return cutil.NewAPIErrorResponse(c, http.StatusInternalServerError, "Failed to retrieve infrastructure provider for org, DB error", nil)
-		}
-		if machine.InfrastructureProviderID != provider.ID {
-			return cutil.NewAPIErrorResponse(c, http.StatusForbidden, "Machine specified in URL is not owned by org's Infrastructure Provider", nil)
-		}
-		if machine.Site == nil {
-			logger.Error().Msg("no Site relation found for Machine")
-			return cutil.NewAPIErrorResponse(c, http.StatusInternalServerError, "Failed to retrieve Site detail for Machine", nil)
-		}
-		if machine.Site.Status != cdbm.SiteStatusRegistered {
-			return cutil.NewAPIErrorResponse(c, http.StatusBadRequest, "Site specified in request data is not in Registered state, cannot execute admin operation", nil)
-		}
-
-		stc, derr := umh.scp.GetClientByID(machine.Site.ID)
-		if derr != nil {
-			logger.Error().Err(derr).Msg("failed to retrieve Temporal client for Site")
-			return cutil.NewAPIErrorResponse(c, http.StatusInternalServerError, "Failed to retrieve workflow client for Site", nil)
-		}
-
-		apiErr := common.ExecuteCoreGRPC(ctx, stc, corev1.Forge_AdminForceDeleteMachine_FullMethodName, &corev1.AdminForceDeleteMachineRequest{
-			HostQuery:                   machine.ControllerMachineID,
-			DeleteInterfaces:            true,
-			DeleteBmcInterfaces:         true,
-			AllowDeleteWithInstanceType: true,
-		}, nil, machine.Site.ID.String())
-		if apiErr != nil {
-			logAPIError(logger, apiErr, "Failed to force delete Machine via Core gRPC proxy")
-			return cutil.NewAPIErrorResponse(c, apiErr.Code, apiErr.Message, nil)
-		}
-
-		return c.JSON(http.StatusAccepted, model.NewAPIDeletionAcceptedResponse())
-	}
-
+	var forceMachine *cdbm.Machine
 	err = cdb.WithTx(ctx, umh.dbSession, func(tx *cdb.Tx) error {
 		mDAO := cdbm.NewMachineDAO(umh.dbSession)
 		// Check that Machine exists
@@ -1859,6 +1812,13 @@ func (umh DeleteMachineHandler) Handle(c echo.Context) error {
 		if machine.Site == nil {
 			logger.Error().Msg("no Site relation found for Machine")
 			return cutil.NewAPIError(http.StatusInternalServerError, "Failed to retrieve Site detail for Machine", nil)
+		}
+		if force != nil && *force {
+			if machine.Site.Status != cdbm.SiteStatusRegistered {
+				return cutil.NewAPIError(http.StatusBadRequest, "Site specified in request data is not in Registered state, cannot execute admin operation", nil)
+			}
+			forceMachine = machine
+			return nil
 		}
 
 		// Prevent deleting if seen on site
@@ -2004,6 +1964,24 @@ func (umh DeleteMachineHandler) Handle(c echo.Context) error {
 	})
 	if err != nil {
 		return common.HandleTxError(c, logger, err, "Failed to delete Machine, DB transaction error")
+	}
+	if forceMachine != nil {
+		stc, serr := umh.scp.GetClientByID(forceMachine.Site.ID)
+		if serr != nil {
+			logger.Error().Err(serr).Msg("failed to retrieve Temporal client for Site")
+			return cutil.NewAPIErrorResponse(c, http.StatusInternalServerError, "Failed to retrieve workflow client for Site", nil)
+		}
+
+		apiErr := common.ExecuteCoreGRPC(ctx, stc, corev1.Forge_AdminForceDeleteMachine_FullMethodName, &corev1.AdminForceDeleteMachineRequest{
+			HostQuery:                   forceMachine.ControllerMachineID,
+			DeleteInterfaces:            true,
+			DeleteBmcInterfaces:         true,
+			AllowDeleteWithInstanceType: true,
+		}, nil, forceMachine.Site.ID.String())
+		if apiErr != nil {
+			logAPIError(logger, apiErr, "Failed to force delete Machine via Core gRPC proxy")
+			return cutil.NewAPIErrorResponse(c, apiErr.Code, apiErr.Message, nil)
+		}
 	}
 
 	logger.Info().Msg("finishing API handler")
