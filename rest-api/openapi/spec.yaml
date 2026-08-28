@@ -10005,32 +10005,6 @@ paths:
                 normal-deletion:
                   value:
                     message: Deletion request was accepted
-            application/vnd.nvidia.nico.machine-force-delete+json:
-              schema:
-                $ref: '#/components/schemas/MachineForceDeleteResponse'
-              examples:
-                forced-deletion:
-                  value:
-                    allDone: true
-                    managedHostMachineId: 8fd2f0af-0d87-4f9e-b54b-7e96cdfb43ab
-                    managedHostMachineInterfaceId: bb1c257f-ef20-4cbb-b754-a89f5e2cd144
-                    instanceId: 91522c01-d5a1-427f-92eb-d73a5414b228
-                    managedHostBmcIp: 192.0.2.10
-                    dpuBmcIp: 192.0.2.11
-                    ufmUnregistrations: 0
-                    ufmUnregistrationPending: false
-                    initialLockdownState: Disabled
-                    machineUnlocked: false
-                    hostInterfacesDeleted: true
-                    dpuInterfacesDeleted: true
-                    hostBmcInterfaceAssociated: true
-                    dpuBmcInterfaceAssociated: true
-                    hostBmcInterfaceDeleted: true
-                    dpuBmcInterfaceDeleted: true
-                    dpuMachineIds:
-                      - 64e065e0-6eca-42e2-9636-8547071c189a
-                    dpuMachineInterfaceIds:
-                      - 0c1dc662-1784-4a16-9342-3007dc220912
         '400':
           $ref: '#/components/responses/ValidationError'
         '403':
@@ -10044,7 +10018,7 @@ paths:
         '500':
           description: Describes an error response for 500 Internal Server Error
           $ref: '#/components/responses/GenericHttpError'
-      description: Org must have an Infrastructure Provider entity. Machine must belong to the Provider. User must have authorization role with `PROVIDER_ADMIN` suffix. Without `force=true`, the Machine must meet the existing deletion eligibility criteria. With `force=true`, NICo Core deletes the Machine and any attached Instance and returns the identifiers of affected resources.
+      description: Org must have an Infrastructure Provider entity. Machine must belong to the Provider. User must have authorization role with `PROVIDER_ADMIN` suffix. Without `force=true`, the Machine must meet the existing deletion eligibility criteria. With `force=true`, NICo Core deletes the Machine and any attached Instance.
   '/v2/org/{org}/nico/machine/{machineId}/bmc/reset':
     parameters:
       - schema:
@@ -29089,93 +29063,6 @@ components:
           description: Human-readable outcome of the request
       example:
         message: Deletion request was accepted
-    MachineForceDeleteResponse:
-      title: MachineForceDeleteResponse
-      type: object
-      description: Resources affected by a forced Machine deletion in NICo Core
-      required:
-        - allDone
-        - managedHostMachineId
-        - managedHostMachineInterfaceId
-        - instanceId
-        - managedHostBmcIp
-        - dpuBmcIp
-        - ufmUnregistrations
-        - ufmUnregistrationPending
-        - initialLockdownState
-        - machineUnlocked
-        - hostInterfacesDeleted
-        - dpuInterfacesDeleted
-        - hostBmcInterfaceAssociated
-        - dpuBmcInterfaceAssociated
-        - hostBmcInterfaceDeleted
-        - dpuBmcInterfaceDeleted
-        - dpuMachineIds
-        - dpuMachineInterfaceIds
-      properties:
-        allDone:
-          type: boolean
-          description: Whether Core completed every deletion step
-        managedHostMachineId:
-          type: string
-          description: ID of the managed host Machine affected by the deletion
-        managedHostMachineInterfaceId:
-          type: string
-          description: ID of the managed host Machine interface affected by the deletion
-        instanceId:
-          type: string
-          description: ID of the attached Instance deleted with the Machine
-        managedHostBmcIp:
-          type: string
-          description: BMC IP address of the managed host
-        dpuBmcIp:
-          type: string
-          description: BMC IP address of the first attached DPU
-        ufmUnregistrations:
-          type: integer
-          format: uint32
-          description: Number of interfaces unregistered from UFM
-        ufmUnregistrationPending:
-          type: boolean
-          description: Whether UFM unregistration remains in progress
-        initialLockdownState:
-          type: string
-          description: Machine lockdown state before the deletion attempted to unlock it
-        machineUnlocked:
-          type: boolean
-          description: Whether the Machine was unlocked during deletion
-        hostInterfacesDeleted:
-          type: boolean
-          description: Whether host interfaces were deleted
-        dpuInterfacesDeleted:
-          type: boolean
-          description: Whether DPU interfaces were deleted
-        hostBmcInterfaceAssociated:
-          type: boolean
-          description: Whether Core found an associated host BMC interface
-        dpuBmcInterfaceAssociated:
-          type: boolean
-          description: Whether Core found an associated DPU BMC interface
-        hostBmcInterfaceDeleted:
-          type: boolean
-          description: Whether the associated host BMC interface was deleted
-        dpuBmcInterfaceDeleted:
-          type: boolean
-          description: Whether the associated DPU BMC interface was deleted
-        dpuMachineIds:
-          type:
-            - array
-            - 'null'
-          items:
-            type: string
-          description: IDs of DPU Machines affected by the deletion
-        dpuMachineInterfaceIds:
-          type:
-            - array
-            - 'null'
-          items:
-            type: string
-          description: IDs of DPU Machine interfaces affected by the deletion
     NICoAPIError:
       title: NICoAPIError
       type: object

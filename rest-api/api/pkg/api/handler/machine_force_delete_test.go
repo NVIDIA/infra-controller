@@ -19,28 +19,8 @@ import (
 )
 
 func TestDeleteMachineHandlerForce(t *testing.T) {
-	t.Run("true proxies the complete force-delete request and returns resource IDs", func(t *testing.T) {
-		coreResp := &corev1.AdminForceDeleteMachineResponse{
-			AllDone:                       true,
-			ManagedHostMachineId:          "machine-1",
-			ManagedHostMachineInterfaceId: "interface-1",
-			InstanceId:                    "instance-1",
-			ManagedHostBmcIp:              "192.0.2.10",
-			DpuBmcIp:                      "192.0.2.11",
-			UfmUnregistrations:            2,
-			UfmUnregistrationPending:      true,
-			InitialLockdownState:          "Enabled",
-			MachineUnlocked:               true,
-			DpuMachineIds:                 []string{"dpu-1", "dpu-2"},
-			DpuMachineInterfaceIds:        []string{"dpu-interface-1", "dpu-interface-2"},
-			HostInterfacesDeleted:         true,
-			DpuInterfacesDeleted:          true,
-			HostBmcInterfaceAssociated:    true,
-			DpuBmcInterfaceAssociated:     true,
-			HostBmcInterfaceDeleted:       true,
-			DpuBmcInterfaceDeleted:        true,
-		}
-		fixture := common.NewTestSetupProviderMachineHandlerFixture(t, coreResp)
+	t.Run("true proxies the complete force-delete request and returns the standard accepted response", func(t *testing.T) {
+		fixture := common.NewTestSetupProviderMachineHandlerFixture(t, &corev1.AdminForceDeleteMachineResponse{})
 		handler := NewDeleteMachineHandler(fixture.DBSession, fixture.SiteClientPool, fixture.Config)
 
 		isAssigned := true
@@ -52,7 +32,7 @@ func TestDeleteMachineHandlerForce(t *testing.T) {
 
 		rec := fixture.Request(t, handler.Handle, http.MethodDelete, "/?force=true", nil, "")
 		require.Equal(t, http.StatusAccepted, rec.Code, rec.Body.String())
-		require.Equal(t, "application/vnd.nvidia.nico.machine-force-delete+json", rec.Header().Get("Content-Type"))
+		require.Equal(t, "application/json", rec.Header().Get("Content-Type"))
 		require.Equal(t, corev1.Forge_AdminForceDeleteMachine_FullMethodName, fixture.ProxiedReq.FullMethod)
 
 		var coreReq corev1.AdminForceDeleteMachineRequest
@@ -66,28 +46,9 @@ func TestDeleteMachineHandlerForce(t *testing.T) {
 		require.False(t, coreReq.GetDeleteRetainedBootInterfaces())
 		require.True(t, coreReq.GetAllowDeleteWithInstanceType())
 
-		var apiResp model.APIMachineForceDeleteResponse
+		var apiResp model.APIMessageResponse
 		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &apiResp))
-		require.Equal(t, model.APIMachineForceDeleteResponse{
-			AllDone:                       true,
-			ManagedHostMachineID:          "machine-1",
-			ManagedHostMachineInterfaceID: "interface-1",
-			InstanceID:                    "instance-1",
-			ManagedHostBMCIP:              "192.0.2.10",
-			DPUBMCIP:                      "192.0.2.11",
-			UFMUnregistrations:            2,
-			UFMUnregistrationPending:      true,
-			InitialLockdownState:          "Enabled",
-			MachineUnlocked:               true,
-			HostInterfacesDeleted:         true,
-			DPUInterfacesDeleted:          true,
-			HostBMCInterfaceAssociated:    true,
-			DPUBMCInterfaceAssociated:     true,
-			HostBMCInterfaceDeleted:       true,
-			DPUBMCInterfaceDeleted:        true,
-			DPUMachineIDs:                 []string{"dpu-1", "dpu-2"},
-			DPUMachineInterfaceIDs:        []string{"dpu-interface-1", "dpu-interface-2"},
-		}, apiResp)
+		require.Equal(t, model.NewAPIDeletionAcceptedResponse(), apiResp)
 	})
 
 	t.Run("false preserves normal deletion safeguards", func(t *testing.T) {

@@ -1802,39 +1802,18 @@ func (umh DeleteMachineHandler) Handle(c echo.Context) error {
 			return cutil.NewAPIErrorResponse(c, http.StatusInternalServerError, "Failed to retrieve workflow client for Site", nil)
 		}
 
-		coreResp := &corev1.AdminForceDeleteMachineResponse{}
 		apiErr := common.ExecuteCoreGRPC(ctx, stc, corev1.Forge_AdminForceDeleteMachine_FullMethodName, &corev1.AdminForceDeleteMachineRequest{
 			HostQuery:                   machine.ControllerMachineID,
 			DeleteInterfaces:            true,
 			DeleteBmcInterfaces:         true,
 			AllowDeleteWithInstanceType: true,
-		}, coreResp, machine.Site.ID.String())
+		}, nil, machine.Site.ID.String())
 		if apiErr != nil {
 			logAPIError(logger, apiErr, "Failed to force delete Machine via Core gRPC proxy")
 			return cutil.NewAPIErrorResponse(c, apiErr.Code, apiErr.Message, nil)
 		}
 
-		c.Response().Header().Set(echo.HeaderContentType, "application/vnd.nvidia.nico.machine-force-delete+json")
-		return c.JSON(http.StatusAccepted, model.APIMachineForceDeleteResponse{
-			AllDone:                       coreResp.GetAllDone(),
-			ManagedHostMachineID:          coreResp.GetManagedHostMachineId(),
-			ManagedHostMachineInterfaceID: coreResp.GetManagedHostMachineInterfaceId(),
-			InstanceID:                    coreResp.GetInstanceId(),
-			ManagedHostBMCIP:              coreResp.GetManagedHostBmcIp(),
-			DPUBMCIP:                      coreResp.GetDpuBmcIp(),
-			UFMUnregistrations:            coreResp.GetUfmUnregistrations(),
-			UFMUnregistrationPending:      coreResp.GetUfmUnregistrationPending(),
-			InitialLockdownState:          coreResp.GetInitialLockdownState(),
-			MachineUnlocked:               coreResp.GetMachineUnlocked(),
-			HostInterfacesDeleted:         coreResp.GetHostInterfacesDeleted(),
-			DPUInterfacesDeleted:          coreResp.GetDpuInterfacesDeleted(),
-			HostBMCInterfaceAssociated:    coreResp.GetHostBmcInterfaceAssociated(),
-			DPUBMCInterfaceAssociated:     coreResp.GetDpuBmcInterfaceAssociated(),
-			HostBMCInterfaceDeleted:       coreResp.GetHostBmcInterfaceDeleted(),
-			DPUBMCInterfaceDeleted:        coreResp.GetDpuBmcInterfaceDeleted(),
-			DPUMachineIDs:                 coreResp.GetDpuMachineIds(),
-			DPUMachineInterfaceIDs:        coreResp.GetDpuMachineInterfaceIds(),
-		})
+		return c.JSON(http.StatusAccepted, model.NewAPIDeletionAcceptedResponse())
 	}
 
 	err = cdb.WithTx(ctx, umh.dbSession, func(tx *cdb.Tx) error {

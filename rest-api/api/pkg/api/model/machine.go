@@ -115,29 +115,6 @@ type APIMachineUpdateRequest struct {
 	HealthIssue *APIMachineHealthIssue `json:"healthIssue"`
 }
 
-// APIMachineForceDeleteResponse describes the resources affected by a forced
-// Machine deletion in NICo Core.
-type APIMachineForceDeleteResponse struct {
-	AllDone                       bool     `json:"allDone"`
-	ManagedHostMachineID          string   `json:"managedHostMachineId"`
-	ManagedHostMachineInterfaceID string   `json:"managedHostMachineInterfaceId"`
-	InstanceID                    string   `json:"instanceId"`
-	ManagedHostBMCIP              string   `json:"managedHostBmcIp"`
-	DPUBMCIP                      string   `json:"dpuBmcIp"`
-	UFMUnregistrations            uint32   `json:"ufmUnregistrations"`
-	UFMUnregistrationPending      bool     `json:"ufmUnregistrationPending"`
-	InitialLockdownState          string   `json:"initialLockdownState"`
-	MachineUnlocked               bool     `json:"machineUnlocked"`
-	HostInterfacesDeleted         bool     `json:"hostInterfacesDeleted"`
-	DPUInterfacesDeleted          bool     `json:"dpuInterfacesDeleted"`
-	HostBMCInterfaceAssociated    bool     `json:"hostBmcInterfaceAssociated"`
-	DPUBMCInterfaceAssociated     bool     `json:"dpuBmcInterfaceAssociated"`
-	HostBMCInterfaceDeleted       bool     `json:"hostBmcInterfaceDeleted"`
-	DPUBMCInterfaceDeleted        bool     `json:"dpuBmcInterfaceDeleted"`
-	DPUMachineIDs                 []string `json:"dpuMachineIds"`
-	DPUMachineInterfaceIDs        []string `json:"dpuMachineInterfaceIds"`
-}
-
 // IsOnlineRepair reports whether this request is for in-pool online repair (enter or exit).
 func (mur *APIMachineUpdateRequest) IsOnlineRepair() bool {
 	return mur.OnlineRepair != nil
