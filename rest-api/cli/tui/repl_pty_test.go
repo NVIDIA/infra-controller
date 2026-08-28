@@ -310,7 +310,7 @@ func TestCLIRegression_RealTerminalAndNonInteractive(t *testing.T) {
 		terminal.send(t, "y\r")
 		terminal.waitFor(t, "Deletion request was accepted")
 		machineDeleteTranscript := terminal.transcript()[machineDeleteStart:]
-		assert.Contains(t, machineDeleteTranscript, "without stopping its tenant workload")
+		assert.Contains(t, machineDeleteTranscript, "without first stopping its tenant workload")
 
 		// Flags preceding a generated path argument must not disable
 		// resource-name completion, and the structured API error must render.

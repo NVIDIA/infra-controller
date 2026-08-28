@@ -171,7 +171,7 @@ func addMachineDeleteForceFlag(
 		machineID = positionalArgs[0]
 	}
 	force, err := PromptConfirm(fmt.Sprintf(
-		"Force delete Machine %s? This deletes any attached Instance without stopping its tenant workload and removes the Machine's host, DPU, and BMC interfaces.",
+		"Force delete Machine %s? This deletes any attached Instance without first stopping its tenant workload and removes the Machine's host, DPU, and BMC interfaces.",
 		machineID,
 	))
 	if err != nil || !force {
