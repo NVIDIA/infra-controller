@@ -7533,6 +7533,10 @@ async fn test_extension_services_status_observation(
         .observations
         .extension_services
         .get(&mh.dpu().id)
+        .and_then(|observations| {
+            observations
+                .for_service_type(model::extension_service::ExtensionServiceType::KubernetesPod)
+        })
         .unwrap();
 
     assert_eq!(

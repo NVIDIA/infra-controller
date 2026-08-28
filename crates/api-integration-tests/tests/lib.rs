@@ -1221,14 +1221,11 @@ where
                 // machine-a-tron sends direct host DHCP through the DPU network.
                 host_inband_dhcp_relay_address: Some(Ipv4Addr::new(10, 10, 11, 2)),
                 bmc_dhcp_relay_address: TEST_BMC_DHCP_RELAY_ADDRESS,
-                vpc_count: 0,
-                subnets_per_vpc: 0,
                 run_interval_idle: Duration::from_secs(1),
                 run_interval_working: Duration::from_millis(100),
                 network_status_run_interval: Duration::from_secs(1),
                 scout_run_interval: Duration::from_secs(1),
                 discovery_retry_interval: Duration::from_millis(100),
-                network_virtualization_type: None,
                 dpus_in_nic_mode,
                 dpu_firmware_versions: None,
                 host_firmware_versions: None,
@@ -1241,7 +1238,6 @@ where
         log_format: LogFormat::Compact,
         bmc_mock_port: 0, // unused, we're using dynamic ports on localhost
         bmc_mock_certs_dir: None,
-        tui_enabled: false,
         configure_carbide_bmc_proxy_host: None,
         persist_dir: None,
         cleanup_on_quit: false,
@@ -1302,15 +1298,16 @@ fn assert_relay_selection(
     );
 
     for dpu in machine_handle.dpus() {
-        let details = dpu.host_details();
-        let dpu_bmc_ip: Ipv4Addr = details.oob_ip.parse()?;
+        let dpu_bmc_ip = dpu.bmc_ip().context("DPU doesn't have BMC IP")?;
         eyre::ensure!(
             TEST_BMC_NETWORK_PREFIX.contains(&dpu_bmc_ip),
             "DPU BMC DHCP used the underlay relay: {dpu_bmc_ip}"
         );
 
         if !dpus_in_nic_mode {
-            let dpu_underlay_ip: Ipv4Addr = details.machine_ip.parse()?;
+            let dpu_underlay_ip = dpu
+                .machine_ip()
+                .context("DPU doesn't have machine IP address")?;
             eyre::ensure!(
                 dpu_underlay_ip.octets()[..3] == underlay_dhcp_relay_address.octets()[..3],
                 "DPU OOB boot DHCP used the BMC relay: {dpu_underlay_ip}"
