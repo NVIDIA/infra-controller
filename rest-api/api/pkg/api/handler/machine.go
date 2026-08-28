@@ -1822,6 +1822,23 @@ func deleteForceDeletedMachineRecords(ctx context.Context, tx *cdb.Tx, dbSession
 		}
 	}
 
+	mitDAO := cdbm.NewMachineInstanceTypeDAO(dbSession)
+	machineInstanceTypes, _, err := mitDAO.GetAll(
+		ctx,
+		tx,
+		cdbm.MachineInstanceTypeFilterInput{MachineID: &machineID},
+		cdbp.PageInput{Limit: cutil.GetPtr(cdbp.TotalLimit)},
+		nil,
+	)
+	if err != nil {
+		return fmt.Errorf("retrieve Machine Instance Type associations for local force-delete cleanup: %w", err)
+	}
+	for _, machineInstanceType := range machineInstanceTypes {
+		if err = mitDAO.Delete(ctx, tx, machineInstanceType.ID, false); err != nil {
+			return fmt.Errorf("delete Machine Instance Type association for local force-delete cleanup: %w", err)
+		}
+	}
+
 	if err = mDAO.Delete(ctx, tx, machineID, false); err != nil {
 		return fmt.Errorf("delete Machine for local force-delete cleanup: %w", err)
 	}
@@ -2088,7 +2105,7 @@ func (umh DeleteMachineHandler) Handle(c echo.Context) error {
 			DeleteBmcInterfaces:         true,
 			AllowDeleteWithInstanceType: true,
 		}, nil, forceMachine.Site.ID.String())
-		if apiErr != nil {
+		if apiErr != nil && apiErr.Code != http.StatusNotFound {
 			logAPIError(logger, apiErr, "Failed to force delete Machine via Core gRPC proxy")
 			return cutil.NewAPIErrorResponse(c, apiErr.Code, apiErr.Message, nil)
 		}

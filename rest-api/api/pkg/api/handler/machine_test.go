@@ -18,6 +18,7 @@ import (
 	"github.com/NVIDIA/infra-controller/rest-api/api/pkg/api/handler/util/common"
 	"github.com/NVIDIA/infra-controller/rest-api/api/pkg/api/model"
 	"github.com/NVIDIA/infra-controller/rest-api/api/pkg/api/pagination"
+	"github.com/NVIDIA/infra-controller/rest-api/common/pkg/grpcproxy"
 	"github.com/NVIDIA/infra-controller/rest-api/common/pkg/otelecho"
 	cutil "github.com/NVIDIA/infra-controller/rest-api/common/pkg/util"
 	corev1 "github.com/NVIDIA/infra-controller/rest-api/proto/core/gen/v1"
@@ -40,6 +41,8 @@ import (
 	tsdkConverter "go.temporal.io/sdk/converter"
 	tmocks "go.temporal.io/sdk/mocks"
 	tp "go.temporal.io/sdk/temporal"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	sc "github.com/NVIDIA/infra-controller/rest-api/api/pkg/client/site"
 	authz "github.com/NVIDIA/infra-controller/rest-api/auth/pkg/authorization"
@@ -3245,12 +3248,14 @@ func TestMachineHandler_Delete(t *testing.T) {
 	}
 
 	forceTests := []struct {
-		name        string
-		query       string
-		wantStatus  int
-		wantMessage string
+		name         string
+		query        string
+		coreNotFound bool
+		wantStatus   int
+		wantMessage  string
 	}{
 		{name: "true proxies the complete force-delete request", query: "/?force=true", wantStatus: http.StatusAccepted},
+		{name: "Core not found completes retryable local cleanup", query: "/?force=true", coreNotFound: true, wantStatus: http.StatusAccepted},
 		{name: "invalid value is rejected before deletion", query: "/?force=definitely", wantStatus: http.StatusBadRequest, wantMessage: "Invalid force query parameter, expected a boolean value"},
 	}
 	for _, tc := range forceTests {
@@ -3258,6 +3263,24 @@ func TestMachineHandler_Delete(t *testing.T) {
 			fixture := common.NewTestSetupProviderMachineHandlerFixture(t, &corev1.AdminForceDeleteMachineResponse{})
 			handler := NewDeleteMachineHandler(fixture.DBSession, fixture.SiteClientPool, fixture.Config)
 			var linkedInstanceID uuid.UUID
+			var linkedMachineInstanceTypeID uuid.UUID
+
+			if tc.coreNotFound {
+				tsc := fixture.SiteClientPool.IDClientMap[fixture.SiteID].(*tmocks.Client)
+				tsc.ExpectedCalls = nil
+				wrun := &tmocks.WorkflowRun{}
+				wrun.On("Get", mock.Anything, mock.Anything).Return(status.Error(codes.NotFound, "Machine not found"))
+				tsc.On(
+					"ExecuteWorkflow",
+					mock.Anything,
+					mock.Anything,
+					mock.Anything,
+					mock.MatchedBy(func(req grpcproxy.Request) bool {
+						*fixture.ProxiedReq = req
+						return true
+					}),
+				).Return(wrun, nil)
+			}
 
 			if tc.wantStatus == http.StatusAccepted {
 				isAssigned := true
@@ -3275,6 +3298,8 @@ func TestMachineHandler_Delete(t *testing.T) {
 					false,
 				)
 				require.NoError(t, err)
+				machineInstanceType := common.TestBuildMachineInstanceType(t, fixture.DBSession, machine, machine.InstanceType)
+				linkedMachineInstanceTypeID = machineInstanceType.ID
 				user := fixture.User.(*cdbm.User)
 				tenant := common.TestBuildTenant(t, fixture.DBSession, "force-delete-tenant", "force-delete-tenant-org", user)
 				vpc := common.TestBuildVPC(t, fixture.DBSession, "force-delete-vpc", machine.InfrastructureProvider, tenant, machine.Site, nil, nil, nil, cdbm.VpcStatusReady, user)
@@ -3312,6 +3337,8 @@ func TestMachineHandler_Delete(t *testing.T) {
 			require.JSONEq(t, `{"message":"Deletion request was accepted"}`, rec.Body.String())
 
 			_, err := cdbm.NewMachineDAO(fixture.DBSession).GetByID(context.Background(), nil, fixture.MachineID, nil, false)
+			require.ErrorIs(t, err, cdb.ErrDoesNotExist)
+			_, err = cdbm.NewMachineInstanceTypeDAO(fixture.DBSession).GetByID(context.Background(), nil, linkedMachineInstanceTypeID, nil)
 			require.ErrorIs(t, err, cdb.ErrDoesNotExist)
 			_, err = cdbm.NewInstanceDAO(fixture.DBSession).GetByID(context.Background(), nil, linkedInstanceID, nil)
 			require.ErrorIs(t, err, cdb.ErrDoesNotExist)
