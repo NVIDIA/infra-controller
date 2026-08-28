@@ -1411,6 +1411,7 @@ pub(crate) async fn trigger_dpu_reprovisioning(
         &machine_id,
         LoadSnapshotOptions {
             include_history: false,
+            // Needed to enforce the allow_reset_with_instance acknowledgment below.
             // The attached extension services checked below live on the instance.
             include_instance_data: true,
             host_health_config: api.runtime_config.host_health,
@@ -1459,6 +1460,53 @@ pub(crate) async fn trigger_dpu_reprovisioning(
             reject_dpf_migration_that_would_strand_extension_services(api, &snapshot, &machine_id)?;
 
             let initiator = req.initiator().as_str_name();
+
+            let ready_state = matches!(
+                snapshot.managed_state,
+                ManagedHostState::Ready
+                    | ManagedHostState::Assigned {
+                        instance_state: InstanceState::Ready,
+                    }
+            );
+
+            // A per-DPU request from a non-ready host is never reconciled.
+            let is_host_reset = if machine_id.machine_type().is_dpu() {
+                if !ready_state {
+                    return Err(CarbideError::InvalidArgument(format!(
+                        "per-DPU reprovisioning of {machine_id} is only supported when the host is ready; use a host-level reset to reprovision from other states"
+                    ))
+                    .into());
+                }
+                false
+            } else if ready_state {
+                false
+            } else {
+                // A host-level reset is allowed from any state except force deletion, which must never be resurrected.
+                if matches!(snapshot.managed_state, ManagedHostState::ForceDeletion) {
+                    return Err(CarbideError::InvalidArgument(format!(
+                        "machine {machine_id} is being force-deleted and cannot be reset"
+                    ))
+                    .into());
+                }
+                true
+            };
+
+            if is_host_reset && !snapshot.host_snapshot.config.dpf.used_for_ingestion {
+                return Err(CarbideError::InvalidArgument(format!(
+                    "machine {machine_id} was not ingested via DPF; reprovisioning from a non-ready state is only supported for DPF-managed DPUs"
+                ))
+                .into());
+            }
+
+            // A non-ready reset of an assigned host tears down the live instance, so require the ack.
+            // The controller performs the actual deletion during the Reset flow; here we only enforce the ack.
+            if is_host_reset && snapshot.instance.is_some() && !req.allow_reset_with_instance {
+                return Err(CarbideError::InvalidArgument(format!(
+                    "machine {machine_id} is assigned to a live instance; set allow_reset_with_instance to acknowledge disrupting it"
+                ))
+                .into());
+            }
+
             if machine_id.machine_type().is_dpu() {
                 db::machine::trigger_dpu_reprovisioning_request(
                     &machine_id,
@@ -1467,6 +1515,11 @@ pub(crate) async fn trigger_dpu_reprovisioning(
                     req.update_firmware,
                 )
                 .await?;
+            } else if is_host_reset {
+                for dpu_snapshot in &snapshot.dpu_snapshots {
+                    db::machine::trigger_dpu_reset_request(&dpu_snapshot.id, &mut txn, initiator)
+                        .await?;
+                }
             } else {
                 for dpu_snapshot in &snapshot.dpu_snapshots {
                     db::machine::trigger_dpu_reprovisioning_request(

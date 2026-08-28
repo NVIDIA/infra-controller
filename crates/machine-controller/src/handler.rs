@@ -72,17 +72,18 @@ use model::machine::nvlink::nvlink_config_synced;
 use model::machine::{
     AttestationMode, BomValidating, BomValidatingContext, CleanupContext, CleanupState,
     CreateBossVolumeContext, CreateBossVolumeState, DecommissioningState, DpuDiscoveringState,
-    DpuInitNextStateResolver, DpuInitState, FactoryResetBmcState, FailureCause, FailureDetails,
-    FailureSource, HostPlatformConfigurationState, HostReprovisionState, InitialResetPhase,
-    InstallDpuOsState, InstanceNextStateResolver, InstanceState, LockdownInfo, LockdownState,
-    MAX_FIRMWARE_UPGRADE_RETRIES, Machine, MachineLastRebootRequested,
-    MachineLastRebootRequestedMode, MachineNextStateResolver, MachineState,
-    MachineValidationContext, ManagedHostState, ManagedHostStateSnapshot, MeasuringState,
-    NetworkConfigUpdateState, NextStateBFBSupport, PerformPowerOperation, PowerDrainState,
-    PowerState, ReadyBootConfigPostLockAction, ReadyBootConfigState, ReprovisionState, RetryInfo,
-    SecureEraseBossContext, SecureEraseBossState, SetBootOrderInfo, SetBootOrderState,
-    SetSecureBootState, SpdmMeasuringState, StateMachineArea, UefiSetupInfo, UefiSetupState,
-    UnlockHostState, ValidationState, dpf_based_dpu_provisioning_possible, get_display_ids,
+    DpuInitNextStateResolver, DpuInitState, DpuReprovisionStates, FactoryResetBmcState,
+    FailureCause, FailureDetails, FailureSource, HostPlatformConfigurationState,
+    HostReprovisionState, InitialResetPhase, InstallDpuOsState, InstanceNextStateResolver,
+    InstanceState, LockdownInfo, LockdownState, MAX_FIRMWARE_UPGRADE_RETRIES, Machine,
+    MachineLastRebootRequested, MachineLastRebootRequestedMode, MachineNextStateResolver,
+    MachineState, MachineValidationContext, ManagedHostState, ManagedHostStateSnapshot,
+    MeasuringState, NetworkConfigUpdateState, NextStateBFBSupport, PerformPowerOperation,
+    PowerDrainState, PowerState, ReadyBootConfigPostLockAction, ReadyBootConfigState,
+    ReprovisionState, ResetState, RetryInfo, SecureEraseBossContext, SecureEraseBossState,
+    SetBootOrderInfo, SetBootOrderState, SetSecureBootState, SpdmMeasuringState, StateMachineArea,
+    UefiSetupInfo, UefiSetupState, UnlockHostState, ValidationState,
+    dpf_based_dpu_provisioning_possible, get_display_ids,
 };
 use model::machine_boot_interface::MachineBootInterfaceTarget;
 use model::power_manager::PowerHandlingOutcome;
@@ -105,7 +106,7 @@ use crate::config::{
     FirmwareGlobal, MachineStateHandlerSiteConfig, MachineValidationConfig, TimePeriod,
 };
 use crate::context::{MachineStateHandlerContextObjects, MachineStateHandlerServices};
-use crate::dpf::DpfOperations;
+use crate::dpf::{DpfOperations, dpf_dpudevices_and_dpunode_crs_noexist};
 use crate::handler::firmware_artifact::ResolvedFirmwareArtifactSource;
 use crate::health_report::{
     create_host_update_health_report_dpufw, create_host_update_health_report_hostfw,
@@ -786,6 +787,16 @@ impl MachineStateHandler {
             {
                 return Ok(StateHandlerOutcome::transition(next_state));
             }
+        }
+
+        // Initial `mh reset` from a non-ready state (eligibility enforced at the API).
+        // Excludes the restart path above, which needs started_at.is_some().
+        if non_ready_initial_reset_needed(&mh_snapshot.dpu_snapshots, &mh_state) {
+            // Enter the reset flow: delete the instance, then the DPF CRs, then
+            // hand off to the non-ready reprovision flow that recreates them.
+            return Ok(StateHandlerOutcome::transition(ManagedHostState::Reset {
+                reset_state: ResetState::DeletingInstance,
+            }));
         }
 
         // Don't update failed state failure cause everytime. Record first failure cause only,
@@ -1888,6 +1899,9 @@ impl MachineStateHandler {
                 }
                 Ok(StateHandlerOutcome::do_nothing())
             }
+            ManagedHostState::Reset { reset_state } => {
+                self.handle_reset(reset_state, mh_snapshot, ctx).await
+            }
             ManagedHostState::HostReprovision { .. } => {
                 self.host_upgrade
                     .handle_host_reprovision(
@@ -2270,6 +2284,190 @@ impl MachineStateHandler {
 
         Ok(None)
     }
+
+    /// Hand off a host reset to reprovisioning: rebuild all DPUs that had a reset
+    /// requested, convert each reset into a reprovision, and run full ingestion.
+    async fn start_non_ready_reset(
+        &self,
+        state: &ManagedHostStateSnapshot,
+        ctx: &mut StateHandlerContext<'_, MachineStateHandlerContextObjects>,
+    ) -> Result<ManagedHostState, StateHandlerError> {
+        let dpus_for_reprov = state
+            .dpu_snapshots
+            .iter()
+            .filter(|d| d.reset_requested.is_some())
+            .collect_vec();
+
+        for dpu in &dpus_for_reprov {
+            handler_restart_dpu(dpu, ctx, state.host_snapshot.config.dpf.used_for_ingestion)
+                .await?;
+            // Convert the reset into a reprovision: create reprovision_requested,
+            // stamp its start time, and stamp reset_requested.started_at so the
+            // hinge won't re-enter the reset flow while reprovisioning runs.
+            let initiator = dpu
+                .reset_requested
+                .as_ref()
+                .map(|r| r.initiator.clone())
+                .unwrap_or_default();
+            ctx.pending_db_writes
+                .push(MachineWriteOp::TriggerDpuReprovision {
+                    machine_id: dpu.id,
+                    initiator,
+                });
+            ctx.pending_db_writes
+                .push(MachineWriteOp::UpdateDpuReprovisionStartTime {
+                    machine_id: dpu.id,
+                    time: Utc::now(),
+                });
+            ctx.pending_db_writes
+                .push(MachineWriteOp::UpdateResetStartTime { machine_id: dpu.id });
+        }
+
+        // A reset abandons whatever failed before it. Any surviving failure record on
+        // the host or a reprovisioning DPU would re-park the host via `get_failed_state`
+        // on the next sweep, so clear them all regardless of the current state variant.
+        ctx.pending_db_writes
+            .push(MachineWriteOp::ClearFailureDetails {
+                machine_id: state.host_snapshot.id,
+            });
+        for dpu in &dpus_for_reprov {
+            ctx.pending_db_writes
+                .push(MachineWriteOp::ClearFailureDetails { machine_id: dpu.id });
+        }
+
+        set_managed_host_topology_update_needed(
+            ctx.pending_db_writes,
+            &state.host_snapshot,
+            &dpus_for_reprov,
+        );
+
+        // Build DPUReprovision directly: the helper rejects non-Ready/non-DPUReprovision outer states.
+        let starting_state = ReprovisionState::next_substate_based_on_bfb_support(
+            self.enable_secure_boot,
+            state,
+            ctx.services.site_config.dpf_enabled,
+        );
+        // Cover every current DPU so a late-arriving/unrequested DPU still has a state entry.
+        let dpu_ids_for_reprov = dpus_for_reprov.iter().map(|d| &d.id).collect_vec();
+        let states = state
+            .dpu_snapshots
+            .iter()
+            .map(|d| {
+                (
+                    d.id,
+                    if dpu_ids_for_reprov.contains(&&d.id) {
+                        starting_state.clone()
+                    } else {
+                        ReprovisionState::NotUnderReprovision
+                    },
+                )
+            })
+            .collect();
+        Ok(ManagedHostState::DPUReprovision {
+            dpu_states: DpuReprovisionStates { states },
+        })
+    }
+
+    /// Host reset: delete the instance and DPF CRs, wait until the CRs are
+    /// gone, then hand off to the non-ready reprovision flow.
+    async fn handle_reset(
+        &self,
+        reset_state: &ResetState,
+        state: &ManagedHostStateSnapshot,
+        ctx: &mut StateHandlerContext<'_, MachineStateHandlerContextObjects>,
+    ) -> Result<StateHandlerOutcome<ManagedHostState>, StateHandlerError> {
+        // Only the CR arms need DPF; instance deletion does not.
+        let require_dpf_sdk = || {
+            self.dpu_handler.dpf_sdk.as_deref().ok_or_else(|| {
+                StateHandlerError::GenericError(eyre!(
+                    "managed host {} reset requires DPF, but DPF is not configured",
+                    state.host_snapshot.id
+                ))
+            })
+        };
+
+        match reset_state {
+            ResetState::DeletingInstance => {
+                // Hard-delete the instance and release its network resources in
+                // one txn, like the Assigned termination flow. No instance is a
+                // no-op.
+                if let Some(instance) = state.instance.as_ref() {
+                    let mut txn = ctx.services.db_pool.begin().await?;
+                    db::instance::delete(instance.id, &mut txn)
+                        .await
+                        .map_err(|err| StateHandlerError::GenericError(err.into()))?;
+                    release_network_segments_with_vpc_prefix(
+                        &instance.config.network.interfaces,
+                        &mut txn,
+                    )
+                    .await?;
+                    release_vpc_dpu_loopback(
+                        state,
+                        self.instance_handler.common_pools.as_deref(),
+                        &mut txn,
+                    )
+                    .await?;
+                    return Ok(StateHandlerOutcome::transition(ManagedHostState::Reset {
+                        reset_state: ResetState::DeletingCrs,
+                    })
+                    .with_txn(txn));
+                }
+                Ok(StateHandlerOutcome::transition(ManagedHostState::Reset {
+                    reset_state: ResetState::DeletingCrs,
+                }))
+            }
+            ResetState::DeletingCrs => {
+                let dpf_sdk = require_dpf_sdk()?;
+                let host_dpf_id =
+                    state
+                        .host_snapshot
+                        .dpf_id()
+                        .ok_or_else(|| StateHandlerError::MissingData {
+                            object_id: state.host_snapshot.id.to_string(),
+                            missing: "dpf_id",
+                        })?;
+                let node_name = carbide_dpf::dpu_node_cr_name(&host_dpf_id);
+                dpf_sdk.delete_dpu_node(&node_name).await.map_err(|error| {
+                    StateHandlerError::GenericError(eyre!(
+                        "failed to delete DPUNode CR for managed host {}: {error}",
+                        state.host_snapshot.id
+                    ))
+                })?;
+                for dpu in &state.dpu_snapshots {
+                    let dpu_dpf_id =
+                        dpu.dpf_id().ok_or_else(|| StateHandlerError::MissingData {
+                            object_id: dpu.id.to_string(),
+                            missing: "dpf_id",
+                        })?;
+                    dpf_sdk
+                        .delete_dpu_device(&dpu_dpf_id)
+                        .await
+                        .map_err(|error| {
+                            StateHandlerError::GenericError(eyre!(
+                                "failed to delete DPUDevice CR for DPU {}: {error}",
+                                dpu.id
+                            ))
+                        })?;
+                }
+                Ok(StateHandlerOutcome::transition(ManagedHostState::Reset {
+                    reset_state: ResetState::WaitUntilCrsDeleted,
+                }))
+            }
+            ResetState::WaitUntilCrsDeleted => {
+                let dpf_sdk = require_dpf_sdk()?;
+                if !dpf_dpudevices_and_dpunode_crs_noexist(state, dpf_sdk)
+                    .await
+                    .map_err(|error| StateHandlerError::GenericError(error.into()))?
+                {
+                    return Ok(StateHandlerOutcome::wait(
+                        "waiting for reset DPF CRs to be deleted".to_string(),
+                    ));
+                }
+                let next = self.start_non_ready_reset(state, ctx).await?;
+                Ok(StateHandlerOutcome::transition(next))
+            }
+        }
+    }
 }
 
 fn is_reprovision_restartable_failure(
@@ -2348,6 +2546,30 @@ fn dpu_reprovisioning_needed(dpu_snapshots: &[Machine]) -> bool {
     dpu_snapshots
         .iter()
         .any(|x| x.reprovision_requested.is_some())
+}
+
+/// True when a non-ready `mh reset` request is waiting to start. The
+/// `started_at.is_none()` guard stops it re-firing once handoff has begun.
+fn non_ready_initial_reset_needed(
+    dpu_snapshots: &[Machine],
+    managed_state: &ManagedHostState,
+) -> bool {
+    // Never reset from force deletion (must not be resurrected) or mid DPU discovery.
+    if matches!(
+        managed_state,
+        ManagedHostState::ForceDeletion | ManagedHostState::DpuDiscoveringState { .. }
+    ) {
+        return false;
+    }
+    // Already inside the reset flow (deleting instance / CRs / waiting); don't re-fire the hinge.
+    if matches!(managed_state, ManagedHostState::Reset { .. }) {
+        return false;
+    }
+    dpu_snapshots.iter().any(|d| {
+        d.reset_requested
+            .as_ref()
+            .is_some_and(|r| r.started_at.is_none())
+    })
 }
 
 async fn handle_restart_verification(

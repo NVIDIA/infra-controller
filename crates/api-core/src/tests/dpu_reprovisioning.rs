@@ -29,7 +29,8 @@ use model::instance::status::tenant::TenantState;
 use model::machine::{
     DpuInitState, FailureCause, FailureDetails, FailureSource, InstallDpuOsState, InstanceState,
     Machine, MachineLastRebootRequestedMode, MachineState, ManagedHostState, PowerState,
-    ReprovisionState, SetBootOrderInfo, SetBootOrderState, StateMachineArea, UnlockHostState,
+    ReprovisionState, ResetState, SetBootOrderInfo, SetBootOrderState, StateMachineArea,
+    UnlockHostState,
 };
 use model::test_support::HardwareInfoTemplate;
 use rpc::forge::MachineArchitecture;
@@ -591,7 +592,8 @@ async fn test_dpu_for_reprovisioning_fail_if_maintenance_not_set(pool: sqlx::PgP
                     machine_id: mh.dpu().id.into(),
                     mode: rpc::forge::dpu_reprovisioning_request::Mode::Set as i32,
                     initiator: ::rpc::forge::UpdateInitiator::AdminCli as i32,
-                    update_firmware: true
+                    update_firmware: true,
+                    allow_reset_with_instance: false,
                 },
             ))
             .await
@@ -612,7 +614,8 @@ async fn test_dpu_for_reprovisioning_fail_if_state_is_not_ready(pool: sqlx::PgPo
                     machine_id: dpu_machine_id.into(),
                     mode: rpc::forge::dpu_reprovisioning_request::Mode::Set as i32,
                     initiator: ::rpc::forge::UpdateInitiator::AdminCli as i32,
-                    update_firmware: true
+                    update_firmware: true,
+                    allow_reset_with_instance: false,
                 },
             ))
             .await
@@ -1155,7 +1158,8 @@ async fn test_dpu_for_set_but_clear_failed(pool: sqlx::PgPool) {
                     machine_id: mh.dpu().id.into(),
                     mode: rpc::forge::dpu_reprovisioning_request::Mode::Clear as i32,
                     initiator: ::rpc::forge::UpdateInitiator::AdminCli as i32,
-                    update_firmware: true
+                    update_firmware: true,
+                    allow_reset_with_instance: false,
                 },
             ))
             .await
@@ -1492,6 +1496,7 @@ async fn test_restart_dpu_reprov(pool: sqlx::PgPool) {
                     mode: Mode::Restart as i32,
                     initiator: ::rpc::forge::UpdateInitiator::AdminCli as i32,
                     update_firmware: false,
+                    allow_reset_with_instance: false,
                 },
             ))
             .await
@@ -1620,6 +1625,411 @@ async fn test_restart_dpu_reprov_unassigned_host_boot_failure(pool: sqlx::PgPool
             .actions_since(&redfish_timepoint)
             .all_hosts(),
         vec![RedfishSimAction::Power(SystemPowerControl::ForceRestart)]
+    );
+}
+
+// A `mh reset` request (reset_requested, started_at == None) from a non-ready host
+// state is picked up by the controller and enters the reset flow at DeletingInstance,
+// abandoning the Failed state.
+#[crate::sqlx_test]
+async fn test_reprov_starts_from_non_ready_failed_state(pool: sqlx::PgPool) {
+    let env = create_test_env(pool).await;
+    let mh = common::api_fixtures::create_managed_host(&env).await;
+    let dpu_machine = mh.dpu();
+    mh.mark_machine_for_updates().await;
+
+    let failed_at = Utc::now();
+    let mut txn = env.pool.begin().await.unwrap();
+    db::machine::trigger_dpu_reset_request(&dpu_machine.id, &mut txn, "AdminCli")
+        .await
+        .unwrap();
+    db::machine::update_state(
+        &mut txn,
+        &mh.id,
+        &ManagedHostState::Failed {
+            machine_id: mh.id,
+            retry_count: 0,
+            details: FailureDetails {
+                cause: FailureCause::BiosSetupFailed {
+                    err: "wedged mid-ingestion".to_string(),
+                },
+                failed_at,
+                source: FailureSource::StateMachineArea(StateMachineArea::MainFlow),
+            },
+        },
+    )
+    .await
+    .unwrap();
+    txn.commit().await.unwrap();
+
+    let dpu = dpu_machine.next_iteration_machine(&env).await;
+    assert!(
+        matches!(
+            dpu.current_state(),
+            ManagedHostState::Reset {
+                reset_state: ResetState::DeletingInstance
+            }
+        ),
+        "expected Reset/DeletingInstance, got {:?}",
+        dpu.current_state()
+    );
+    // reset_requested.started_at is stamped only at handoff (end of the reset flow);
+    // the Reset state itself is the loop guard against re-firing here.
+    assert!(
+        dpu.reset_requested
+            .as_ref()
+            .is_some_and(|request| request.started_at.is_none())
+    );
+}
+
+// A plain reprovision request (not a reset) is left untouched in a non-ready state:
+// only a reset_requested marker opens the non-ready path.
+#[crate::sqlx_test]
+async fn test_normal_request_does_not_start_from_non_ready_state(pool: sqlx::PgPool) {
+    let env = create_test_env(pool).await;
+    let mh = common::api_fixtures::create_managed_host(&env).await;
+    let dpu_machine = mh.dpu();
+    mh.mark_machine_for_updates().await;
+
+    let failed_at = Utc::now();
+    let mut txn = env.pool.begin().await.unwrap();
+    db::machine::trigger_dpu_reprovisioning_request(&dpu_machine.id, &mut txn, "AdminCli", false)
+        .await
+        .unwrap();
+    db::machine::update_state(
+        &mut txn,
+        &mh.id,
+        &ManagedHostState::Failed {
+            machine_id: mh.id,
+            retry_count: 0,
+            details: FailureDetails {
+                cause: FailureCause::BiosSetupFailed {
+                    err: "wedged mid-ingestion".to_string(),
+                },
+                failed_at,
+                source: FailureSource::StateMachineArea(StateMachineArea::MainFlow),
+            },
+        },
+    )
+    .await
+    .unwrap();
+    txn.commit().await.unwrap();
+
+    let dpu = dpu_machine.next_iteration_machine(&env).await;
+    assert!(
+        !matches!(dpu.current_state(), ManagedHostState::DPUReprovision { .. }),
+        "reprovision must not start without the non-ready flag, got {:?}",
+        dpu.current_state()
+    );
+}
+
+// A non-ready reset of a host with a live instance is rejected without the acknowledgment.
+#[crate::sqlx_test]
+async fn test_non_ready_reset_with_instance_requires_ack(pool: sqlx::PgPool) {
+    Box::pin(test_non_ready_reset_with_instance_requires_ack_impl(pool)).await;
+}
+
+async fn test_non_ready_reset_with_instance_requires_ack_impl(pool: sqlx::PgPool) {
+    let env = create_test_env(pool).await;
+    let segment_id = env.create_vpc_and_tenant_segment().await;
+    let mh = create_managed_host(&env).await;
+    mh.instance_builer(&env)
+        .single_interface_network_config(segment_id)
+        .build()
+        .await;
+
+    wedge_assigned_host_into_failed_for_reset(&env, &mh).await;
+
+    match env
+        .api
+        .trigger_dpu_reprovisioning(tonic::Request::new(
+            ::rpc::forge::DpuReprovisioningRequest {
+                dpu_id: None,
+                machine_id: mh.id.into(),
+                mode: Mode::Set as i32,
+                initiator: ::rpc::forge::UpdateInitiator::AdminCli as i32,
+                update_firmware: false,
+                allow_reset_with_instance: false,
+            },
+        ))
+        .await
+    {
+        Ok(_) => panic!("reset of an assigned host must fail without allow_reset_with_instance"),
+        Err(e) => {
+            assert_eq!(e.code(), tonic::Code::InvalidArgument);
+            assert!(e.message().contains("live instance"));
+        }
+    }
+
+    let mut txn = env.pool.begin().await.unwrap();
+    let dpu = mh.dpu().db_machine(&mut txn).await;
+    assert!(
+        dpu.reset_requested.is_none(),
+        "a rejected reset must not write a reset request"
+    );
+}
+
+// With the acknowledgment the same reset is accepted and writes a reset request.
+#[crate::sqlx_test]
+async fn test_non_ready_reset_with_instance_accepts_ack(pool: sqlx::PgPool) {
+    Box::pin(test_non_ready_reset_with_instance_accepts_ack_impl(pool)).await;
+}
+
+async fn test_non_ready_reset_with_instance_accepts_ack_impl(pool: sqlx::PgPool) {
+    let env = create_test_env(pool).await;
+    let segment_id = env.create_vpc_and_tenant_segment().await;
+    let mh = create_managed_host(&env).await;
+    mh.instance_builer(&env)
+        .single_interface_network_config(segment_id)
+        .build()
+        .await;
+
+    wedge_assigned_host_into_failed_for_reset(&env, &mh).await;
+
+    env.api
+        .trigger_dpu_reprovisioning(tonic::Request::new(
+            ::rpc::forge::DpuReprovisioningRequest {
+                dpu_id: None,
+                machine_id: mh.id.into(),
+                mode: Mode::Set as i32,
+                initiator: ::rpc::forge::UpdateInitiator::AdminCli as i32,
+                update_firmware: false,
+                allow_reset_with_instance: true,
+            },
+        ))
+        .await
+        .expect("acknowledged reset of an assigned host must be accepted");
+
+    let mut txn = env.pool.begin().await.unwrap();
+    let dpu = mh.dpu().db_machine(&mut txn).await;
+    let request = dpu
+        .reset_requested
+        .as_ref()
+        .expect("acknowledged reset must write a reset request");
+    assert!(
+        request.started_at.is_none(),
+        "a fresh reset request must not be marked started yet"
+    );
+}
+
+// An acknowledged reset leaves the instance untouched in the API; the controller
+// hard-deletes it during the Reset flow, so the API must not tombstone it.
+#[crate::sqlx_test]
+async fn test_non_ready_reset_leaves_instance_for_controller(pool: sqlx::PgPool) {
+    Box::pin(test_non_ready_reset_leaves_instance_for_controller_impl(
+        pool,
+    ))
+    .await;
+}
+
+async fn test_non_ready_reset_leaves_instance_for_controller_impl(pool: sqlx::PgPool) {
+    let env = create_test_env(pool).await;
+    let segment_id = env.create_vpc_and_tenant_segment().await;
+    let mh = create_managed_host(&env).await;
+    mh.instance_builer(&env)
+        .single_interface_network_config(segment_id)
+        .build()
+        .await;
+
+    wedge_assigned_host_into_failed_for_reset(&env, &mh).await;
+
+    env.api
+        .trigger_dpu_reprovisioning(tonic::Request::new(
+            ::rpc::forge::DpuReprovisioningRequest {
+                dpu_id: None,
+                machine_id: mh.id.into(),
+                mode: Mode::Set as i32,
+                initiator: ::rpc::forge::UpdateInitiator::AdminCli as i32,
+                update_firmware: false,
+                allow_reset_with_instance: true,
+            },
+        ))
+        .await
+        .expect("acknowledged reset of an assigned host must be accepted");
+
+    let mut txn = env.pool.begin().await.unwrap();
+    let snapshot = db::managed_host::load_snapshot(
+        txn.as_mut(),
+        &mh.id,
+        model::machine::LoadSnapshotOptions {
+            include_history: false,
+            include_instance_data: true,
+            host_health_config: env.config.host_health,
+        },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let instance = snapshot
+        .instance
+        .expect("instance row must still exist; the API must not delete it");
+    assert!(
+        instance.deleted.is_none(),
+        "the API must leave the instance live; the controller deletes it during the Reset flow"
+    );
+}
+
+// The controller hard-deletes the tenant instance during the reset flow
+// (DeletingInstance), so by the time the host advances to DeletingCrs the
+// instance row is gone from the database entirely (not merely tombstoned).
+#[crate::sqlx_test]
+async fn test_non_ready_reset_deletes_instance_in_controller(pool: sqlx::PgPool) {
+    Box::pin(test_non_ready_reset_deletes_instance_in_controller_impl(
+        pool,
+    ))
+    .await;
+}
+
+async fn test_non_ready_reset_deletes_instance_in_controller_impl(pool: sqlx::PgPool) {
+    let env = create_test_env(pool).await;
+    let segment_id = env.create_vpc_and_tenant_segment().await;
+    let mh = create_managed_host(&env).await;
+    mh.instance_builer(&env)
+        .single_interface_network_config(segment_id)
+        .build()
+        .await;
+
+    wedge_assigned_host_into_failed_for_reset(&env, &mh).await;
+
+    env.api
+        .trigger_dpu_reprovisioning(tonic::Request::new(
+            ::rpc::forge::DpuReprovisioningRequest {
+                dpu_id: None,
+                machine_id: mh.id.into(),
+                mode: Mode::Set as i32,
+                initiator: ::rpc::forge::UpdateInitiator::AdminCli as i32,
+                update_firmware: false,
+                allow_reset_with_instance: true,
+            },
+        ))
+        .await
+        .expect("acknowledged reset of an assigned host must be accepted");
+
+    // Run until the host clears the instance step and reaches DeletingCrs. We stop
+    // there so the CR-deletion step (which needs a DPF SDK) never runs.
+    env.run_machine_state_controller_iteration_until_state_condition(&mh.id, 5, |machine| {
+        matches!(
+            machine.current_state(),
+            ManagedHostState::Reset {
+                reset_state: ResetState::DeletingCrs
+            }
+        )
+    })
+    .await;
+
+    let mut txn = env.pool.begin().await.unwrap();
+    let snapshot = db::managed_host::load_snapshot(
+        txn.as_mut(),
+        &mh.id,
+        model::machine::LoadSnapshotOptions {
+            include_history: false,
+            include_instance_data: true,
+            host_health_config: env.config.host_health,
+        },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(
+        snapshot.instance.is_none(),
+        "the controller must hard-delete the instance during the reset flow"
+    );
+}
+
+// Put a DPF-ingested, instance-assigned host into a non-ready state with the HostUpdateInProgress precondition.
+async fn wedge_assigned_host_into_failed_for_reset(env: &TestEnv, mh: &TestManagedHost) {
+    mh.mark_machine_for_updates().await;
+    let mut txn = env.pool.begin().await.unwrap();
+    db::machine::mark_machine_ingestion_done_with_dpf(&mut txn, &mh.id)
+        .await
+        .unwrap();
+    db::machine::update_state(
+        &mut txn,
+        &mh.id,
+        &ManagedHostState::Failed {
+            machine_id: mh.id,
+            retry_count: 0,
+            details: FailureDetails {
+                cause: FailureCause::BiosSetupFailed {
+                    err: "wedged mid-ingestion".to_string(),
+                },
+                failed_at: Utc::now(),
+                source: FailureSource::StateMachineArea(StateMachineArea::MainFlow),
+            },
+        },
+    )
+    .await
+    .unwrap();
+    txn.commit().await.unwrap();
+}
+
+// The API rejects a reset from a non-resettable state (ForceDeletion) even with the instance ack.
+#[crate::sqlx_test]
+async fn test_reset_rejected_from_non_resettable_state(pool: sqlx::PgPool) {
+    let env = create_test_env(pool).await;
+    let mh = create_managed_host(&env).await;
+    mh.mark_machine_for_updates().await;
+
+    let mut txn = env.pool.begin().await.unwrap();
+    db::machine::mark_machine_ingestion_done_with_dpf(&mut txn, &mh.id)
+        .await
+        .unwrap();
+    db::machine::update_state(&mut txn, &mh.id, &ManagedHostState::ForceDeletion)
+        .await
+        .unwrap();
+    txn.commit().await.unwrap();
+
+    match env
+        .api
+        .trigger_dpu_reprovisioning(tonic::Request::new(
+            ::rpc::forge::DpuReprovisioningRequest {
+                dpu_id: None,
+                machine_id: mh.id.into(),
+                mode: Mode::Set as i32,
+                initiator: ::rpc::forge::UpdateInitiator::AdminCli as i32,
+                update_firmware: false,
+                allow_reset_with_instance: true,
+            },
+        ))
+        .await
+    {
+        Ok(_) => panic!("reset from ForceDeletion must be rejected"),
+        Err(e) => {
+            assert_eq!(e.code(), tonic::Code::InvalidArgument);
+            assert!(e.message().contains("cannot be reset"));
+        }
+    }
+
+    let mut txn = env.pool.begin().await.unwrap();
+    let dpu = mh.dpu().db_machine(&mut txn).await;
+    assert!(
+        dpu.reset_requested.is_none(),
+        "a rejected reset must not write a reset request"
+    );
+}
+
+// The controller re-checks state: a fresh reset request must not resurrect a ForceDeletion host.
+#[crate::sqlx_test]
+async fn test_non_ready_reprov_does_not_start_from_force_deletion(pool: sqlx::PgPool) {
+    let env = create_test_env(pool).await;
+    let mh = create_managed_host(&env).await;
+    let dpu_machine = mh.dpu();
+    mh.mark_machine_for_updates().await;
+
+    let mut txn = env.pool.begin().await.unwrap();
+    db::machine::trigger_dpu_reset_request(&dpu_machine.id, &mut txn, "AdminCli")
+        .await
+        .unwrap();
+    db::machine::update_state(&mut txn, &mh.id, &ManagedHostState::ForceDeletion)
+        .await
+        .unwrap();
+    txn.commit().await.unwrap();
+
+    let dpu = dpu_machine.next_iteration_machine(&env).await;
+    assert!(
+        !matches!(dpu.current_state(), ManagedHostState::DPUReprovision { .. }),
+        "reprovision must not start from ForceDeletion, got {:?}",
+        dpu.current_state()
     );
 }
 
@@ -2110,6 +2520,7 @@ async fn test_instance_reprov_restart_failed_impl(pool: sqlx::PgPool) {
                     mode: Mode::Restart as i32,
                     initiator: ::rpc::forge::UpdateInitiator::AdminCli as i32,
                     update_firmware: false,
+                    allow_reset_with_instance: false,
                 },
             ))
             .await
@@ -2226,6 +2637,7 @@ async fn test_dpu_for_reprovisioning_cannot_restart_if_not_started(pool: sqlx::P
                 mode: rpc::forge::dpu_reprovisioning_request::Mode::Restart as i32,
                 initiator: ::rpc::forge::UpdateInitiator::AdminCli as i32,
                 update_firmware: true,
+                allow_reset_with_instance: false,
             },
         ))
         .await
