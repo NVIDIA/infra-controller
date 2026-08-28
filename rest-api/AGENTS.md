@@ -243,7 +243,11 @@ verification expectations.
   behavior explicitly. If an operation can power-cycle or otherwise disrupt a
   tenant workload, check `Machine.IsAssigned` (or the equivalent association)
   and reject unless the product requirement explicitly allows Provider Admins
-  to override tenant attachment
+  to override tenant attachment. When an explicit override uses a low-level
+  Core cleanup RPC that does not stop the workload, state that behavior in the
+  API contract and interactive confirmation. After Core accepts a destructive
+  mutation, reconcile the corresponding REST records before returning success;
+  keep that cleanup idempotent so a retry can complete it.
 - Avoid declaring new types that are just an array of another type. Simply use an
   array of the original object
 - Be prudent when declaring utility functions that pass around arbitrary set of

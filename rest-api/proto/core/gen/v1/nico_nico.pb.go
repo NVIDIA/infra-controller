@@ -27974,8 +27974,9 @@ type AdminForceDeleteMachineRequest struct {
 	// machine can recover its boot target; set this when a clean rediscovery
 	// without prior boot-target memory is intended.
 	DeleteRetainedBootInterfaces bool `protobuf:"varint,7,opt,name=delete_retained_boot_interfaces,json=deleteRetainedBootInterfaces,proto3" json:"delete_retained_boot_interfaces,omitempty"`
-	// Allow deletion while the Machine is associated with an Instance Type.
-	// The association is removed with the Machine.
+	// False or omitted rejects deletion while the Machine is associated with an
+	// Instance Type. True permits deletion and removes that association with the
+	// Machine.
 	AllowDeleteWithInstanceType bool `protobuf:"varint,8,opt,name=allow_delete_with_instance_type,json=allowDeleteWithInstanceType,proto3" json:"allow_delete_with_instance_type,omitempty"`
 	unknownFields               protoimpl.UnknownFields
 	sizeCache                   protoimpl.SizeCache

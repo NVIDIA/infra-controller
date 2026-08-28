@@ -5266,8 +5266,9 @@ message AdminForceDeleteMachineRequest {
   // without prior boot-target memory is intended.
   bool delete_retained_boot_interfaces = 7;
 
-  // Allow deletion while the Machine is associated with an Instance Type.
-  // The association is removed with the Machine.
+  // False or omitted rejects deletion while the Machine is associated with an
+  // Instance Type. True permits deletion and removes that association with the
+  // Machine.
   bool allow_delete_with_instance_type = 8;
 }
 

@@ -120,6 +120,10 @@ func runGeneratedTUICommand(s *Session, info appcli.GeneratedCommandInfo, args [
 	if err != nil {
 		return err
 	}
+	flagArgs, err = addMachineDeleteForceFlag(info, flagArgs, positionalArgs)
+	if err != nil {
+		return err
+	}
 
 	flagArgs, err = addGeneratedBodyForm(s, info, flagArgs)
 	if err != nil {
@@ -151,6 +155,29 @@ func runGeneratedTUICommand(s *Session, info appcli.GeneratedCommandInfo, args [
 		s.Cache.InvalidateAll()
 	}
 	return nil
+}
+
+func addMachineDeleteForceFlag(
+	info appcli.GeneratedCommandInfo,
+	args []string,
+	positionalArgs []string,
+) ([]string, error) {
+	if info.OperationID != "delete-machine" || hasGeneratedOption(info, args, "force") {
+		return args, nil
+	}
+
+	machineID := "the selected Machine"
+	if len(positionalArgs) > 0 {
+		machineID = positionalArgs[0]
+	}
+	force, err := PromptConfirm(fmt.Sprintf(
+		"Force delete Machine %s? This deletes any attached Instance without stopping its tenant workload and removes the Machine's host, DPU, and BMC interfaces.",
+		machineID,
+	))
+	if err != nil || !force {
+		return args, err
+	}
+	return append(args, "--force=true"), nil
 }
 
 func splitGeneratedArguments(info appcli.GeneratedCommandInfo, args []string) ([]string, []string, error) {

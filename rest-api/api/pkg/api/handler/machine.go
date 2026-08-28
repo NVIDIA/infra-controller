@@ -1718,6 +1718,116 @@ func NewDeleteMachineHandler(dbSession *cdb.Session, scp *sc.ClientPool, _ *conf
 	}
 }
 
+// deleteForceDeletedMachineRecords removes the REST records whose Core
+// counterparts are removed by AdminForceDeleteMachine.
+func deleteForceDeletedMachineRecords(ctx context.Context, tx *cdb.Tx, dbSession *cdb.Session, machineID string) error {
+	mDAO := cdbm.NewMachineDAO(dbSession)
+	if _, err := mDAO.GetByID(ctx, tx, machineID, nil, true); err != nil {
+		if err == cdb.ErrDoesNotExist {
+			return nil
+		}
+		return fmt.Errorf("retrieve Machine for local force-delete cleanup: %w", err)
+	}
+
+	iDAO := cdbm.NewInstanceDAO(dbSession)
+	instances, _, err := iDAO.GetAll(
+		ctx,
+		tx,
+		cdbm.InstanceFilterInput{MachineIDs: []string{machineID}},
+		cdbp.PageInput{Limit: cutil.GetPtr(cdbp.TotalLimit)},
+		nil,
+	)
+	if err != nil {
+		return fmt.Errorf("retrieve Instances for local force-delete cleanup: %w", err)
+	}
+	instanceIDs := make([]uuid.UUID, 0, len(instances))
+	for _, instance := range instances {
+		instanceIDs = append(instanceIDs, instance.ID)
+	}
+	if len(instanceIDs) > 0 {
+		if err = cdbm.NewInterfaceDAO(dbSession).DeleteAllByInstanceIDs(ctx, tx, instanceIDs); err != nil {
+			return fmt.Errorf("delete Interfaces for local force-delete cleanup: %w", err)
+		}
+
+		ibiDAO := cdbm.NewInfiniBandInterfaceDAO(dbSession)
+		ibis, _, derr := ibiDAO.GetAll(ctx, tx, cdbm.InfiniBandInterfaceFilterInput{InstanceIDs: instanceIDs}, cdbp.PageInput{Limit: cutil.GetPtr(cdbp.TotalLimit)}, nil)
+		if derr != nil {
+			return fmt.Errorf("retrieve InfiniBand Interfaces for local force-delete cleanup: %w", derr)
+		}
+		for _, ibi := range ibis {
+			if derr = ibiDAO.Delete(ctx, tx, ibi.ID); derr != nil {
+				return fmt.Errorf("delete InfiniBand Interface for local force-delete cleanup: %w", derr)
+			}
+		}
+
+		nvliDAO := cdbm.NewNVLinkInterfaceDAO(dbSession)
+		nvlis, _, derr := nvliDAO.GetAll(ctx, tx, cdbm.NVLinkInterfaceFilterInput{InstanceIDs: instanceIDs}, cdbp.PageInput{Limit: cutil.GetPtr(cdbp.TotalLimit)}, nil)
+		if derr != nil {
+			return fmt.Errorf("retrieve NVLink Interfaces for local force-delete cleanup: %w", derr)
+		}
+		for _, nvli := range nvlis {
+			if derr = nvliDAO.Delete(ctx, tx, nvli.ID); derr != nil {
+				return fmt.Errorf("delete NVLink Interface for local force-delete cleanup: %w", derr)
+			}
+		}
+
+		skgiaDAO := cdbm.NewSSHKeyGroupInstanceAssociationDAO(dbSession)
+		skgias, _, derr := skgiaDAO.GetAll(ctx, tx, cdbm.SSHKeyGroupInstanceAssociationFilterInput{InstanceIDs: instanceIDs}, cdbp.PageInput{Limit: cutil.GetPtr(cdbp.TotalLimit)}, nil)
+		if derr != nil {
+			return fmt.Errorf("retrieve SSH Key Group Instance associations for local force-delete cleanup: %w", derr)
+		}
+		for _, skgia := range skgias {
+			if derr = skgiaDAO.Delete(ctx, tx, skgia.ID); derr != nil {
+				return fmt.Errorf("delete SSH Key Group Instance association for local force-delete cleanup: %w", derr)
+			}
+		}
+
+		desdDAO := cdbm.NewDpuExtensionServiceDeploymentDAO(dbSession)
+		desds, _, derr := desdDAO.GetAll(ctx, tx, cdbm.DpuExtensionServiceDeploymentFilterInput{InstanceIDs: instanceIDs}, cdbp.PageInput{Limit: cutil.GetPtr(cdbp.TotalLimit)}, nil)
+		if derr != nil {
+			return fmt.Errorf("retrieve DPU Extension Service Deployments for local force-delete cleanup: %w", derr)
+		}
+		for _, desd := range desds {
+			if derr = desdDAO.Delete(ctx, tx, desd.ID); derr != nil {
+				return fmt.Errorf("delete DPU Extension Service Deployment for local force-delete cleanup: %w", derr)
+			}
+		}
+
+		for _, instance := range instances {
+			if err = iDAO.Delete(ctx, tx, instance.ID); err != nil {
+				return fmt.Errorf("delete Instance for local force-delete cleanup: %w", err)
+			}
+		}
+	}
+
+	mcDAO := cdbm.NewMachineCapabilityDAO(dbSession)
+	caps, _, err := mcDAO.GetAll(ctx, tx, []string{machineID}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, cutil.GetPtr(cdbp.TotalLimit), nil)
+	if err != nil {
+		return fmt.Errorf("retrieve Machine Capabilities for local force-delete cleanup: %w", err)
+	}
+	for _, capability := range caps {
+		if err = mcDAO.DeleteByID(ctx, tx, capability.ID, false); err != nil {
+			return fmt.Errorf("delete Machine Capability for local force-delete cleanup: %w", err)
+		}
+	}
+
+	miDAO := cdbm.NewMachineInterfaceDAO(dbSession)
+	interfaces, _, err := miDAO.GetAll(ctx, tx, cdbm.MachineInterfaceFilterInput{MachineIDs: []string{machineID}}, cdbp.PageInput{Limit: cutil.GetPtr(cdbp.TotalLimit)}, nil)
+	if err != nil {
+		return fmt.Errorf("retrieve Machine Interfaces for local force-delete cleanup: %w", err)
+	}
+	for _, machineInterface := range interfaces {
+		if err = miDAO.Delete(ctx, tx, machineInterface.ID, false); err != nil {
+			return fmt.Errorf("delete Machine Interface for local force-delete cleanup: %w", err)
+		}
+	}
+
+	if err = mDAO.Delete(ctx, tx, machineID, false); err != nil {
+		return fmt.Errorf("delete Machine for local force-delete cleanup: %w", err)
+	}
+	return nil
+}
+
 // Handle godoc
 // @Summary Delete an existing Machine from Cloud
 // @Description Delete an existing Machine for the org
@@ -1981,6 +2091,13 @@ func (umh DeleteMachineHandler) Handle(c echo.Context) error {
 		if apiErr != nil {
 			logAPIError(logger, apiErr, "Failed to force delete Machine via Core gRPC proxy")
 			return cutil.NewAPIErrorResponse(c, apiErr.Code, apiErr.Message, nil)
+		}
+
+		err = cdb.WithTx(ctx, umh.dbSession, func(tx *cdb.Tx) error {
+			return deleteForceDeletedMachineRecords(ctx, tx, umh.dbSession, forceMachine.ID)
+		})
+		if err != nil {
+			return common.HandleTxError(c, logger, err, "Failed to clean up force-deleted Machine, DB transaction error")
 		}
 	}
 

@@ -9993,7 +9993,7 @@ paths:
             default: false
           in: query
           name: force
-          description: Force deletion through NICo Core, including deletion of an attached Instance. This explicit override also deletes the Machine's host, DPU, and BMC interfaces.
+          description: Force deletion through NICo Core, including deletion of an attached Instance without stopping its tenant workload. This explicit override also deletes the Machine's host, DPU, and BMC interfaces.
       responses:
         '202':
           description: Deletion request was accepted
@@ -10018,7 +10018,7 @@ paths:
         '500':
           description: Describes an error response for 500 Internal Server Error
           $ref: '#/components/responses/GenericHttpError'
-      description: Org must have an Infrastructure Provider entity. Machine must belong to the Provider. User must have authorization role with `PROVIDER_ADMIN` suffix. Without `force=true`, the Machine must meet the existing deletion eligibility criteria. With `force=true`, NICo Core deletes the Machine and any attached Instance.
+      description: Org must have an Infrastructure Provider entity. Machine must belong to the Provider. User must have authorization role with `PROVIDER_ADMIN` suffix. Without `force=true`, the Machine must have been missing from the Site for at least 24 hours and have no attached Instance or assigned Instance Type. With `force=true`, NICo Core deletes the Machine and any attached Instance without stopping its tenant workload, and the REST API removes the corresponding local records.
   '/v2/org/{org}/nico/machine/{machineId}/bmc/reset':
     parameters:
       - schema:
