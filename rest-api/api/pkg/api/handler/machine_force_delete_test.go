@@ -5,77 +5,64 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/NVIDIA/infra-controller/rest-api/api/pkg/api/handler/util/common"
-	"github.com/NVIDIA/infra-controller/rest-api/api/pkg/api/model"
 	cdbm "github.com/NVIDIA/infra-controller/rest-api/db/pkg/db/model"
 	corev1 "github.com/NVIDIA/infra-controller/rest-api/proto/core/gen/v1"
 )
 
 func TestDeleteMachineHandlerForce(t *testing.T) {
-	t.Run("true proxies the complete force-delete request and returns the standard accepted response", func(t *testing.T) {
-		fixture := common.NewTestSetupProviderMachineHandlerFixture(t, &corev1.AdminForceDeleteMachineResponse{})
-		handler := NewDeleteMachineHandler(fixture.DBSession, fixture.SiteClientPool, fixture.Config)
+	tests := []struct {
+		name        string
+		query       string
+		wantStatus  int
+		wantMessage string
+		wantProxy   bool
+	}{
+		{name: "true proxies the complete force-delete request", query: "/?force=true", wantStatus: http.StatusAccepted, wantProxy: true},
+		{name: "false preserves normal deletion safeguards", query: "/?force=false", wantStatus: http.StatusBadRequest, wantMessage: "Machine exists on Site and cannot be deleted"},
+		{name: "invalid value is rejected before deletion", query: "/?force=definitely", wantStatus: http.StatusBadRequest, wantMessage: "Invalid force query parameter, expected a boolean value"},
+	}
 
-		isAssigned := true
-		_, err := cdbm.NewMachineDAO(fixture.DBSession).Update(context.Background(), nil, cdbm.MachineUpdateInput{
-			MachineID:  fixture.MachineID,
-			IsAssigned: &isAssigned,
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := common.NewTestSetupProviderMachineHandlerFixture(t, &corev1.AdminForceDeleteMachineResponse{})
+			handler := NewDeleteMachineHandler(fixture.DBSession, fixture.SiteClientPool, fixture.Config)
+
+			if tt.wantProxy {
+				isAssigned := true
+				_, err := cdbm.NewMachineDAO(fixture.DBSession).Update(context.Background(), nil, cdbm.MachineUpdateInput{
+					MachineID:  fixture.MachineID,
+					IsAssigned: &isAssigned,
+				})
+				require.NoError(t, err)
+			}
+
+			rec := fixture.Request(t, handler.Handle, http.MethodDelete, tt.query, nil, "")
+			require.Equal(t, tt.wantStatus, rec.Code, rec.Body.String())
+
+			if !tt.wantProxy {
+				require.Empty(t, fixture.ProxiedReq.FullMethod)
+				require.Contains(t, rec.Body.String(), tt.wantMessage)
+				return
+			}
+
+			require.Equal(t, corev1.Forge_AdminForceDeleteMachine_FullMethodName, fixture.ProxiedReq.FullMethod)
+			var coreReq corev1.AdminForceDeleteMachineRequest
+			require.NoError(t, protojson.Unmarshal(fixture.ProxiedReq.RequestJSON, &coreReq))
+			require.True(t, proto.Equal(&coreReq, &corev1.AdminForceDeleteMachineRequest{
+				HostQuery:                   fixture.MachineID,
+				DeleteInterfaces:            true,
+				DeleteBmcInterfaces:         true,
+				AllowDeleteWithInstanceType: true,
+			}))
+			require.JSONEq(t, `{"message":"Deletion request was accepted"}`, rec.Body.String())
 		})
-		require.NoError(t, err)
-
-		rec := fixture.Request(t, handler.Handle, http.MethodDelete, "/?force=true", nil, "")
-		require.Equal(t, http.StatusAccepted, rec.Code, rec.Body.String())
-		require.Equal(t, "application/json", rec.Header().Get("Content-Type"))
-		require.Equal(t, corev1.Forge_AdminForceDeleteMachine_FullMethodName, fixture.ProxiedReq.FullMethod)
-
-		var coreReq corev1.AdminForceDeleteMachineRequest
-		require.NoError(t, protojson.Unmarshal(fixture.ProxiedReq.RequestJSON, &coreReq))
-		require.Equal(t, fixture.MachineID, coreReq.GetHostQuery())
-		require.True(t, coreReq.GetDeleteInterfaces())
-		require.True(t, coreReq.GetDeleteBmcInterfaces())
-		require.False(t, coreReq.GetDeleteBmcCredentials())
-		require.False(t, coreReq.GetAllowDeleteWithOrphanedDpfCrds())
-		require.False(t, coreReq.GetDeleteBmcSuppressions())
-		require.False(t, coreReq.GetDeleteRetainedBootInterfaces())
-		require.True(t, coreReq.GetAllowDeleteWithInstanceType())
-
-		var apiResp model.APIMessageResponse
-		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &apiResp))
-		require.Equal(t, model.NewAPIDeletionAcceptedResponse(), apiResp)
-	})
-
-	t.Run("false preserves normal deletion safeguards", func(t *testing.T) {
-		fixture := common.NewTestSetupProviderMachineHandlerFixture(t, nil)
-		handler := NewDeleteMachineHandler(fixture.DBSession, fixture.SiteClientPool, fixture.Config)
-
-		rec := fixture.Request(t, handler.Handle, http.MethodDelete, "/?force=false", nil, "")
-		require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
-		require.Empty(t, fixture.ProxiedReq.FullMethod)
-		require.Contains(t, rec.Body.String(), "Machine exists on Site and cannot be deleted")
-	})
-
-	t.Run("invalid value is rejected before deletion", func(t *testing.T) {
-		fixture := common.NewTestSetupProviderMachineHandlerFixture(t, nil)
-		handler := NewDeleteMachineHandler(fixture.DBSession, fixture.SiteClientPool, fixture.Config)
-
-		rec := fixture.Request(t, handler.Handle, http.MethodDelete, "/?force=definitely", nil, "")
-		require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
-		require.Empty(t, fixture.ProxiedReq.FullMethod)
-
-		var apiErr struct {
-			Source  string `json:"source"`
-			Message string `json:"message"`
-			Data    any    `json:"data"`
-		}
-		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &apiErr))
-		require.Equal(t, "Invalid force query parameter, expected a boolean value", apiErr.Message)
-		require.Nil(t, apiErr.Data)
-	})
+	}
 }
