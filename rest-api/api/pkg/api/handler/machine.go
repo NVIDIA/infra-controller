@@ -1729,77 +1729,6 @@ func deleteForceDeletedMachineRecords(ctx context.Context, tx *cdb.Tx, dbSession
 		return fmt.Errorf("retrieve Machine for local force-delete cleanup: %w", err)
 	}
 
-	iDAO := cdbm.NewInstanceDAO(dbSession)
-	instances, _, err := iDAO.GetAll(
-		ctx,
-		tx,
-		cdbm.InstanceFilterInput{MachineIDs: []string{machineID}},
-		cdbp.PageInput{Limit: cutil.GetPtr(cdbp.TotalLimit)},
-		nil,
-	)
-	if err != nil {
-		return fmt.Errorf("retrieve Instances for local force-delete cleanup: %w", err)
-	}
-	instanceIDs := make([]uuid.UUID, 0, len(instances))
-	for _, instance := range instances {
-		instanceIDs = append(instanceIDs, instance.ID)
-	}
-	if len(instanceIDs) > 0 {
-		if err = cdbm.NewInterfaceDAO(dbSession).DeleteAllByInstanceIDs(ctx, tx, instanceIDs); err != nil {
-			return fmt.Errorf("delete Interfaces for local force-delete cleanup: %w", err)
-		}
-
-		ibiDAO := cdbm.NewInfiniBandInterfaceDAO(dbSession)
-		ibis, _, derr := ibiDAO.GetAll(ctx, tx, cdbm.InfiniBandInterfaceFilterInput{InstanceIDs: instanceIDs}, cdbp.PageInput{Limit: cutil.GetPtr(cdbp.TotalLimit)}, nil)
-		if derr != nil {
-			return fmt.Errorf("retrieve InfiniBand Interfaces for local force-delete cleanup: %w", derr)
-		}
-		for _, ibi := range ibis {
-			if derr = ibiDAO.Delete(ctx, tx, ibi.ID); derr != nil {
-				return fmt.Errorf("delete InfiniBand Interface for local force-delete cleanup: %w", derr)
-			}
-		}
-
-		nvliDAO := cdbm.NewNVLinkInterfaceDAO(dbSession)
-		nvlis, _, derr := nvliDAO.GetAll(ctx, tx, cdbm.NVLinkInterfaceFilterInput{InstanceIDs: instanceIDs}, cdbp.PageInput{Limit: cutil.GetPtr(cdbp.TotalLimit)}, nil)
-		if derr != nil {
-			return fmt.Errorf("retrieve NVLink Interfaces for local force-delete cleanup: %w", derr)
-		}
-		for _, nvli := range nvlis {
-			if derr = nvliDAO.Delete(ctx, tx, nvli.ID); derr != nil {
-				return fmt.Errorf("delete NVLink Interface for local force-delete cleanup: %w", derr)
-			}
-		}
-
-		skgiaDAO := cdbm.NewSSHKeyGroupInstanceAssociationDAO(dbSession)
-		skgias, _, derr := skgiaDAO.GetAll(ctx, tx, cdbm.SSHKeyGroupInstanceAssociationFilterInput{InstanceIDs: instanceIDs}, cdbp.PageInput{Limit: cutil.GetPtr(cdbp.TotalLimit)}, nil)
-		if derr != nil {
-			return fmt.Errorf("retrieve SSH Key Group Instance associations for local force-delete cleanup: %w", derr)
-		}
-		for _, skgia := range skgias {
-			if derr = skgiaDAO.Delete(ctx, tx, skgia.ID); derr != nil {
-				return fmt.Errorf("delete SSH Key Group Instance association for local force-delete cleanup: %w", derr)
-			}
-		}
-
-		desdDAO := cdbm.NewDpuExtensionServiceDeploymentDAO(dbSession)
-		desds, _, derr := desdDAO.GetAll(ctx, tx, cdbm.DpuExtensionServiceDeploymentFilterInput{InstanceIDs: instanceIDs}, cdbp.PageInput{Limit: cutil.GetPtr(cdbp.TotalLimit)}, nil)
-		if derr != nil {
-			return fmt.Errorf("retrieve DPU Extension Service Deployments for local force-delete cleanup: %w", derr)
-		}
-		for _, desd := range desds {
-			if derr = desdDAO.Delete(ctx, tx, desd.ID); derr != nil {
-				return fmt.Errorf("delete DPU Extension Service Deployment for local force-delete cleanup: %w", derr)
-			}
-		}
-
-		for _, instance := range instances {
-			if err = iDAO.Delete(ctx, tx, instance.ID); err != nil {
-				return fmt.Errorf("delete Instance for local force-delete cleanup: %w", err)
-			}
-		}
-	}
-
 	mcDAO := cdbm.NewMachineCapabilityDAO(dbSession)
 	caps, _, err := mcDAO.GetAll(ctx, tx, []string{machineID}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, cutil.GetPtr(cdbp.TotalLimit), nil)
 	if err != nil {
@@ -1895,7 +1824,6 @@ func (umh DeleteMachineHandler) Handle(c echo.Context) error {
 		return cutil.NewAPIErrorResponse(c, http.StatusBadRequest, "Invalid force query parameter, expected a boolean value", nil)
 	}
 
-	var forceMachine *cdbm.Machine
 	err = cdb.WithTx(ctx, umh.dbSession, func(tx *cdb.Tx) error {
 		mDAO := cdbm.NewMachineDAO(umh.dbSession)
 		// Check that Machine exists
@@ -1944,7 +1872,43 @@ func (umh DeleteMachineHandler) Handle(c echo.Context) error {
 			if machine.Site.Status != cdbm.SiteStatusRegistered {
 				return cutil.NewAPIError(http.StatusBadRequest, "Site specified in request data is not in Registered state, cannot execute admin operation", nil)
 			}
-			forceMachine = machine
+			instances, _, derr := cdbm.NewInstanceDAO(umh.dbSession).GetAll(
+				ctx,
+				tx,
+				cdbm.InstanceFilterInput{MachineIDs: []string{machine.ID}},
+				cdbp.PageInput{Limit: cutil.GetPtr(1)},
+				nil,
+			)
+			if derr != nil {
+				logger.Error().Err(derr).Msg("error pulling Instance details for Machine in DB")
+				return cutil.NewAPIError(http.StatusInternalServerError, "Failed to query Instance associations for Machine", nil)
+			}
+			if machine.IsAssigned || len(instances) > 0 {
+				return cutil.NewAPIError(http.StatusBadRequest, "Machine is currently in use by an Instance and cannot be force deleted", nil)
+			}
+
+			stc, serr := umh.scp.GetClientByID(machine.Site.ID)
+			if serr != nil {
+				logger.Error().Err(serr).Msg("failed to retrieve Temporal client for Site")
+				return cutil.NewAPIError(http.StatusInternalServerError, "Failed to retrieve workflow client for Site", nil)
+			}
+
+			apiErr := common.ExecuteCoreGRPC(ctx, stc, corev1.Forge_AdminForceDeleteMachine_FullMethodName, &corev1.AdminForceDeleteMachineRequest{
+				HostQuery:                   machine.ControllerMachineID,
+				DeleteInterfaces:            true,
+				DeleteBmcInterfaces:         true,
+				AllowDeleteWithInstanceType: true,
+			}, nil, machine.Site.ID.String())
+			if apiErr != nil && apiErr.Code != http.StatusNotFound {
+				logAPIError(logger, apiErr, "Failed to force delete Machine via Core gRPC proxy")
+				return apiErr
+			}
+
+			derr = deleteForceDeletedMachineRecords(ctx, tx, umh.dbSession, machine.ID)
+			if derr != nil {
+				logger.Error().Err(derr).Msg("failed to clean up force-deleted Machine")
+				return cutil.NewAPIError(http.StatusInternalServerError, "Failed to clean up force-deleted Machine, DB error", nil)
+			}
 			return nil
 		}
 
@@ -2091,31 +2055,6 @@ func (umh DeleteMachineHandler) Handle(c echo.Context) error {
 	})
 	if err != nil {
 		return common.HandleTxError(c, logger, err, "Failed to delete Machine, DB transaction error")
-	}
-	if forceMachine != nil {
-		stc, serr := umh.scp.GetClientByID(forceMachine.Site.ID)
-		if serr != nil {
-			logger.Error().Err(serr).Msg("failed to retrieve Temporal client for Site")
-			return cutil.NewAPIErrorResponse(c, http.StatusInternalServerError, "Failed to retrieve workflow client for Site", nil)
-		}
-
-		apiErr := common.ExecuteCoreGRPC(ctx, stc, corev1.Forge_AdminForceDeleteMachine_FullMethodName, &corev1.AdminForceDeleteMachineRequest{
-			HostQuery:                   forceMachine.ControllerMachineID,
-			DeleteInterfaces:            true,
-			DeleteBmcInterfaces:         true,
-			AllowDeleteWithInstanceType: true,
-		}, nil, forceMachine.Site.ID.String())
-		if apiErr != nil && apiErr.Code != http.StatusNotFound {
-			logAPIError(logger, apiErr, "Failed to force delete Machine via Core gRPC proxy")
-			return cutil.NewAPIErrorResponse(c, apiErr.Code, apiErr.Message, nil)
-		}
-
-		err = cdb.WithTx(ctx, umh.dbSession, func(tx *cdb.Tx) error {
-			return deleteForceDeletedMachineRecords(ctx, tx, umh.dbSession, forceMachine.ID)
-		})
-		if err != nil {
-			return common.HandleTxError(c, logger, err, "Failed to clean up force-deleted Machine, DB transaction error")
-		}
 	}
 
 	logger.Info().Msg("finishing API handler")

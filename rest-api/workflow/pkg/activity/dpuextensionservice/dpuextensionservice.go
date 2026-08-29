@@ -207,6 +207,15 @@ func (mde ManageDpuExtensionService) UpdateDpuExtensionServicesInDB(ctx context.
 			versionInfo != nil ||
 			activeVersions != nil
 
+		// VersionInfo carries the Data, Credentials and Observability an API update sets, so a
+		// row written since the Site collected this inventory holds changes the snapshot cannot
+		// know about and writing the reported values over them would lose those edits.
+		if needsUpdate && site.IsTimeWithinStaleInventoryThreshold(dpuExtensionService.Updated) {
+			slogger.Info().Msg("not updating DpuExtensionService yet because it changed more recently than the inventory interval")
+
+			continue
+		}
+
 		if needsUpdate {
 			_, err := dpuExtensionServiceDAO.Update(ctx, nil, cdbm.DpuExtensionServiceUpdateInput{
 				DpuExtensionServiceID: dpuExtensionService.ID,
@@ -249,7 +258,7 @@ func (mde ManageDpuExtensionService) UpdateDpuExtensionServicesInDB(ctx context.
 		slogger := logger.With().Str("DPU Extension Service ID", dpuExtensionService.ID.String()).Logger()
 
 		// Avoid these actions if the object was updated since the inventory was received
-		if util.IsTimeWithinStaleInventoryThreshold(dpuExtensionService.Updated) {
+		if site.IsTimeWithinStaleInventoryThreshold(dpuExtensionService.Updated) {
 			continue
 		}
 

@@ -179,6 +179,16 @@ func TestManageDpuExtensionService_UpdateDpuExtensionServicesInDB(t *testing.T) 
 		pagedInvIds = append(pagedInvIds, dpuExtService.ID.String())
 	}
 
+	// The activity defers an update for a row written within the staleness threshold, so age every
+	// fixture once they all exist. The two cases that fall back to the row's own write time read
+	// Updated from these structs, so refresh them to match what was stored.
+	util.TestInventoryAgeUpdatedTimestamp(ctx, t, dbSession, (*cdbm.DpuExtensionService)(nil))
+	for _, des := range []*cdbm.DpuExtensionService{dpuExtensionService6, dpuExtensionService7} {
+		refreshed, rerr := cdbm.NewDpuExtensionServiceDAO(dbSession).GetByID(ctx, nil, des.ID, nil)
+		assert.NoError(t, rerr)
+		des.Updated = refreshed.Updated
+	}
+
 	pagedCtrlDpuExtensionServices := []*corev1.DpuExtensionService{}
 	for i := 0; i < 30; i++ {
 		version := fmt.Sprintf("V1-T%d", time.Now().Unix()*1000000)
@@ -544,7 +554,7 @@ func TestManageDpuExtensionService_UpdateDpuExtensionServicesInDB(t *testing.T) 
 	assert.NoError(t, err)
 
 	// Set updated timestamp to be older than the stale inventory threshold so it can be deleted
-	_, err = dbSession.DB.Exec("UPDATE dpu_extension_service SET updated = ? WHERE id = ?", time.Now().Add(-time.Duration(cwutil.InventoryReceiptInterval)*2), dpuExtensionService5.ID.String())
+	_, err = dbSession.DB.Exec("UPDATE dpu_extension_service SET updated = ? WHERE id = ?", time.Now().Add(-time.Duration(cwutil.DefaultInventoryReceiptInterval)*2), dpuExtensionService5.ID.String())
 	assert.NoError(t, err)
 
 	for _, tt := range tests {

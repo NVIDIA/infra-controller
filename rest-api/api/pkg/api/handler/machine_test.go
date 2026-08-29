@@ -3248,14 +3248,18 @@ func TestMachineHandler_Delete(t *testing.T) {
 	}
 
 	forceTests := []struct {
-		name         string
-		query        string
-		coreNotFound bool
-		wantStatus   int
-		wantMessage  string
+		name                string
+		query               string
+		isAssigned          bool
+		hasAttachedInstance bool
+		coreNotFound        bool
+		wantStatus          int
+		wantMessage         string
 	}{
 		{name: "true proxies the complete force-delete request", query: "/?force=true", wantStatus: http.StatusAccepted},
 		{name: "Core not found completes retryable local cleanup", query: "/?force=true", coreNotFound: true, wantStatus: http.StatusAccepted},
+		{name: "assigned Machine is rejected without cleanup", query: "/?force=true", isAssigned: true, hasAttachedInstance: true, wantStatus: http.StatusBadRequest, wantMessage: "Machine is currently in use by an Instance and cannot be force deleted"},
+		{name: "attached Instance is rejected when assignment flag is stale", query: "/?force=true", hasAttachedInstance: true, wantStatus: http.StatusBadRequest, wantMessage: "Machine is currently in use by an Instance and cannot be force deleted"},
 		{name: "invalid value is rejected before deletion", query: "/?force=definitely", wantStatus: http.StatusBadRequest, wantMessage: "Invalid force query parameter, expected a boolean value"},
 	}
 	for _, tc := range forceTests {
@@ -3282,14 +3286,7 @@ func TestMachineHandler_Delete(t *testing.T) {
 				).Return(wrun, nil)
 			}
 
-			if tc.wantStatus == http.StatusAccepted {
-				isAssigned := true
-				_, err := cdbm.NewMachineDAO(fixture.DBSession).Update(context.Background(), nil, cdbm.MachineUpdateInput{
-					MachineID:  fixture.MachineID,
-					IsAssigned: &isAssigned,
-				})
-				require.NoError(t, err)
-
+			if tc.query == "/?force=true" {
 				machine, err := cdbm.NewMachineDAO(fixture.DBSession).GetByID(
 					context.Background(),
 					nil,
@@ -3300,13 +3297,6 @@ func TestMachineHandler_Delete(t *testing.T) {
 				require.NoError(t, err)
 				machineInstanceType := common.TestBuildMachineInstanceType(t, fixture.DBSession, machine, machine.InstanceType)
 				linkedMachineInstanceTypeID = machineInstanceType.ID
-				user := fixture.User.(*cdbm.User)
-				tenant := common.TestBuildTenant(t, fixture.DBSession, "force-delete-tenant", "force-delete-tenant-org", user)
-				vpc := common.TestBuildVPC(t, fixture.DBSession, "force-delete-vpc", machine.InfrastructureProvider, tenant, machine.Site, nil, nil, nil, cdbm.VpcStatusReady, user)
-				operatingSystem := common.TestBuildOperatingSystem(t, fixture.DBSession, "force-delete-os", tenant, cdbm.OperatingSystemStatusReady, user)
-				instance := common.TestBuildInstance(t, fixture.DBSession, "force-delete-instance", tenant.ID, machine.InfrastructureProviderID, machine.SiteID, *machine.InstanceTypeID, vpc.ID, &machine.ID, operatingSystem.ID)
-				linkedInstanceID = instance.ID
-				common.TestBuildInterface(t, fixture.DBSession, instance.ID, nil, nil, true, nil, nil, nil, nil, user)
 				common.TestBuildMachineCapability(t, fixture.DBSession, &machine.ID, nil, cdbm.MachineCapabilityTypeCPU, "force-delete-cpu", nil, nil, nil, nil, nil, nil)
 				_, err = cdbm.NewMachineInterfaceDAO(fixture.DBSession).Create(context.Background(), nil, cdbm.MachineInterfaceCreateInput{
 					MachineID:             machine.ID,
@@ -3317,6 +3307,25 @@ func TestMachineHandler_Delete(t *testing.T) {
 					IpAddresses:           []string{},
 				})
 				require.NoError(t, err)
+
+				if tc.isAssigned {
+					isAssigned := true
+					_, err = cdbm.NewMachineDAO(fixture.DBSession).Update(context.Background(), nil, cdbm.MachineUpdateInput{
+						MachineID:  fixture.MachineID,
+						IsAssigned: &isAssigned,
+					})
+					require.NoError(t, err)
+				}
+
+				if tc.hasAttachedInstance {
+					user := fixture.User.(*cdbm.User)
+					tenant := common.TestBuildTenant(t, fixture.DBSession, "force-delete-tenant", "force-delete-tenant-org", user)
+					vpc := common.TestBuildVPC(t, fixture.DBSession, "force-delete-vpc", machine.InfrastructureProvider, tenant, machine.Site, nil, nil, nil, cdbm.VpcStatusReady, user)
+					operatingSystem := common.TestBuildOperatingSystem(t, fixture.DBSession, "force-delete-os", tenant, cdbm.OperatingSystemStatusReady, user)
+					instance := common.TestBuildInstance(t, fixture.DBSession, "force-delete-instance", tenant.ID, machine.InfrastructureProviderID, machine.SiteID, *machine.InstanceTypeID, vpc.ID, &machine.ID, operatingSystem.ID)
+					linkedInstanceID = instance.ID
+					common.TestBuildInterface(t, fixture.DBSession, instance.ID, nil, nil, true, nil, nil, nil, nil, user)
+				}
 			}
 
 			rec := fixture.Request(t, handler.Handle, http.MethodDelete, tc.query, nil, "")
@@ -3324,6 +3333,16 @@ func TestMachineHandler_Delete(t *testing.T) {
 			if tc.wantStatus != http.StatusAccepted {
 				require.Empty(t, fixture.ProxiedReq.FullMethod)
 				require.Contains(t, rec.Body.String(), tc.wantMessage)
+				if tc.isAssigned || tc.hasAttachedInstance {
+					_, err := cdbm.NewMachineDAO(fixture.DBSession).GetByID(context.Background(), nil, fixture.MachineID, nil, false)
+					require.NoError(t, err)
+					_, err = cdbm.NewMachineInstanceTypeDAO(fixture.DBSession).GetByID(context.Background(), nil, linkedMachineInstanceTypeID, nil)
+					require.NoError(t, err)
+				}
+				if tc.hasAttachedInstance {
+					_, err = cdbm.NewInstanceDAO(fixture.DBSession).GetByID(context.Background(), nil, linkedInstanceID, nil)
+					require.NoError(t, err)
+				}
 				return
 			}
 
@@ -3340,17 +3359,12 @@ func TestMachineHandler_Delete(t *testing.T) {
 			require.ErrorIs(t, err, cdb.ErrDoesNotExist)
 			_, err = cdbm.NewMachineInstanceTypeDAO(fixture.DBSession).GetByID(context.Background(), nil, linkedMachineInstanceTypeID, nil)
 			require.ErrorIs(t, err, cdb.ErrDoesNotExist)
-			_, err = cdbm.NewInstanceDAO(fixture.DBSession).GetByID(context.Background(), nil, linkedInstanceID, nil)
-			require.ErrorIs(t, err, cdb.ErrDoesNotExist)
 			caps, _, err := cdbm.NewMachineCapabilityDAO(fixture.DBSession).GetAll(context.Background(), nil, []string{fixture.MachineID}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, cutil.GetPtr(cdbp.TotalLimit), nil)
 			require.NoError(t, err)
 			require.Empty(t, caps)
 			machineInterfaces, _, err := cdbm.NewMachineInterfaceDAO(fixture.DBSession).GetAll(context.Background(), nil, cdbm.MachineInterfaceFilterInput{MachineIDs: []string{fixture.MachineID}}, cdbp.PageInput{Limit: cutil.GetPtr(cdbp.TotalLimit)}, nil)
 			require.NoError(t, err)
 			require.Empty(t, machineInterfaces)
-			instanceInterfaces, _, err := cdbm.NewInterfaceDAO(fixture.DBSession).GetAll(context.Background(), nil, cdbm.InterfaceFilterInput{InstanceIDs: []uuid.UUID{linkedInstanceID}}, cdbp.PageInput{Limit: cutil.GetPtr(cdbp.TotalLimit)}, nil)
-			require.NoError(t, err)
-			require.Empty(t, instanceInterfaces)
 		})
 	}
 }

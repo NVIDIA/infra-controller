@@ -98,7 +98,7 @@ make test-workflow
 make test-auth
 make test-common
 make test-cert-manager
-make test-site-agent        # requires mock gRPC servers
+make test-site-agent        # starts mock Core and Flow gRPC servers first
 make test-site-manager
 make test-site-workflow
 make test-ipam
@@ -112,6 +112,20 @@ make migrate                # run database migrations against test DB
 
 Tests require a PostgreSQL container (postgres:14.4-alpine) on port 30432.
 The Makefile manages this automatically via `ensure-postgres`.
+
+Use these targets rather than calling `go test` yourself, because they start what the tests
+need and skipping that setup does not fail fast:
+
+- `make test-site-agent` starts mock Core and Flow gRPC servers. Without them the
+  `site-agent/pkg/components` tests retry the connection on a `40s` backoff until the `10m`
+  test timeout, so a bare `go test ./site-agent/...` looks like a hang rather than an error.
+  That target also scopes to `site-agent/pkg/components` and sets `CGO_ENABLED=1` for `-race`,
+  so it is not the same package set or the same build.
+- `test-api`, `test-auth`, `test-db`, `test-flow`, `test-ipam`, `test-nvswitch-manager`,
+  `test-powershelf-manager`, and `test-workflow` call `ensure-postgres` first.
+- Every Postgres-backed package resets the schema, so packages running in parallel drop and
+  recreate the same tables and fail in `TestSetupSchema`. Pass `-p 1` whenever you do run
+  `go test` against more than one of them directly.
 
 ### Linting and Formatting
 
@@ -247,7 +261,9 @@ verification expectations.
   Core cleanup RPC that does not stop the workload, state that behavior in the
   API contract and interactive confirmation. After Core accepts a destructive
   mutation, reconcile the corresponding REST records before returning success;
-  keep that cleanup idempotent so a retry can complete it.
+  keep that cleanup idempotent so a retry can complete it. Keep the attachment
+  check and destructive mutation inside the same Machine lock boundary so a
+  concurrent allocation cannot attach a workload between them.
 - Avoid declaring new types that are just an array of another type. Simply use an
   array of the original object
 - Be prudent when declaring utility functions that pass around arbitrary set of
@@ -382,6 +398,8 @@ When registering a new route:
   same change. System and public discovery routes that are intentionally outside
   that surface are exempt. Keep operation IDs, summaries, handler constructors,
   handler godoc, and SDK-facing names aligned.
+- When an OpenAPI tag or operation ID changes, build the generated CLI command
+  tree and run the affected `nicocli ... --help` paths to catch alias collisions.
 
 Endpoint tests should follow the changed surface, not just compile it:
 
@@ -402,6 +420,9 @@ Endpoint tests should follow the changed surface, not just compile it:
   that transition.
 - Route tests and OpenAPI checks are part of the endpoint change; generated SDK
   updates belong in the same change only when the repo workflow requires them.
+- When one response model serves endpoints with different nullability
+  contracts, preserve each endpoint's schema in its constructor or use distinct
+  models. Test unavailable values at every affected response boundary.
 
 ### Prefer range-based iteration over C-style `for` loops
 

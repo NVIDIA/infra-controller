@@ -298,7 +298,7 @@ func TestCLIRegression_RealTerminalAndNonInteractive(t *testing.T) {
 		}
 
 		// Machine deletion presents the force override as an explicit rendered
-		// choice, warns about the attached workload, and sends force=true only
+		// choice, states the attached-workload restriction, and sends force=true only
 		// after both confirmations.
 		machineDeleteStart := len(terminal.transcript())
 		terminal.send(t, "machine delete host")
@@ -310,7 +310,7 @@ func TestCLIRegression_RealTerminalAndNonInteractive(t *testing.T) {
 		terminal.send(t, "y\r")
 		terminal.waitFor(t, "Deletion request was accepted")
 		machineDeleteTranscript := terminal.transcript()[machineDeleteStart:]
-		assert.Contains(t, machineDeleteTranscript, "without first stopping its tenant workload")
+		assert.Contains(t, machineDeleteTranscript, "Machines with attached Instances are rejected")
 
 		// Flags preceding a generated path argument must not disable
 		// resource-name completion, and the structured API error must render.

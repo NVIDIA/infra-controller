@@ -25,6 +25,7 @@ use std::time::Duration;
 use carbide_utils::none_if_empty::NoneIfEmpty;
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 use kube::core::ObjectMeta;
+use model::dpa_interface::DpaInterface;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
@@ -757,7 +758,10 @@ async fn create_dpu_flavor_template<R: DpuFlavorTemplateRepository>(
     template.metadata.name = Some(name.clone());
 
     match DpuFlavorTemplateRepository::create(repo, &template).await {
-        Ok(_) => Ok(name),
+        Ok(_) => {
+            tracing::info!(flavor_template = %name, "DPU flavor template created");
+            Ok(name)
+        }
         Err(DpfError::KubeError(kube::Error::Api(ref err)))
             if err.is_already_exists() || err.is_conflict() =>
         {
@@ -774,7 +778,7 @@ async fn create_dpu_flavor_template<R: DpuFlavorTemplateRepository>(
                     )))
                 }
                 Some(_) => {
-                    tracing::debug!(flavor_template = %name, "DPU flavor template already exists");
+                    tracing::info!(flavor_template = %name, "DPU flavor template already exists");
                     Ok(name)
                 }
             }
@@ -2253,8 +2257,22 @@ impl<R: DpuDeviceRepository, L: ResourceLabeler> DpfSdk<R, L> {
     ///
     /// This operation is idempotent - if the device already exists, it will be
     /// skipped. This handles state machine retries gracefully.
-    pub async fn register_dpu_device(&self, info: DpuDeviceInfo) -> Result<(), DpfError> {
+    pub async fn register_dpu_device(
+        &self,
+        info: DpuDeviceInfo,
+        astra_nics: Option<Vec<&DpaInterface>>,
+    ) -> Result<(), DpfError> {
         let cr_name = dpu_device_cr_name(&info.device_id);
+
+        // If astra_nics is not empty, go through it and create a vector of the underlay IP addresses in them, as long as
+        // the underlay_ip_address is not empty.
+        let underlay_ips: Vec<String> = astra_nics
+            .iter()
+            .flatten()
+            .filter_map(|nic| nic.underlay_ip.as_ref().map(|ip| ip.to_string()))
+            .collect();
+
+        tracing::info!(device_name = %cr_name, underlay_ips = %underlay_ips.join(", "), "Registering DPU device with underlay IPs");
 
         let device = DPUDevice {
             metadata: ObjectMeta {
@@ -4382,7 +4400,7 @@ mod tests {
             is_primary: true,
         };
 
-        sdk.register_dpu_device(info).await.unwrap();
+        sdk.register_dpu_device(info, None).await.unwrap();
 
         let devices = DpuDeviceRepository::list(&mock, TEST_NAMESPACE)
             .await
@@ -4433,7 +4451,7 @@ mod tests {
             is_primary: true,
         };
 
-        sdk.register_dpu_device(info).await.unwrap();
+        sdk.register_dpu_device(info, None).await.unwrap();
 
         let devices = DpuDeviceRepository::list(&mock, TEST_NAMESPACE)
             .await
@@ -4526,7 +4544,7 @@ mod tests {
             is_primary: true,
         };
 
-        sdk.register_dpu_device(info).await.unwrap();
+        sdk.register_dpu_device(info, None).await.unwrap();
 
         let devices = DpuDeviceRepository::list(&mock, TEST_NAMESPACE)
             .await
@@ -4562,7 +4580,7 @@ mod tests {
             is_primary: true,
         };
 
-        sdk.register_dpu_device(info).await.unwrap();
+        sdk.register_dpu_device(info, None).await.unwrap();
 
         let devices = DpuDeviceRepository::list(&mock, TEST_NAMESPACE)
             .await
@@ -4680,7 +4698,7 @@ mod tests {
             dpu_machine_id: "dpu-bbb".to_string(),
             is_primary: true,
         };
-        sdk.register_dpu_device(device_info).await.unwrap();
+        sdk.register_dpu_device(device_info, None).await.unwrap();
 
         let dpu_name = "node-dpu-001-device-dpu-001";
         let dpu = DPU {
@@ -4881,8 +4899,8 @@ mod tests {
             is_primary: false,
         };
 
-        sdk1.register_dpu_device(info1).await.unwrap();
-        sdk2.register_dpu_device(info2).await.unwrap();
+        sdk1.register_dpu_device(info1, None).await.unwrap();
+        sdk2.register_dpu_device(info2, None).await.unwrap();
 
         let devices1 = DpuDeviceRepository::list(&mock, "namespace-1")
             .await
@@ -5359,7 +5377,7 @@ mod tests {
             dpu_machine_id: "dpu-bbb".to_string(),
             is_primary: true,
         };
-        let err = sdk.register_dpu_device(info).await.unwrap_err();
+        let err = sdk.register_dpu_device(info, None).await.unwrap_err();
         assert!(
             matches!(err, DpfError::InvalidState(_)),
             "expected InvalidState, got: {err:?}"
@@ -5408,7 +5426,7 @@ mod tests {
             dpu_machine_id: "dpu-bbb".to_string(),
             is_primary: true,
         };
-        sdk.register_dpu_device(info).await.unwrap();
+        sdk.register_dpu_device(info, None).await.unwrap();
 
         // This branch is a deliberate no-op: an existing, non-terminating device is left
         // alone. `.unwrap()` only said no error came back -- assert no second device was
