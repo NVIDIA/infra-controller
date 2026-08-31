@@ -4761,8 +4761,16 @@ mod tests {
                 Some("config_json.ProductName is required"),
                 "config_json.ProductName is required",
             ),
-            ("no recorded reason is reported as such", None, "firmware upgrade failed without a recorded reason"),
-            ("a blank reason is treated as absent", Some("   "), "firmware upgrade failed without a recorded reason"),
+            (
+                "no recorded reason is reported as such",
+                None,
+                "firmware upgrade failed without a recorded reason",
+            ),
+            (
+                "a blank reason is treated as absent",
+                Some("   "),
+                "firmware upgrade failed without a recorded reason",
+            ),
         ];
 
         for (label, reason, expected_error) in cases {
