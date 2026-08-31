@@ -47,9 +47,11 @@ use model::component_manager::{
 };
 use model::firmware::FirmwareComponentType;
 use model::machine::machine_search_config::MachineSearchConfig;
-use model::machine::{Machine, MachineMaintenanceOperation};
+use model::machine::{
+    HostReprovisionState, Machine, MachineMaintenanceOperation, ManagedHostState,
+};
 use model::power_shelf::PowerShelfMaintenanceOperation;
-use model::rack::{FirmwareUpgradeJob, MaintenanceActivity};
+use model::rack::{FirmwareProgressState, FirmwareUpgradeJob, MaintenanceActivity};
 use model::switch::SwitchMaintenanceOperation;
 use tonic::{Code, Request, Response, Status};
 
@@ -156,21 +158,18 @@ fn safe_firmware_target_display(firmware_version: &str) -> String {
         )
 }
 
+fn requested_firmware_version(activities: &[MaintenanceActivity]) -> Option<String> {
+    activities.iter().find_map(|activity| match activity {
+        MaintenanceActivity::FirmwareUpgrade {
+            firmware_version: Some(firmware_version),
+            ..
+        } if !firmware_version.is_empty() => Some(safe_firmware_target_display(firmware_version)),
+        _ => None,
+    })
+}
+
 fn rack_requested_firmware_version(rack: &model::rack::Rack) -> Option<String> {
-    rack.config
-        .maintenance_requested
-        .as_ref()?
-        .activities
-        .iter()
-        .find_map(|activity| match activity {
-            MaintenanceActivity::FirmwareUpgrade {
-                firmware_version: Some(firmware_version),
-                ..
-            } if !firmware_version.is_empty() => {
-                Some(safe_firmware_target_display(firmware_version))
-            }
-            _ => None,
-        })
+    requested_firmware_version(&rack.config.maintenance_requested.as_ref()?.activities)
 }
 
 fn rack_firmware_upgrade_requested(rack: &model::rack::Rack) -> bool {
@@ -186,56 +185,114 @@ fn rack_firmware_upgrade_requested(rack: &model::rack::Rack) -> bool {
         })
 }
 
-fn firmware_job_state(job: &FirmwareUpgradeJob) -> i32 {
-    if let Some(status) = job.status.as_deref() {
-        match status.to_ascii_lowercase().as_str() {
-            "queued" | "pending" => return rpc::FirmwareUpdateState::FwStateQueued as i32,
-            "running" | "in_progress" | "active" => {
-                return rpc::FirmwareUpdateState::FwStateInProgress as i32;
-            }
-            "verifying" => return rpc::FirmwareUpdateState::FwStateVerifying as i32,
-            "completed" | "success" | "done" => {
-                return rpc::FirmwareUpdateState::FwStateCompleted as i32;
-            }
-            "failed" | "error" => return rpc::FirmwareUpdateState::FwStateFailed as i32,
-            "cancelled" | "canceled" => return rpc::FirmwareUpdateState::FwStateCancelled as i32,
-            _ => {}
+fn firmware_job_state(job: &FirmwareUpgradeJob) -> rpc::FirmwareUpdateState {
+    match job.status.as_ref() {
+        Some(FirmwareProgressState::Pending) => return rpc::FirmwareUpdateState::FwStateQueued,
+        Some(FirmwareProgressState::InProgress) => {
+            return rpc::FirmwareUpdateState::FwStateInProgress;
         }
+        Some(FirmwareProgressState::Completed) => {
+            return rpc::FirmwareUpdateState::FwStateCompleted;
+        }
+        Some(FirmwareProgressState::Failed) => return rpc::FirmwareUpdateState::FwStateFailed,
+        Some(FirmwareProgressState::Unknown(_)) | None => {}
     }
 
     let devices: Vec<_> = job.all_devices().collect();
     let total = devices.len();
 
     if total == 0 {
-        return rpc::FirmwareUpdateState::FwStateUnknown as i32;
+        return rpc::FirmwareUpdateState::FwStateUnknown;
     }
 
     let completed = devices
         .iter()
-        .filter(|device| device.status == "completed")
+        .filter(|device| device.status == FirmwareProgressState::Completed)
         .count();
     let failed = devices
         .iter()
-        .filter(|device| device.status == "failed")
+        .filter(|device| device.status == FirmwareProgressState::Failed)
         .count();
     let terminal = completed + failed;
     let has_in_progress = devices
         .iter()
-        .any(|device| matches!(device.status.as_str(), "in_progress" | "running" | "active"));
+        .any(|device| device.status == FirmwareProgressState::InProgress);
     let all_queued = devices
         .iter()
-        .all(|device| matches!(device.status.as_str(), "pending" | "queued" | "started"));
+        .all(|device| device.status == FirmwareProgressState::Pending);
 
     if failed > 0 && terminal == total {
-        rpc::FirmwareUpdateState::FwStateFailed as i32
+        rpc::FirmwareUpdateState::FwStateFailed
     } else if completed == total {
-        rpc::FirmwareUpdateState::FwStateCompleted as i32
+        rpc::FirmwareUpdateState::FwStateCompleted
     } else if terminal > 0 || has_in_progress || job.started_at.is_some() {
-        rpc::FirmwareUpdateState::FwStateInProgress as i32
+        rpc::FirmwareUpdateState::FwStateInProgress
     } else if all_queued {
-        rpc::FirmwareUpdateState::FwStateQueued as i32
+        rpc::FirmwareUpdateState::FwStateQueued
     } else {
-        rpc::FirmwareUpdateState::FwStateUnknown as i32
+        rpc::FirmwareUpdateState::FwStateUnknown
+    }
+}
+
+/// Summarizes a failed rack firmware upgrade into an operator-facing message.
+///
+/// A rack upgrade fans out to every device in the rack, so the one rack-level
+/// `ComponentResult` can only carry a summary of the per-device outcomes the rack
+/// controller recorded. A common backend reason is useful inline; divergent failures
+/// are summarized by count because their details belong in the backend service logs.
+///
+/// A job-level failure carries no per-device reason, so the rack's error state is the
+/// only detail left. It is reported as context rather than as the cause: see the note
+/// on the `RackState::Error` branch below.
+fn rack_firmware_failure_summary(rack: &model::rack::Rack, job: &FirmwareUpgradeJob) -> String {
+    let total = job.all_devices().count();
+    let failed: Vec<_> = job
+        .all_devices()
+        .filter(|device| device.status == FirmwareProgressState::Failed)
+        .collect();
+
+    if failed.is_empty() {
+        // `firmware_upgrade_job` is only cleared when the next firmware maintenance
+        // request is accepted, never when a job fails, while `controller_state` moves
+        // on with any later rack operation — NVOS, NMX cluster, ingestion. A failed
+        // job can therefore outlive its own error and sit next to an unrelated one, so
+        // quote the rack error as context instead of claiming it caused this upgrade
+        // to fail.
+        if let model::rack::RackState::Error { cause } = &rack.controller_state.value {
+            let cause = cause.trim();
+            if !cause.is_empty() {
+                return format!("firmware upgrade failed; rack is in error state: {cause}");
+            }
+        }
+
+        return if total == 0 {
+            "firmware upgrade failed before any device update was submitted".to_owned()
+        } else {
+            "firmware upgrade failed without a failed per-device result".to_owned()
+        };
+    }
+
+    let summary = format!(
+        "firmware upgrade failed: {}/{total} devices failed",
+        failed.len()
+    );
+
+    let mut reasons: Vec<&str> = failed
+        .iter()
+        .filter_map(|device| device.error_message.as_deref())
+        .map(str::trim)
+        .filter(|reason| !reason.is_empty())
+        .collect();
+    reasons.sort_unstable();
+    reasons.dedup();
+
+    match reasons.as_slice() {
+        [] => summary,
+        [reason] => format!("{summary}: {reason}"),
+        reasons => format!(
+            "{summary}: {} distinct errors; see backend service logs",
+            reasons.len()
+        ),
     }
 }
 
@@ -246,9 +303,9 @@ fn rack_firmware_status(rack: &model::rack::Rack) -> rpc::FirmwareUpdateStatus {
     let state = if let Some(job) = job {
         firmware_job_state(job)
     } else if firmware_upgrade_requested {
-        rpc::FirmwareUpdateState::FwStateQueued as i32
+        rpc::FirmwareUpdateState::FwStateQueued
     } else {
-        rpc::FirmwareUpdateState::FwStateUnknown as i32
+        rpc::FirmwareUpdateState::FwStateUnknown
     };
     let target_version = requested_version
         .or_else(|| job.and_then(|job| job.firmware_id.clone()))
@@ -258,12 +315,274 @@ fn rack_firmware_status(rack: &model::rack::Rack) -> rpc::FirmwareUpdateStatus {
         .or_else(|| firmware_upgrade_requested.then_some(rack.updated))
         .map(Into::into);
 
+    // A failed upgrade must carry why it failed: the rack controller already
+    // persisted each device's reason from the backend, and this is the only place an
+    // operator can see it.
+    let result = if state == rpc::FirmwareUpdateState::FwStateFailed {
+        let summary = job.map_or_else(
+            || "firmware upgrade failed".to_owned(),
+            |job| rack_firmware_failure_summary(rack, job),
+        );
+        error_result(rack.id.as_ref(), summary)
+    } else {
+        success_result(rack.id.as_ref())
+    };
+
     rpc::FirmwareUpdateStatus {
-        result: Some(success_result(rack.id.as_ref())),
-        state,
+        result: Some(result),
+        state: state as i32,
         target_version,
         updated_at,
     }
+}
+
+fn persisted_firmware_status(
+    component_id: impl std::fmt::Display,
+    status: &model::rack::RackFirmwareUpgradeStatus,
+) -> rpc::FirmwareUpdateStatus {
+    let component_id = component_id.to_string();
+    let (state, result) = match &status.status {
+        model::rack::RackFirmwareUpgradeState::Started => (
+            rpc::FirmwareUpdateState::FwStateQueued,
+            success_result(&component_id),
+        ),
+        model::rack::RackFirmwareUpgradeState::InProgress => (
+            rpc::FirmwareUpdateState::FwStateInProgress,
+            success_result(&component_id),
+        ),
+        model::rack::RackFirmwareUpgradeState::Completed => (
+            rpc::FirmwareUpdateState::FwStateCompleted,
+            success_result(&component_id),
+        ),
+        model::rack::RackFirmwareUpgradeState::Failed { cause } => (
+            rpc::FirmwareUpdateState::FwStateFailed,
+            error_result(&component_id, cause.clone()),
+        ),
+    };
+
+    rpc::FirmwareUpdateStatus {
+        result: Some(result),
+        state: state as i32,
+        // The per-device status currently persists the backend task ID and state,
+        // but not the firmware object ID.
+        target_version: String::new(),
+        updated_at: status
+            .ended_at
+            .as_ref()
+            .or(status.started_at.as_ref())
+            .copied()
+            .map(Into::into),
+    }
+}
+
+fn queued_firmware_status(
+    switch_id: SwitchId,
+    requested_at: chrono::DateTime<chrono::Utc>,
+) -> rpc::FirmwareUpdateStatus {
+    rpc::FirmwareUpdateStatus {
+        result: Some(success_result(&switch_id.to_string())),
+        state: rpc::FirmwareUpdateState::FwStateQueued as i32,
+        target_version: String::new(),
+        updated_at: Some(requested_at.into()),
+    }
+}
+
+/// The firmware upgrade request currently in flight for a switch, whether it was
+/// accepted at the rack or already dispatched to the device.
+struct SwitchFirmwareRequest {
+    requested_at: chrono::DateTime<chrono::Utc>,
+    target_version: Option<String>,
+}
+
+fn switch_firmware_request(
+    switch: &model::switch::Switch,
+    rack: Option<&model::rack::Rack>,
+) -> Option<SwitchFirmwareRequest> {
+    let firmware_activity = MaintenanceActivity::FirmwareUpgrade {
+        firmware_version: None,
+        components: vec![],
+        force_update: false,
+    };
+    let switch_request = switch
+        .switch_reprovisioning_requested
+        .as_ref()
+        .filter(|request| {
+            request.activities.is_empty()
+                || request
+                    .activities
+                    .iter()
+                    .any(|activity| activity.same_kind(&firmware_activity))
+        })
+        .map(|request| {
+            (
+                request.requested_at,
+                requested_firmware_version(&request.activities),
+            )
+        });
+    let rack_request = rack.and_then(|rack| {
+        rack.config
+            .maintenance_requested
+            .as_ref()
+            .filter(|scope| {
+                scope.should_run(&firmware_activity)
+                    && (scope.is_full_rack() || scope.switch_ids.contains(&switch.id))
+            })
+            .map(|scope| {
+                (
+                    scope.requested_at.unwrap_or(rack.updated),
+                    requested_firmware_version(&scope.activities),
+                )
+            })
+    });
+
+    let requested_at = switch_request
+        .as_ref()
+        .map(|(requested_at, _)| *requested_at)
+        .max(rack_request.as_ref().map(|(requested_at, _)| *requested_at))?;
+    // The device request is the dispatched form of the rack request and does not
+    // have to repeat the version the operator asked for.
+    let target_version = switch_request
+        .and_then(|(_, version)| version)
+        .or_else(|| rack_request.and_then(|(_, version)| version));
+
+    Some(SwitchFirmwareRequest {
+        requested_at,
+        target_version,
+    })
+}
+
+/// Selects the persisted result only when it belongs to the active request.
+/// A pending request with no current result is queued; no request and no persisted
+/// result means the caller must query the component-manager backend.
+fn select_persisted_switch_firmware_status(
+    switch_id: SwitchId,
+    persisted_status: Option<&model::rack::RackFirmwareUpgradeStatus>,
+    request: Option<&SwitchFirmwareRequest>,
+) -> Option<rpc::FirmwareUpdateStatus> {
+    match request {
+        Some(request) => {
+            let status = persisted_status
+                .filter(|status| status.is_current_for(request.requested_at))
+                .map_or_else(
+                    || queued_firmware_status(switch_id, request.requested_at),
+                    |status| persisted_firmware_status(switch_id, status),
+                );
+            // The per-device backend status never persists the firmware object ID.
+            Some(rpc::FirmwareUpdateStatus {
+                target_version: request.target_version.clone().unwrap_or_default(),
+                ..status
+            })
+        }
+        None => persisted_status.map(|status| persisted_firmware_status(switch_id, status)),
+    }
+}
+
+async fn switch_firmware_statuses(
+    api: &Api,
+    switch_ids: &[SwitchId],
+) -> Result<Vec<rpc::FirmwareUpdateStatus>, Status> {
+    let mut conn = api
+        .database_connection
+        .acquire()
+        .await
+        .map_err(|e| Status::internal(format!("failed to acquire database connection: {e}")))?;
+
+    let switches = db::switch::find_by(
+        &mut conn,
+        db::ObjectColumnFilter::List(db::switch::IdColumn, switch_ids),
+    )
+    .await
+    .map_err(|e| Status::internal(format!("failed to look up switches: {e}")))?;
+    let rack_ids: Vec<_> = switches
+        .iter()
+        .filter_map(|switch| switch.rack_id.clone())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    drop(conn);
+
+    let racks = if rack_ids.is_empty() {
+        vec![]
+    } else {
+        db::rack::find_by(
+            api.db_reader().as_mut(),
+            db::ObjectColumnFilter::List(db::rack::IdColumn, &rack_ids),
+        )
+        .await
+        .map_err(|e| Status::internal(format!("failed to look up switch racks: {e}")))?
+    };
+
+    let switch_by_id: HashMap<_, _> = switches
+        .into_iter()
+        .map(|switch| (switch.id, switch))
+        .collect();
+    let rack_by_id: HashMap<_, _> = racks
+        .into_iter()
+        .map(|rack| (rack.id.clone(), rack))
+        .collect();
+
+    let mut statuses = Vec::new();
+    let mut backend_switch_ids = Vec::new();
+    for switch_id in switch_ids {
+        let Some(switch) = switch_by_id.get(switch_id) else {
+            backend_switch_ids.push(*switch_id);
+            continue;
+        };
+        let rack = switch
+            .rack_id
+            .as_ref()
+            .and_then(|rack_id| rack_by_id.get(rack_id));
+        if let Some(status) = select_persisted_switch_firmware_status(
+            switch.id,
+            switch.firmware_upgrade_status.as_ref(),
+            switch_firmware_request(switch, rack).as_ref(),
+        ) {
+            statuses.push(status);
+        } else {
+            backend_switch_ids.push(*switch_id);
+        }
+    }
+
+    if backend_switch_ids.is_empty() {
+        return Ok(statuses);
+    }
+
+    let cm = require_component_manager(api)?;
+    let endpoints = resolve_switch_endpoints(api, &backend_switch_ids).await?;
+    statuses.extend(
+        endpoints
+            .unresolved
+            .iter()
+            .map(|u| rpc::FirmwareUpdateStatus {
+                result: Some(error_result(&u.id.to_string(), u.reason.clone())),
+                state: rpc::FirmwareUpdateState::FwStateUnknown as i32,
+                target_version: String::new(),
+                updated_at: None,
+            }),
+    );
+
+    if !endpoints.resolved.endpoints.is_empty() {
+        let backend_statuses = cm
+            .nv_switch
+            .get_firmware_status(&endpoints.resolved.endpoints)
+            .await
+            .map_err(component_manager_error_to_status)?;
+        statuses.extend(backend_statuses.into_iter().map(|s| {
+            let id = switch_mac_to_id_str(&s.bmc_mac, &endpoints.resolved.mac_to_id);
+            rpc::FirmwareUpdateStatus {
+                result: Some(if s.error.is_none() {
+                    success_result(&id)
+                } else {
+                    error_result(&id, s.error.unwrap_or_default())
+                }),
+                state: map_fw_state(s.state),
+                target_version: s.target_version,
+                updated_at: None,
+            }
+        }));
+    }
+
+    Ok(statuses)
 }
 
 fn build_inventory_entries(
@@ -1443,6 +1762,31 @@ fn exploration_report_firmware_versions(
         .collect()
 }
 
+/// The reason reprovisioning recorded for this machine's firmware failure, if any.
+///
+/// For a rack-driven upgrade the machine controller copies this out of the rack
+/// controller's `rack_fw_details` — which carries the per-device backend
+/// `error_message` — on the same transition that clears the reprovisioning
+/// request. Reading the state rather than `rack_fw_details` therefore keeps the
+/// reason tied to the cycle that produced this failure: once the request is gone
+/// there is no timestamp left to gate a persisted status against. Host-driven
+/// upgrades fill the same field in from the scout report.
+fn machine_firmware_failure_reason(machine: &Machine) -> Option<String> {
+    let ManagedHostState::HostReprovision {
+        reprovision_state: HostReprovisionState::FailedFirmwareUpgrade { reason, .. },
+        ..
+    } = &machine.state.value
+    else {
+        return None;
+    };
+
+    reason
+        .as_deref()
+        .map(str::trim)
+        .filter(|reason| !reason.is_empty())
+        .map(str::to_owned)
+}
+
 /// When explored firmware satisfies a desired entry, the update is complete
 /// (or still verifying while the host reprovisions). Otherwise status is
 /// inferred from `update_complete` and the machine's reprovision state.
@@ -1496,8 +1840,21 @@ fn derive_machine_firmware_update_status(
         rpc::FirmwareUpdateState::FwStateQueued
     };
 
+    // A failed upgrade must carry why it failed, the same way the rack and switch
+    // results do. Without this a compute tray reports FwStateFailed with an empty
+    // error and the backend reason never reaches the operator.
+    let result = if state == rpc::FirmwareUpdateState::FwStateFailed {
+        error_result(
+            machine_id,
+            machine_firmware_failure_reason(machine)
+                .unwrap_or_else(|| "firmware upgrade failed without a recorded reason".to_owned()),
+        )
+    } else {
+        success_result(machine_id)
+    };
+
     rpc::FirmwareUpdateStatus {
-        result: Some(success_result(machine_id)),
+        result: Some(result),
         state: state as i32,
         target_version: String::new(),
         updated_at: None,
@@ -1763,10 +2120,10 @@ pub(crate) async fn component_power_control(
         rpc::component_power_control_request::Target::MachineIds(list) => {
             // Divide the requested machines the same way compute firmware
             // updates do: rack-scale (MNNVL) systems vs standalone servers. Only
-            // rack-scale systems have a compute-tray backend (RMS) and a
+            // rack-scale systems have a compute-tray backend and a
             // state-controller maintenance flow; standalone servers are always
             // driven synchronously through NICo-core's Redfish stack, because
-            // RMS cannot power-control them.
+            // the backend service cannot power-control them.
             //
             // Classify each machine and persist its power-manager desired state
             // in a single pass. A machine joins `rack_scale_ids`/`standalone_ids`
@@ -1854,7 +2211,7 @@ pub(crate) async fn component_power_control(
 
             // Rack-scale systems: the state-controller maintenance flow when
             // enabled, otherwise a synchronous dispatch through the configured
-            // backend (RMS).
+            // backend.
             if !rack_scale_ids.is_empty() {
                 if cm.compute_tray_use_state_controller && !bypass_state_controller {
                     match queue_machine_power_control_via_state_controller(
@@ -2386,7 +2743,7 @@ pub(crate) async fn update_component_firmware(
             // Standalone (non-rack-scale) servers have no compute-tray backend
             // that can take a direct firmware dispatch, so they always go
             // through the host reprovisioning firmware flow. Only rack-scale
-            // systems (currently GB200 NVL, backed by RMS via the
+            // systems (currently GB200 NVL, driven through the
             // ComputeTrayManager interface) can choose between the rack-level
             // state controller maintenance flow and a direct backend dispatch.
             let machines_by_id = load_machines_by_id(api, &list.machine_ids).await?;
@@ -2693,41 +3050,12 @@ pub(crate) async fn get_component_firmware_status(
 
     let statuses = match target {
         rpc::get_component_firmware_status_request::Target::SwitchIds(list) => {
-            let cm = require_component_manager(api)?;
-            let endpoints = resolve_switch_endpoints(api, &list.ids).await?;
-
-            let mut statuses: Vec<_> = endpoints
-                .unresolved
-                .iter()
-                .map(|u| rpc::FirmwareUpdateStatus {
-                    result: Some(error_result(&u.id.to_string(), u.reason.clone())),
-                    state: rpc::FirmwareUpdateState::FwStateUnknown as i32,
-                    target_version: String::new(),
-                    updated_at: None,
-                })
-                .collect();
-
-            let backend_statuses = cm
-                .nv_switch
-                .get_firmware_status(&endpoints.resolved.endpoints)
-                .await
-                .map_err(component_manager_error_to_status)?;
-            statuses.extend(backend_statuses.into_iter().map(|s| {
-                let id = switch_mac_to_id_str(&s.bmc_mac, &endpoints.resolved.mac_to_id);
-                rpc::FirmwareUpdateStatus {
-                    result: Some(if s.error.is_none() {
-                        success_result(&id)
-                    } else {
-                        error_result(&id, s.error.unwrap_or_default())
-                    }),
-                    state: map_fw_state(s.state),
-                    target_version: s.target_version,
-                    updated_at: None,
-                }
-            }));
-            statuses
+            switch_firmware_statuses(api, &list.ids).await?
         }
         rpc::get_component_firmware_status_request::Target::PowerShelfIds(list) => {
+            // The rack controller currently writes power-shelf Completed only as an
+            // internal reprovisioning-unblock sentinel; the backend does not include
+            // shelves in the rack firmware job. It is therefore not an API firmware result.
             let cm = require_component_manager(api)?;
             let endpoints = resolve_power_shelf_endpoints(api, &list.ids).await?;
 
@@ -3023,12 +3351,12 @@ mod tests {
 
     use super::*;
 
-    fn firmware_device(status: &str) -> model::rack::FirmwareUpgradeDeviceStatus {
+    fn firmware_device(status: FirmwareProgressState) -> model::rack::FirmwareUpgradeDeviceStatus {
         model::rack::FirmwareUpgradeDeviceStatus {
             node_id: String::new(),
             mac: "00:00:00:00:00:00".to_string(),
             bmc_ip: String::new(),
-            status: status.to_string(),
+            status,
             job_id: None,
             parent_job_id: None,
             error_message: None,
@@ -3050,6 +3378,41 @@ mod tests {
             deleted: None,
             metadata: Metadata::default(),
             version: ConfigVersion::initial(),
+        }
+    }
+
+    fn test_switch() -> model::switch::Switch {
+        model::switch::Switch {
+            id: test_switch_id(),
+            config: model::switch::SwitchConfig {
+                name: "test-switch".into(),
+                enable_nmxc: false,
+                fabric_manager_config: None,
+            },
+            status: None,
+            deleted: None,
+            bmc_mac_address: None,
+            bmc_info: None,
+            bmc_credential_rotation_requested: false,
+            decommission_requested: false,
+            controller_state: Versioned::new(
+                model::switch::SwitchControllerState::Created,
+                ConfigVersion::initial(),
+            ),
+            controller_state_outcome: None,
+            switch_maintenance_requested: None,
+            switch_reprovisioning_requested: None,
+            firmware_upgrade_status: None,
+            nvos_update_status: None,
+            fabric_manager_status: None,
+            nvlink_domain_uuid: None,
+            rack_id: None,
+            metadata: Metadata::default(),
+            version: ConfigVersion::initial(),
+            is_primary: false,
+            slot_number: None,
+            tray_index: None,
+            health_reports: Default::default(),
         }
     }
 
@@ -3365,13 +3728,13 @@ mod tests {
     #[test]
     fn firmware_job_state_explicit_status_wins_for_empty_job() {
         let job = FirmwareUpgradeJob {
-            status: Some("queued".to_string()),
+            status: Some(FirmwareProgressState::Pending),
             ..Default::default()
         };
 
         assert_eq!(
             firmware_job_state(&job),
-            rpc::FirmwareUpdateState::FwStateQueued as i32
+            rpc::FirmwareUpdateState::FwStateQueued
         );
     }
 
@@ -3379,76 +3742,78 @@ mod tests {
     fn firmware_job_state_empty_job_without_status_is_unknown() {
         assert_eq!(
             firmware_job_state(&FirmwareUpgradeJob::default()),
-            rpc::FirmwareUpdateState::FwStateUnknown as i32
+            rpc::FirmwareUpdateState::FwStateUnknown
         );
     }
 
     #[test]
     fn firmware_job_state_all_completed_is_completed() {
         let job = FirmwareUpgradeJob {
-            machines: vec![firmware_device("completed")],
-            switches: vec![firmware_device("completed")],
+            machines: vec![firmware_device(FirmwareProgressState::Completed)],
+            switches: vec![firmware_device(FirmwareProgressState::Completed)],
             ..Default::default()
         };
 
         assert_eq!(
             firmware_job_state(&job),
-            rpc::FirmwareUpdateState::FwStateCompleted as i32
+            rpc::FirmwareUpdateState::FwStateCompleted
         );
     }
 
     #[test]
     fn firmware_job_state_mixed_terminal_with_failure_is_failed() {
         let job = FirmwareUpgradeJob {
-            machines: vec![firmware_device("completed")],
-            switches: vec![firmware_device("failed")],
+            machines: vec![firmware_device(FirmwareProgressState::Completed)],
+            switches: vec![firmware_device(FirmwareProgressState::Failed)],
             ..Default::default()
         };
 
         assert_eq!(
             firmware_job_state(&job),
-            rpc::FirmwareUpdateState::FwStateFailed as i32
+            rpc::FirmwareUpdateState::FwStateFailed
         );
     }
 
     #[test]
     fn firmware_job_state_partial_terminal_is_in_progress() {
         let job = FirmwareUpgradeJob {
-            machines: vec![firmware_device("completed")],
-            switches: vec![firmware_device("pending")],
+            machines: vec![firmware_device(FirmwareProgressState::Completed)],
+            switches: vec![firmware_device(FirmwareProgressState::Pending)],
             ..Default::default()
         };
 
         assert_eq!(
             firmware_job_state(&job),
-            rpc::FirmwareUpdateState::FwStateInProgress as i32
+            rpc::FirmwareUpdateState::FwStateInProgress
         );
     }
 
     #[test]
     fn firmware_job_state_all_pending_without_start_is_queued() {
         let job = FirmwareUpgradeJob {
-            machines: vec![firmware_device("pending")],
-            switches: vec![firmware_device("queued")],
+            machines: vec![firmware_device(FirmwareProgressState::Pending)],
+            switches: vec![firmware_device(FirmwareProgressState::Pending)],
             ..Default::default()
         };
 
         assert_eq!(
             firmware_job_state(&job),
-            rpc::FirmwareUpdateState::FwStateQueued as i32
+            rpc::FirmwareUpdateState::FwStateQueued
         );
     }
 
     #[test]
     fn firmware_job_state_unknown_device_status_is_unknown() {
         let job = FirmwareUpgradeJob {
-            machines: vec![firmware_device("mystery")],
+            machines: vec![firmware_device(FirmwareProgressState::Unknown(
+                "mystery".into(),
+            ))],
             ..Default::default()
         };
 
         assert_eq!(
             firmware_job_state(&job),
-            rpc::FirmwareUpdateState::FwStateUnknown as i32
+            rpc::FirmwareUpdateState::FwStateUnknown
         );
     }
 
@@ -3456,7 +3821,7 @@ mod tests {
     fn rack_firmware_status_reports_retained_completed_job() {
         let job = FirmwareUpgradeJob {
             firmware_id: Some("fw-1".to_string()),
-            status: Some("completed".to_string()),
+            status: Some(FirmwareProgressState::Completed),
             started_at: Some(chrono::Utc::now() - chrono::Duration::hours(1)),
             completed_at: Some(chrono::Utc::now()),
             ..Default::default()
@@ -3477,7 +3842,7 @@ mod tests {
     fn rack_firmware_status_default_request_uses_job_firmware_id() {
         let job = FirmwareUpgradeJob {
             firmware_id: Some("fw-default".to_string()),
-            status: Some("in_progress".to_string()),
+            status: Some(FirmwareProgressState::InProgress),
             started_at: Some(chrono::Utc::now()),
             ..Default::default()
         };
@@ -3518,6 +3883,196 @@ mod tests {
         assert_eq!(status.state, rpc::FirmwareUpdateState::FwStateQueued as i32);
         assert!(status.target_version.is_empty());
         assert!(status.updated_at.is_some());
+    }
+
+    /// Builds a failed device carrying the reason backend service reported for it.
+    fn failed_firmware_device(error_message: &str) -> model::rack::FirmwareUpgradeDeviceStatus {
+        model::rack::FirmwareUpgradeDeviceStatus {
+            error_message: Some(error_message.to_string()),
+            ..firmware_device(FirmwareProgressState::Failed)
+        }
+    }
+
+    #[test]
+    fn rack_firmware_failure_summary_reports_counts_and_reasons() {
+        use carbide_test_support::value_scenarios;
+
+        value_scenarios!(
+            run = |job| rack_firmware_failure_summary(&test_rack_with_job(None), &job);
+            "a shared reason is reported verbatim so the SOT rejection is visible" {
+                FirmwareUpgradeJob {
+                    machines: vec![
+                        failed_firmware_device("config_json.ProductName is required"),
+                        failed_firmware_device("config_json.ProductName is required"),
+                    ],
+                    ..Default::default()
+                } => "firmware upgrade failed: 2/2 devices failed: \
+                      config_json.ProductName is required".to_string(),
+            }
+
+            "divergent reasons direct operators to backend service logs" {
+                FirmwareUpgradeJob {
+                    machines: vec![failed_firmware_device("download failed")],
+                    switches: vec![failed_firmware_device("target not found")],
+                    ..Default::default()
+                } => "firmware upgrade failed: 2/2 devices failed: 2 distinct errors; \
+                      see backend service logs".to_string(),
+            }
+
+            "a partial failure reports the failed subset" {
+                FirmwareUpgradeJob {
+                    machines: vec![
+                        failed_firmware_device("task failed"),
+                        firmware_device(FirmwareProgressState::Completed),
+                    ],
+                    ..Default::default()
+                } => "firmware upgrade failed: 1/2 devices failed: task failed".to_string(),
+            }
+
+            "devices without a recorded reason still report the count" {
+                FirmwareUpgradeJob {
+                    machines: vec![firmware_device(FirmwareProgressState::Failed)],
+                    ..Default::default()
+                } => "firmware upgrade failed: 1/1 devices failed".to_string(),
+            }
+
+            "blank reasons are treated as absent" {
+                FirmwareUpgradeJob {
+                    machines: vec![failed_firmware_device("   ")],
+                    ..Default::default()
+                } => "firmware upgrade failed: 1/1 devices failed".to_string(),
+            }
+
+            "a job that never reached its devices says so" {
+                FirmwareUpgradeJob::default() =>
+                    "firmware upgrade failed before any device update was submitted".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn rack_firmware_status_job_level_failure_reports_controller_cause() {
+        let cause = "rack firmware upgrade cannot progress because target machines are Ready with desired power state Off";
+        let job = FirmwareUpgradeJob {
+            status: Some(FirmwareProgressState::Failed),
+            started_at: Some(chrono::Utc::now()),
+            completed_at: Some(chrono::Utc::now()),
+            machines: vec![firmware_device(FirmwareProgressState::InProgress)],
+            ..Default::default()
+        };
+        let mut rack = test_rack_with_job(Some(job));
+        rack.controller_state = Versioned::new(
+            RackState::Error {
+                cause: cause.to_string(),
+            },
+            ConfigVersion::initial(),
+        );
+
+        let status = rack_firmware_status(&rack);
+        let result = status.result.expect("a rack status carries a result");
+
+        assert_eq!(status.state, rpc::FirmwareUpdateState::FwStateFailed as i32);
+        assert_eq!(
+            result.error,
+            format!("firmware upgrade failed; rack is in error state: {cause}")
+        );
+        assert!(!result.error.contains("0/1 devices failed"));
+    }
+
+    /// A failed job outlives its own error: it is only cleared when the next firmware
+    /// maintenance request is accepted, so an unrelated later failure can leave a stale
+    /// "failed" job sitting next to a rack error that has nothing to do with firmware.
+    /// The summary must not present that error as the reason the upgrade failed.
+    #[test]
+    fn rack_firmware_status_does_not_attribute_an_unrelated_rack_error() {
+        let unrelated = "rack profile is missing or unknown; cannot build switch node descriptor";
+        let job = FirmwareUpgradeJob {
+            status: Some(FirmwareProgressState::Failed),
+            started_at: Some(chrono::Utc::now()),
+            completed_at: Some(chrono::Utc::now()),
+            machines: vec![firmware_device(FirmwareProgressState::InProgress)],
+            ..Default::default()
+        };
+        let mut rack = test_rack_with_job(Some(job));
+        rack.controller_state = Versioned::new(
+            RackState::Error {
+                cause: unrelated.to_string(),
+            },
+            ConfigVersion::initial(),
+        );
+
+        let status = rack_firmware_status(&rack);
+        let result = status.result.expect("a rack status carries a result");
+
+        assert!(
+            result
+                .error
+                .starts_with("firmware upgrade failed; rack is in error state:"),
+            "the rack error must be quoted as context, not as the cause: {}",
+            result.error
+        );
+        assert!(
+            result.error.contains(unrelated),
+            "the rack error is still worth showing an operator"
+        );
+    }
+
+    /// The reported regression: every device failed with the backend SOT parse error, but
+    /// the rack-level result claimed success and carried no error at all.
+    #[test]
+    fn rack_firmware_status_failed_job_reports_the_device_error() {
+        let job = FirmwareUpgradeJob {
+            firmware_id: Some(String::new()),
+            status: Some(FirmwareProgressState::Failed),
+            started_at: Some(chrono::Utc::now()),
+            completed_at: Some(chrono::Utc::now()),
+            machines: vec![failed_firmware_device(
+                "config_json.ProductName is required",
+            )],
+            ..Default::default()
+        };
+        let rack = test_rack_with_job(Some(job));
+
+        let status = rack_firmware_status(&rack);
+        let result = status
+            .result
+            .expect("a rack status always carries a result");
+
+        assert_eq!(status.state, rpc::FirmwareUpdateState::FwStateFailed as i32);
+        assert_eq!(
+            result.status,
+            rpc::ComponentManagerStatusCode::InternalError as i32
+        );
+        assert_eq!(
+            result.error,
+            "firmware upgrade failed: 1/1 devices failed: config_json.ProductName is required"
+        );
+    }
+
+    #[test]
+    fn rack_firmware_status_unfinished_job_stays_successful() {
+        let job = FirmwareUpgradeJob {
+            status: Some(FirmwareProgressState::InProgress),
+            started_at: Some(chrono::Utc::now()),
+            machines: vec![firmware_device(FirmwareProgressState::InProgress)],
+            ..Default::default()
+        };
+        let rack = test_rack_with_job(Some(job));
+
+        let status = rack_firmware_status(&rack);
+        let result = status
+            .result
+            .expect("a rack status always carries a result");
+
+        assert_eq!(
+            status.state,
+            rpc::FirmwareUpdateState::FwStateInProgress as i32
+        );
+        assert_eq!(
+            result.status,
+            rpc::ComponentManagerStatusCode::Success as i32
+        );
+        assert!(result.error.is_empty());
     }
 
     #[test]
@@ -3596,6 +4151,272 @@ mod tests {
         for (input, expected) in cases {
             assert_eq!(map_fw_state(input), expected, "mismatch for {input:?}");
         }
+    }
+
+    #[test]
+    fn persisted_firmware_status_maps_all_states() {
+        let component_id = "component-id";
+        let started_at = chrono::Utc::now();
+        let cases = [
+            (
+                model::rack::RackFirmwareUpgradeState::Started,
+                rpc::FirmwareUpdateState::FwStateQueued,
+                rpc::ComponentManagerStatusCode::Success,
+                "",
+            ),
+            (
+                model::rack::RackFirmwareUpgradeState::InProgress,
+                rpc::FirmwareUpdateState::FwStateInProgress,
+                rpc::ComponentManagerStatusCode::Success,
+                "",
+            ),
+            (
+                model::rack::RackFirmwareUpgradeState::Completed,
+                rpc::FirmwareUpdateState::FwStateCompleted,
+                rpc::ComponentManagerStatusCode::Success,
+                "",
+            ),
+            (
+                model::rack::RackFirmwareUpgradeState::Failed {
+                    cause: "config_json.ProductName is required".into(),
+                },
+                rpc::FirmwareUpdateState::FwStateFailed,
+                rpc::ComponentManagerStatusCode::InternalError,
+                "config_json.ProductName is required",
+            ),
+        ];
+
+        for (input, expected_state, expected_result, expected_error) in cases {
+            let status = model::rack::RackFirmwareUpgradeStatus {
+                task_id: "backend-task-id".into(),
+                status: input,
+                started_at: Some(started_at),
+                ended_at: None,
+            };
+
+            let actual = persisted_firmware_status(component_id, &status);
+            let result = actual.result.expect("component result must be present");
+
+            assert_eq!(result.component_id, component_id);
+            assert_eq!(actual.state, expected_state as i32);
+            assert_eq!(result.status, expected_result as i32);
+            assert_eq!(result.error, expected_error);
+            assert_eq!(actual.updated_at, Some(started_at.into()));
+        }
+    }
+
+    #[test]
+    fn switch_persisted_status_is_gated_to_the_current_request() {
+        let switch_id = test_switch_id();
+        let requested_at = chrono::Utc::now();
+        let stale_status = model::rack::RackFirmwareUpgradeStatus {
+            task_id: "old-backend-task".into(),
+            status: model::rack::RackFirmwareUpgradeState::Failed {
+                cause: "old failure".into(),
+            },
+            started_at: Some(requested_at - chrono::Duration::minutes(2)),
+            ended_at: Some(requested_at - chrono::Duration::minutes(1)),
+        };
+        let current_status = model::rack::RackFirmwareUpgradeStatus {
+            task_id: "current-backend-task".into(),
+            status: model::rack::RackFirmwareUpgradeState::Completed,
+            started_at: Some(requested_at + chrono::Duration::seconds(1)),
+            ended_at: Some(requested_at + chrono::Duration::seconds(2)),
+        };
+
+        let request = SwitchFirmwareRequest {
+            requested_at,
+            target_version: Some("fw-42".into()),
+        };
+
+        let cases = [
+            (
+                Some(&stale_status),
+                Some(&request),
+                rpc::FirmwareUpdateState::FwStateQueued,
+                "fw-42",
+            ),
+            (
+                None,
+                Some(&request),
+                rpc::FirmwareUpdateState::FwStateQueued,
+                "fw-42",
+            ),
+            (
+                Some(&current_status),
+                Some(&request),
+                rpc::FirmwareUpdateState::FwStateCompleted,
+                "fw-42",
+            ),
+            (
+                Some(&stale_status),
+                None,
+                rpc::FirmwareUpdateState::FwStateFailed,
+                "",
+            ),
+        ];
+
+        for (persisted, request, expected, expected_version) in cases {
+            let actual = select_persisted_switch_firmware_status(switch_id, persisted, request)
+                .expect("a request or a persisted status yields a status");
+            assert_eq!(
+                actual.state,
+                expected as i32,
+                "persisted: {persisted:?}, requested_at: {:?}",
+                request.map(|request| request.requested_at)
+            );
+            assert_eq!(
+                actual.target_version, expected_version,
+                "the active request carries the target version for its whole cycle"
+            );
+        }
+
+        assert!(
+            select_persisted_switch_firmware_status(switch_id, None, None).is_none(),
+            "the backend is required when neither request nor persisted status exists"
+        );
+    }
+
+    #[test]
+    fn switch_firmware_request_covers_pending_rack_and_dispatched_requests() {
+        let rack_requested_at = chrono::Utc::now();
+        let switch_requested_at = rack_requested_at + chrono::Duration::seconds(1);
+        let mut rack = test_rack_with_job(None);
+        let mut switch = test_switch();
+        switch.rack_id = Some(rack.id.clone());
+        rack.updated = rack_requested_at;
+        rack.config.maintenance_requested = Some(model::rack::MaintenanceScope {
+            switch_ids: vec![switch.id],
+            activities: vec![MaintenanceActivity::FirmwareUpgrade {
+                firmware_version: Some("firmware-object-json".into()),
+                components: vec![],
+                force_update: false,
+            }],
+            ..Default::default()
+        });
+
+        let request = switch_firmware_request(&switch, Some(&rack))
+            .expect("the accepted rack request gates status before device dispatch");
+        assert_eq!(request.requested_at, rack_requested_at);
+        assert_eq!(
+            request.target_version.as_deref(),
+            Some("firmware-object-json")
+        );
+
+        switch.switch_reprovisioning_requested = Some(model::switch::SwitchReprovisionRequest {
+            requested_at: switch_requested_at,
+            initiator: "test".into(),
+            activities: vec![MaintenanceActivity::FirmwareUpgrade {
+                firmware_version: None,
+                components: vec![],
+                force_update: false,
+            }],
+        });
+
+        let request = switch_firmware_request(&switch, Some(&rack))
+            .expect("a dispatched device request is still an active request");
+        assert_eq!(
+            request.requested_at, switch_requested_at,
+            "the dispatched device request is the more precise cycle boundary"
+        );
+        assert_eq!(
+            request.target_version.as_deref(),
+            Some("firmware-object-json"),
+            "the rack scope still supplies the version the operator asked for"
+        );
+
+        rack.config.maintenance_requested = Some(model::rack::MaintenanceScope {
+            power_shelf_ids: vec![test_power_shelf_id()],
+            activities: vec![MaintenanceActivity::FirmwareUpgrade {
+                firmware_version: None,
+                components: vec![],
+                force_update: false,
+            }],
+            ..Default::default()
+        });
+        switch.switch_reprovisioning_requested = None;
+        assert!(
+            switch_firmware_request(&switch, Some(&rack)).is_none(),
+            "a rack scope that excludes the switch is not its request"
+        );
+    }
+
+    #[test]
+    fn switch_firmware_request_ignores_version_from_an_unrelated_rack_scope() {
+        let requested_at = chrono::Utc::now();
+        let mut rack = test_rack_with_job(None);
+        let mut switch = test_switch();
+        switch.rack_id = Some(rack.id.clone());
+        rack.config.maintenance_requested = Some(model::rack::MaintenanceScope {
+            power_shelf_ids: vec![test_power_shelf_id()],
+            activities: vec![MaintenanceActivity::FirmwareUpgrade {
+                firmware_version: Some("other-firmware-object-json".into()),
+                components: vec![],
+                force_update: false,
+            }],
+            requested_at: Some(requested_at),
+            ..Default::default()
+        });
+        switch.switch_reprovisioning_requested = Some(model::switch::SwitchReprovisionRequest {
+            requested_at,
+            initiator: "test".into(),
+            activities: vec![MaintenanceActivity::FirmwareUpgrade {
+                firmware_version: None,
+                components: vec![],
+                force_update: false,
+            }],
+        });
+
+        let request = switch_firmware_request(&switch, Some(&rack))
+            .expect("the dispatched device request is active on its own");
+        assert_eq!(request.requested_at, requested_at);
+        assert_eq!(
+            request.target_version, None,
+            "a scope that does not cover this switch must not supply its target version"
+        );
+    }
+
+    #[test]
+    fn switch_firmware_request_ignores_later_rack_writes() {
+        let requested_at = chrono::Utc::now();
+        let mut rack = test_rack_with_job(None);
+        let mut switch = test_switch();
+        switch.rack_id = Some(rack.id.clone());
+        // The rack row is written repeatedly while the request is pending
+        // (state transitions, job updates), long after the upgrade started.
+        rack.updated = requested_at + chrono::Duration::minutes(5);
+        rack.config.maintenance_requested = Some(model::rack::MaintenanceScope {
+            activities: vec![MaintenanceActivity::FirmwareUpgrade {
+                firmware_version: Some("firmware-object-json".into()),
+                components: vec![],
+                force_update: false,
+            }],
+            requested_at: Some(requested_at),
+            ..Default::default()
+        });
+
+        let request = switch_firmware_request(&switch, Some(&rack))
+            .expect("a pending rack request is an active request");
+        assert_eq!(
+            request.requested_at, requested_at,
+            "the cycle boundary is when the request was accepted"
+        );
+
+        let status = model::rack::RackFirmwareUpgradeStatus {
+            task_id: "backend-task-id".into(),
+            status: model::rack::RackFirmwareUpgradeState::InProgress,
+            started_at: Some(requested_at + chrono::Duration::seconds(30)),
+            ended_at: None,
+        };
+        let selected =
+            select_persisted_switch_firmware_status(switch.id, Some(&status), Some(&request))
+                .expect("a pending request always yields a status");
+
+        assert_eq!(
+            selected.state,
+            rpc::FirmwareUpdateState::FwStateInProgress as i32,
+            "a later rack write must not send the upgrade back to queued"
+        );
     }
 
     #[test]
@@ -3906,6 +4727,94 @@ mod tests {
                 .as_ref()
                 .is_some_and(|result| result.error.contains("machine not found"))
         );
+    }
+
+    /// A failed rack firmware upgrade must reach the operator with the reason the
+    /// backend gave. The rack controller records it on `rack_fw_details`, the machine
+    /// controller copies it into `FailedFirmwareUpgrade` while clearing the
+    /// reprovisioning request, and this is the only place the API can surface it.
+    #[test]
+    fn derive_machine_firmware_update_status_failed_reports_the_reprovision_reason() {
+        use super::derive_machine_firmware_update_status;
+
+        fn failed_machine(reason: Option<&str>) -> Machine {
+            let mut machine = machine_with_id(standalone_machine(), host_machine_id());
+            machine.status.update_complete = false;
+            machine.state = Versioned::new(
+                ManagedHostState::HostReprovision {
+                    reprovision_state: HostReprovisionState::FailedFirmwareUpgrade {
+                        firmware_type: FirmwareComponentType::Unknown,
+                        report_time: Some(chrono::Utc::now()),
+                        reason: reason.map(str::to_owned),
+                    },
+                    retry_count: 0,
+                },
+                ConfigVersion::initial(),
+            );
+            machine
+        }
+
+        let machine_id = host_machine_id().to_string();
+        let cases = [
+            (
+                "the backend reason is reported verbatim",
+                Some("config_json.ProductName is required"),
+                "config_json.ProductName is required",
+            ),
+            (
+                "no recorded reason is reported as such",
+                None,
+                "firmware upgrade failed without a recorded reason",
+            ),
+            (
+                "a blank reason is treated as absent",
+                Some("   "),
+                "firmware upgrade failed without a recorded reason",
+            ),
+        ];
+
+        for (label, reason, expected_error) in cases {
+            let machine = failed_machine(reason);
+            let status =
+                derive_machine_firmware_update_status(&machine_id, Some(&machine), None, &[]);
+            let result = status.result.expect("a machine status carries a result");
+
+            assert_eq!(
+                status.state,
+                rpc::FirmwareUpdateState::FwStateFailed as i32,
+                "[{label}] state"
+            );
+            assert_eq!(result.error, expected_error, "[{label}] error");
+            assert_eq!(
+                result.status,
+                if expected_error.is_empty() {
+                    rpc::ComponentManagerStatusCode::Success as i32
+                } else {
+                    rpc::ComponentManagerStatusCode::InternalError as i32
+                },
+                "[{label}] status code"
+            );
+        }
+    }
+
+    /// A machine that is not in a firmware failure keeps the plain success result,
+    /// so the reason lookup cannot leak into healthy states.
+    #[test]
+    fn derive_machine_firmware_update_status_non_failed_states_stay_successful() {
+        use super::derive_machine_firmware_update_status;
+
+        let mut machine = machine_with_id(standalone_machine(), host_machine_id());
+        machine.status.update_complete = true;
+        let machine_id = host_machine_id().to_string();
+
+        let status = derive_machine_firmware_update_status(&machine_id, Some(&machine), None, &[]);
+        let result = status.result.expect("a machine status carries a result");
+
+        assert_eq!(
+            status.state,
+            rpc::FirmwareUpdateState::FwStateCompleted as i32
+        );
+        assert!(result.error.is_empty());
     }
 
     // ---- compute power-control (MachineIds) decision logic ----
