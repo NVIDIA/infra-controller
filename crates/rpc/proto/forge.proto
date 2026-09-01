@@ -5280,6 +5280,10 @@ message AdminForceDeleteMachineRequest {
   // Instance Type. True permits deletion and removes that association with the
   // Machine.
   bool allow_delete_with_instance_type = 8;
+
+  // False or omitted rejects deletion while an Instance is attached to the
+  // Machine. True permits deletion and destroys the attached Instance.
+  bool allow_delete_with_instance = 9;
 }
 
 message DecommissionManagedHostRequest {

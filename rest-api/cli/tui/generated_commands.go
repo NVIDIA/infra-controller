@@ -120,8 +120,9 @@ func runGeneratedTUICommand(s *Session, info appcli.GeneratedCommandInfo, args [
 	if err != nil {
 		return err
 	}
-	flagArgs, err = addMachineDeleteForceFlag(info, flagArgs, positionalArgs)
-	if err != nil {
+	var proceed bool
+	flagArgs, proceed, err = addMachineDeleteForceFlag(info, flagArgs, positionalArgs)
+	if err != nil || !proceed {
 		return err
 	}
 
@@ -161,9 +162,14 @@ func addMachineDeleteForceFlag(
 	info appcli.GeneratedCommandInfo,
 	args []string,
 	positionalArgs []string,
-) ([]string, error) {
-	if info.OperationID != "delete-machine" || hasGeneratedOption(info, args, "force") {
-		return args, nil
+) ([]string, bool, error) {
+	if info.OperationID != "delete-machine" {
+		return args, true, nil
+	}
+
+	forceProvided := hasGeneratedOption(info, args, "force")
+	if forceProvided && !generatedBoolOptionEnabled(info, args, "force") {
+		return args, true, nil
 	}
 
 	machineID := "the selected Machine"
@@ -174,10 +180,16 @@ func addMachineDeleteForceFlag(
 		"Force delete Machine %s? This overrides the assigned Instance Type restriction and removes the Machine's host, DPU, and BMC interfaces. Machines with attached Instances are rejected.",
 		machineID,
 	))
-	if err != nil || !force {
-		return args, err
+	if err != nil {
+		return args, false, err
 	}
-	return append(args, "--force=true"), nil
+	if !force {
+		return args, !forceProvided, nil
+	}
+	if forceProvided {
+		return args, true, nil
+	}
+	return append(args, "--force=true"), true, nil
 }
 
 func splitGeneratedArguments(info appcli.GeneratedCommandInfo, args []string) ([]string, []string, error) {

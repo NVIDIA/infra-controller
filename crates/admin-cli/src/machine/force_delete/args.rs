@@ -97,6 +97,39 @@ impl From<&Args> for AdminForceDeleteMachineRequest {
             delete_bmc_suppressions: args.delete_bmc_suppressions,
             delete_retained_boot_interfaces: args.delete_retained_boot_interfaces,
             allow_delete_with_instance_type: args.allow_delete_with_instance,
+            allow_delete_with_instance: args.allow_delete_with_instance,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn instance_override_maps_to_type_and_instance_permissions() {
+        for (name, argv, expected) in [
+            (
+                "omitted",
+                vec!["force-delete", "--machine", "machine-1"],
+                false,
+            ),
+            (
+                "enabled",
+                vec![
+                    "force-delete",
+                    "--machine",
+                    "machine-1",
+                    "--allow-delete-with-instance",
+                ],
+                true,
+            ),
+        ] {
+            let args = Args::try_parse_from(argv).unwrap_or_else(|error| panic!("{name}: {error}"));
+            let request = AdminForceDeleteMachineRequest::from(&args);
+
+            assert_eq!(request.allow_delete_with_instance_type, expected, "{name}");
+            assert_eq!(request.allow_delete_with_instance, expected, "{name}");
         }
     }
 }

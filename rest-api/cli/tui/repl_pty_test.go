@@ -297,12 +297,11 @@ func TestCLIRegression_RealTerminalAndNonInteractive(t *testing.T) {
 			terminal.waitFor(t, `"status": "accepted"`)
 		}
 
-		// Machine deletion presents the force override as an explicit rendered
-		// choice, states the attached-workload restriction, and sends force=true only
-		// after both confirmations.
+		// Explicit Machine force deletion states the attached-workload restriction
+		// and sends force=true only after both confirmations.
 		machineDeleteStart := len(terminal.transcript())
-		terminal.send(t, "machine delete host")
-		terminal.waitFor(t, "machine delete host-one")
+		terminal.send(t, "machine delete --force host")
+		terminal.waitFor(t, "machine delete --force host-one")
 		terminal.send(t, "\t\r")
 		terminal.waitFor(t, "Force delete Machine machine-1?")
 		terminal.send(t, "y\r")

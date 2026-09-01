@@ -214,6 +214,12 @@ async fn test_admin_force_delete_dpu_and_host_by_dpu_machine_id(pool: sqlx::PgPo
     for id in [host_machine_id, dpu_machine_id] {
         validate_machine_deletion(&env, &id, None).await;
     }
+
+    let retry_response = force_delete(&env, &dpu_machine_id).await;
+    assert!(
+        retry_response.all_done,
+        "Core force deletion must remain idempotent when the target is already absent"
+    );
 }
 
 async fn is_ek_cert_status_entry_present(txn: &mut PgConnection) -> bool {
@@ -415,6 +421,7 @@ async fn test_admin_force_delete_orders_locks_against_exploration(pool: sqlx::Pg
             delete_bmc_suppressions: false,
             delete_retained_boot_interfaces: false,
             allow_delete_with_instance_type: false,
+            allow_delete_with_instance: false,
         }))
         .await
     });
@@ -499,6 +506,7 @@ async fn test_admin_force_delete_orders_endpoint_locks_by_address(pool: sqlx::Pg
             delete_bmc_suppressions: false,
             delete_retained_boot_interfaces: false,
             allow_delete_with_instance_type: false,
+            allow_delete_with_instance: false,
         }))
         .await
     });
@@ -575,6 +583,7 @@ async fn test_admin_force_delete_orders_topology_before_endpoint(pool: sqlx::PgP
             delete_bmc_suppressions: false,
             delete_retained_boot_interfaces: false,
             allow_delete_with_instance_type: false,
+            allow_delete_with_instance: false,
         }))
         .await
     });
@@ -649,6 +658,7 @@ fn force_delete_request(machine_id: &MachineId) -> AdminForceDeleteMachineReques
         delete_bmc_suppressions: false,
         delete_retained_boot_interfaces: false,
         allow_delete_with_instance_type: false,
+        allow_delete_with_instance: false,
     }
 }
 
@@ -781,9 +791,11 @@ async fn validate_machine_deletion(
 
 /// Allocation locks the host Machine before inserting its Instance. If
 /// force-delete waits behind that lock, it must read membership after the wait
-/// and clean the Instance in the same request.
+/// and reject deletion without the explicit Instance override.
 #[crate::sqlx_test]
-async fn test_admin_force_delete_reads_instance_after_machine_lock(pool: sqlx::PgPool) {
+async fn test_admin_force_delete_rejects_instance_committed_before_machine_lock(
+    pool: sqlx::PgPool,
+) {
     let env = create_test_env(pool).await;
     let managed_host = create_managed_host(&env).await;
     let instance_id = InstanceId::new();
@@ -814,9 +826,8 @@ async fn test_admin_force_delete_reads_instance_after_machine_lock(pool: sqlx::P
         "fixture host must not have an Instance before concurrent allocation",
     );
 
-    // Force-delete waits for allocation's host Machine lock when it advances
-    // the Machine to ForceDeletion. It cannot read authoritative Instance
-    // membership until it owns that row.
+    // Force-delete cannot read authoritative Instance membership until it owns
+    // the same Machine row lock as allocation.
     let api = managed_host.api.clone();
     let host_id = managed_host.id;
     let force_delete_task = tokio::spawn(async move {
@@ -829,10 +840,11 @@ async fn test_admin_force_delete_reads_instance_after_machine_lock(pool: sqlx::P
             delete_bmc_suppressions: false,
             delete_retained_boot_interfaces: false,
             allow_delete_with_instance_type: false,
+            allow_delete_with_instance: false,
         }))
         .await
     });
-    wait_until_blocked_on(&env.pool, "UPDATE machines SET controller_state_version").await;
+    wait_until_blocked_on(&env.pool, "SELECT row_to_json(m.*)").await;
 
     let config = InstanceConfig {
         tenant: TenantConfig {
@@ -878,26 +890,28 @@ async fn test_admin_force_delete_reads_instance_after_machine_lock(pool: sqlx::P
     .unwrap();
     allocation_txn.commit().await.unwrap();
 
-    let response = force_delete_task
+    let error = force_delete_task
         .await
         .unwrap()
-        .expect("force-delete completes after allocation commits")
-        .into_inner();
-    assert!(response.all_done);
-    assert_eq!(response.instance_id, instance_id.to_string());
+        .expect_err("force-delete must reject the Instance committed while it waited");
+    assert_eq!(error.code(), tonic::Code::FailedPrecondition);
     assert!(
         db::instance::find_by_id(&env.pool, instance_id)
             .await
             .unwrap()
-            .is_none(),
-        "the same force-delete request must remove the concurrent Instance"
+            .is_some(),
+        "the rejected force-delete must retain the concurrent Instance"
     );
     for machine_id in managed_host
         .dpu_ids
         .iter()
         .chain(std::iter::once(&managed_host.id))
     {
-        validate_machine_deletion(&env, machine_id, None).await;
+        assert_eq!(
+            env.find_machine(*machine_id).await.len(),
+            1,
+            "the rejected force-delete must retain Machine {machine_id}"
+        );
     }
 }
 
@@ -953,11 +967,12 @@ async fn test_admin_force_delete_rereads_config_committed_before_marker(pool: sq
     let api = env.api.clone();
     let machine_id = managed_host.id;
     let force_delete = async move {
-        api.admin_force_delete_machine(Request::new(force_delete_request(&machine_id)))
-            .await
+        let mut request = force_delete_request(&machine_id);
+        request.allow_delete_with_instance = true;
+        api.admin_force_delete_machine(Request::new(request)).await
     };
     let orchestrate = async {
-        wait_until_blocked_on(&env.pool, "FOR UPDATE OF i").await;
+        wait_until_blocked_on(&env.pool, "SELECT row_to_json(m.*)").await;
         writer_txn.commit().await.unwrap();
 
         wait_until_blocked_on(&env.pool, "SELECT id FROM instance_addresses").await;
@@ -1027,8 +1042,9 @@ async fn test_admin_force_delete_marker_rejects_started_config_update(pool: sqlx
     let api = env.api.clone();
     let machine_id = managed_host.id;
     let force_delete = async move {
-        api.admin_force_delete_machine(Request::new(force_delete_request(&machine_id)))
-            .await
+        let mut request = force_delete_request(&machine_id);
+        request.allow_delete_with_instance = true;
+        api.admin_force_delete_machine(Request::new(request)).await
     };
     let orchestrate = async {
         wait_until_blocked_on(&env.pool, "SELECT id FROM instance_addresses").await;
@@ -1231,9 +1247,11 @@ async fn test_admin_force_delete_host_with_ib_instance(pool: sqlx::PgPool) {
 
     let mock_fabric = env.ib_fabric_manager.get_mock_manager();
     mock_fabric.set_unbind_failure(true);
+    let mut request = force_delete_request(&mh.id);
+    request.allow_delete_with_instance = true;
     let error = env
         .api
-        .admin_force_delete_machine(Request::new(force_delete_request(&mh.id)))
+        .admin_force_delete_machine(Request::new(request))
         .await
         .expect_err("the simulated UFM failure must stop force-delete");
     assert!(error.message().contains("simulated UFM unbind failure"));
@@ -1249,9 +1267,11 @@ async fn test_admin_force_delete_host_with_ib_instance(pool: sqlx::PgPool) {
         "force-delete must commit the retired membership before calling UFM"
     );
 
+    let mut request = force_delete_request(&mh.id);
+    request.allow_delete_with_instance = true;
     let repeated_error = env
         .api
-        .admin_force_delete_machine(Request::new(force_delete_request(&mh.id)))
+        .admin_force_delete_machine(Request::new(request))
         .await
         .expect_err("the repeated UFM failure must stop the retry");
     assert!(
@@ -1271,7 +1291,14 @@ async fn test_admin_force_delete_host_with_ib_instance(pool: sqlx::PgPool) {
 
     mock_fabric.set_unbind_failure(false);
 
-    let response = force_delete(&env, &mh.id).await;
+    let mut request = force_delete_request(&mh.id);
+    request.allow_delete_with_instance = true;
+    let response = env
+        .api
+        .admin_force_delete_machine(Request::new(request))
+        .await
+        .unwrap()
+        .into_inner();
     validate_delete_response(&response, Some(&mh.id), &mh.dpu().id);
 
     // after host deleted, ib port should be removed from UFM
@@ -1479,10 +1506,23 @@ async fn test_admin_force_delete_with_instance_type(pool: sqlx::PgPool) {
 
     // The default request should fail because the machine is associated with
     // an instance type.
-    env.api
+    let error = env
+        .api
         .admin_force_delete_machine(tonic::Request::new(request.clone()))
         .await
         .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+
+    let retained_machines = env.find_machine(tmp_machine_id).await;
+    assert_eq!(retained_machines.len(), 1);
+    assert_eq!(
+        retained_machines[0]
+            .config
+            .as_ref()
+            .unwrap()
+            .instance_type_id,
+        Some(instance_type_id.to_string())
+    );
 
     // An explicit override should remove the associated machine.
     request.allow_delete_with_instance_type = true;
@@ -1640,6 +1680,7 @@ async fn test_admin_force_delete_retains_boot_interface_ids(pool: sqlx::PgPool) 
             delete_bmc_suppressions: false,
             delete_retained_boot_interfaces: false,
             allow_delete_with_instance_type: false,
+            allow_delete_with_instance: false,
         }))
         .await
         .unwrap()
@@ -1724,6 +1765,7 @@ async fn test_admin_force_delete_clears_suppressions_and_retained_boot(pool: sql
             delete_bmc_suppressions: true,
             delete_retained_boot_interfaces: true,
             allow_delete_with_instance_type: false,
+            allow_delete_with_instance: false,
         }))
         .await
         .unwrap()
