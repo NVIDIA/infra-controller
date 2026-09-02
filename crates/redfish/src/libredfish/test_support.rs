@@ -106,6 +106,10 @@ struct RedfishSimState {
     /// (`503`), so callers' error-propagation paths can be exercised distinctly
     /// from an unauthorized rejection.
     get_accounts_error: bool,
+    /// When set, BMC event-log reads succeed with an empty log.
+    bmc_event_log_supported: bool,
+    /// When set, the next BMC event-log read fails with a transient error.
+    bmc_event_log_error_once: bool,
     /// Opt-in password-reuse policy. When on, a password *change* whose new
     /// value equals the account's current password is rejected (`400`), modeling
     /// the real BMCs that refuse a same-value change -- the exact behavior BMC
@@ -279,18 +283,25 @@ impl RedfishSim {
             .unwrap_or_default()
     }
 
-    /// Build a simulator with optional SPDM / firmware-integration test flags.
-    pub fn with_test_overrides(overrides: RedfishSimTestOverrides) -> Self {
-        Self {
-            state: Arc::new(Mutex::new(RedfishSimState {
-                no_component_integrities: overrides.no_component_integrities,
-                firmware_for_component_error: overrides.firmware_for_component_error,
-                get_task_trigger_evidence_returns_interrupted: overrides
-                    .get_task_trigger_evidence_returns_interrupted,
-                ..Default::default()
-            })),
-            credential_manager: TestCredentialManager::default(),
-        }
+    /// Model a BMC that exposes no `ComponentIntegrity` collection, so nothing
+    /// is eligible for SPDM attestation.
+    pub fn set_no_component_integrities(&self, no_component_integrities: bool) {
+        self.state.lock().unwrap().no_component_integrities = no_component_integrities;
+    }
+
+    /// Fail the firmware-inventory lookup an attestation makes while fetching
+    /// component metadata.
+    pub fn set_firmware_for_component_error(&self, error: bool) {
+        self.state.lock().unwrap().firmware_for_component_error = error;
+    }
+
+    /// Return the evidence-collection task as `Interrupted`, modelling a BMC
+    /// that keeps failing to produce evidence.
+    pub fn set_get_task_trigger_evidence_returns_interrupted(&self, interrupted: bool) {
+        self.state
+            .lock()
+            .unwrap()
+            .get_task_trigger_evidence_returns_interrupted = interrupted;
     }
 
     pub fn set_machine_setup_bios_job_id(&self, job_id: Option<String>) {
@@ -410,6 +421,16 @@ impl RedfishSim {
         self.state.lock().unwrap().get_accounts_error = error;
     }
 
+    /// Control whether BMC event-log reads succeed with an empty log.
+    pub fn set_bmc_event_log_supported(&self, supported: bool) {
+        self.state.lock().unwrap().bmc_event_log_supported = supported;
+    }
+
+    /// Fail the next BMC event-log read with a transient simulated error.
+    pub fn fail_next_bmc_event_log_read(&self) {
+        self.state.lock().unwrap().bmc_event_log_error_once = true;
+    }
+
     /// Enable the opt-in password-reuse policy (see
     /// [`RedfishSimState::reject_password_reuse`]): a same-value password change
     /// is rejected, so a caller that must not issue one is held to it.
@@ -487,14 +508,6 @@ impl RedfishSim {
             .await
             .expect("seed redfish-sim credential");
     }
-}
-
-/// Optional simulation flags used by API integration tests.
-#[derive(Clone, Default)]
-pub struct RedfishSimTestOverrides {
-    pub no_component_integrities: bool,
-    pub firmware_for_component_error: bool,
-    pub get_task_trigger_evidence_returns_interrupted: bool,
 }
 
 pub struct RedfishSimTimepoint {
@@ -1644,6 +1657,15 @@ impl Redfish for RedfishSimClient {
     ) -> libredfish::RedfishFuture<'a, Result<Vec<libredfish::model::sel::LogEntry>, RedfishError>>
     {
         Box::pin(async move {
+            let mut state = self.state.lock().unwrap();
+            if std::mem::take(&mut state.bmc_event_log_error_once) {
+                return Err(RedfishError::GenericError {
+                    error: "transient BMC event-log failure".to_string(),
+                });
+            }
+            if state.bmc_event_log_supported {
+                return Ok(Vec::new());
+            }
             Err(RedfishError::NotSupported(
                 "BMC Event Log not supported for tests".to_string(),
             ))

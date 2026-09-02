@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -42,6 +43,14 @@ var ErrExecutionAlreadyExists = errors.New("execution already exists")
 // longer owns the execution attempt.
 var ErrExecutionClaimLost = errors.New("execution claim lost")
 
+// ErrExecutionNotClaimable identifies an execution whose current state does
+// not permit acquiring a claim.
+var ErrExecutionNotClaimable = errors.New("execution is not claimable")
+
+// ErrInvalidExecutionInput identifies invalid arguments passed to an
+// execution operation.
+var ErrInvalidExecutionInput = errors.New("invalid execution input")
+
 const maxExecutionClaimOwnerRunes = 128
 
 // ValidateExecutionClaimOwner checks that a claim owner is a bounded, nonempty
@@ -62,17 +71,25 @@ func ValidateExecutionClaimOwner(owner string) error {
 
 // ExecutionClaimRequest bounds one atomic scheduler-store selection.
 type ExecutionClaimRequest struct {
-	Owner string
-	Limit int
+	Owner         string
+	Limit         int
+	ClaimDuration time.Duration
+	MaxAttempts   int
 }
 
-// Validate checks the owner and claim limit.
+// Validate checks the owner, batch limit, claim duration, and attempt bound.
 func (r ExecutionClaimRequest) Validate() error {
 	if err := ValidateExecutionClaimOwner(r.Owner); err != nil {
 		return err
 	}
 	if r.Limit <= 0 {
 		return fmt.Errorf("execution claim limit must be positive")
+	}
+	if r.ClaimDuration <= 0 {
+		return fmt.Errorf("execution claim duration must be positive")
+	}
+	if r.MaxAttempts <= 0 {
+		return fmt.Errorf("execution claim max attempts must be positive")
 	}
 
 	return nil
@@ -83,6 +100,14 @@ func (r ExecutionClaimRequest) Validate() error {
 type ClaimedExecution struct {
 	Execution Execution
 	Token     uuid.UUID
+}
+
+// ExecutionClaimBatch contains claims produced by one bounded candidate scan.
+// ScanLimitReached means the store inspected request.Limit eligible rows, so
+// additional work may remain even when exhausted rows reduced Claims.
+type ExecutionClaimBatch struct {
+	Claims           []ClaimedExecution
+	ScanLimitReached bool
 }
 
 // Validate checks the running execution and ownership fence.
@@ -116,6 +141,12 @@ type RuleFilter struct {
 	Enabled   *bool
 }
 
+// IncludesOrigin reports whether the filter permits rules from origin. A nil
+// origin filter permits every origin.
+func (f RuleFilter) IncludesOrigin(origin RuleOrigin) bool {
+	return f.Origin == nil || *f.Origin == origin
+}
+
 // Matches reports whether a rule satisfies every configured filter field.
 func (f RuleFilter) Matches(rule *Rule) bool {
 	if rule == nil {
@@ -125,7 +156,7 @@ func (f RuleFilter) Matches(rule *Rule) bool {
 	if f.EventType != nil && rule.EventType != *f.EventType {
 		return false
 	}
-	if f.Origin != nil && rule.Origin != *f.Origin {
+	if !f.IncludesOrigin(rule.Origin) {
 		return false
 	}
 	if f.Enabled != nil && rule.Enabled != *f.Enabled {
@@ -195,20 +226,22 @@ type EventPlanStore interface {
 type ExecutionStore interface {
 	// ClaimPendingExecutions atomically selects at most request.Limit pending
 	// rows, moves them to running, allocates attempts, and assigns request.Owner
-	// and fencing tokens.
+	// with fencing tokens and store-timed expirations.
 	ClaimPendingExecutions(
 		ctx context.Context,
 		request ExecutionClaimRequest,
-	) ([]ClaimedExecution, error)
-	// ClaimRetryExecutions atomically selects at most request.Limit due retry
-	// rows, moves them to running, allocates attempts, and assigns request.Owner
-	// and fencing tokens.
+	) (ExecutionClaimBatch, error)
+	// ClaimRetryExecutions atomically scans at most request.Limit due deferred or
+	// expired running rows. Expired rows whose attempt budget is exhausted are
+	// failed and may reduce the returned claim count; ScanLimitReached tells the
+	// caller to schedule another bounded scan.
 	ClaimRetryExecutions(
 		ctx context.Context,
 		request ExecutionClaimRequest,
-	) ([]ClaimedExecution, error)
+	) (ExecutionClaimBatch, error)
 	// TransitionClaimedExecution persists an attempt outcome only while token
-	// owns the running execution.
+	// owns the running execution. Expiration permits reclamation but does not
+	// invalidate the token before a reclaimer replaces it.
 	TransitionClaimedExecution(
 		ctx context.Context,
 		executionID uuid.UUID,
@@ -217,20 +250,11 @@ type ExecutionStore interface {
 	) error
 }
 
-// ExecutionTaskStore persists the normalized one-to-many relationship between
-// executions and their rack-partitioned downstream tasks.
-type ExecutionTaskStore interface {
-	// GetExecutionTask returns the task associated with one execution and rack.
-	// A missing association returns (nil, nil).
-	GetExecutionTask(
-		ctx context.Context,
-		executionID uuid.UUID,
-		rackID uuid.UUID,
-	) (*ExecutionTask, error)
-	// CreateExecutionTask atomically creates an association or returns the
-	// existing association for the same execution and rack.
-	CreateExecutionTask(
-		ctx context.Context,
-		association ExecutionTask,
-	) (*ExecutionTask, error)
+// Store is the complete persistence boundary required by the event-rule
+// manager.
+type Store interface {
+	RuleStore
+	BindingStore
+	EventPlanStore
+	ExecutionStore
 }
