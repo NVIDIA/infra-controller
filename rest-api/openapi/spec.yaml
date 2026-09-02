@@ -10043,6 +10043,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/NICoAPIError'
+        '429':
+          $ref: '#/components/responses/ResourceExhaustedError'
         '422':
           description: Describes an error response for 422 Unprocessable Content
           $ref: '#/components/responses/GenericHttpError'
