@@ -211,7 +211,7 @@ async fn test_admin_force_delete_dpu_and_host_by_dpu_machine_id(pool: sqlx::PgPo
     validate_delete_response(&response, Some(&host_machine_id), &dpu_machine_id);
     assert!(response.all_done, "Host must be deleted");
 
-    for id in [host_machine_id, dpu_machine_id] {
+    for id in [host_machine_id.into(), dpu_machine_id.into()] {
         validate_machine_deletion(&env, &id, None).await;
     }
 
@@ -241,7 +241,7 @@ async fn test_admin_force_delete_dpu_and_host_by_host_machine_id(pool: sqlx::PgP
 
     let bmc_addrs = vec![
         IpAddr::from_str(
-            env.find_machine(host_machine_id)
+            env.find_machine(&host_machine_id)
                 .await
                 .first()
                 .unwrap()
@@ -254,7 +254,7 @@ async fn test_admin_force_delete_dpu_and_host_by_host_machine_id(pool: sqlx::PgP
         )
         .unwrap(),
         IpAddr::from_str(
-            env.find_machine(dpu_machine_id)
+            env.find_machine(&dpu_machine_id)
                 .await
                 .first()
                 .unwrap()
@@ -302,8 +302,8 @@ async fn test_admin_force_delete_dpu_and_host_by_host_machine_id(pool: sqlx::PgP
     let response = force_delete(&env, &host_machine_id).await;
     validate_delete_response(&response, Some(&host_machine_id), &dpu_machine_id);
 
-    assert!(env.find_machine(host_machine_id).await.is_empty());
-    assert!(env.find_machine(dpu_machine_id).await.is_empty());
+    assert!(env.find_machine(&host_machine_id).await.is_empty());
+    assert!(env.find_machine(&dpu_machine_id).await.is_empty());
 
     assert!(response.all_done, "Host and DPU must be deleted");
     assert!(
@@ -312,7 +312,7 @@ async fn test_admin_force_delete_dpu_and_host_by_host_machine_id(pool: sqlx::PgP
     );
 
     // Everything should be gone now
-    for id in [host_machine_id, dpu_machine_id] {
+    for id in [host_machine_id.into(), dpu_machine_id.into()] {
         validate_machine_deletion(&env, &id, Some(&bmc_addrs)).await;
     }
 }
@@ -336,7 +336,7 @@ async fn test_admin_force_delete_dpu_and_partially_discovered_host(pool: sqlx::P
         .into_inner();
     assert_eq!(ifaces.interfaces.len(), 1);
     let iface = ifaces.interfaces.remove(0);
-    assert_eq!(iface.attached_dpu_machine_id, Some(dpu_machine_id));
+    assert_eq!(iface.attached_dpu_machine_id, Some(dpu_machine_id.into()));
 
     let mut txn = env.pool.begin().await.unwrap();
     let host = db::machine::find_host_by_dpu_machine_id(&mut txn, &dpu_machine_id)
@@ -532,9 +532,11 @@ async fn test_admin_force_delete_orders_endpoint_locks_by_address(pool: sqlx::Pg
     for machine_id in managed_host
         .dpu_ids
         .iter()
-        .chain(std::iter::once(&managed_host.id))
+        .copied()
+        .map(MachineId::from)
+        .chain(std::iter::once(managed_host.id.into()))
     {
-        validate_machine_deletion(&env, machine_id, None).await;
+        validate_machine_deletion(&env, &machine_id, None).await;
     }
 }
 
@@ -648,7 +650,7 @@ async fn force_delete(
         .into_inner()
 }
 
-fn force_delete_request(machine_id: &MachineId) -> AdminForceDeleteMachineRequest {
+fn force_delete_request(machine_id: &impl std::fmt::Display) -> AdminForceDeleteMachineRequest {
     AdminForceDeleteMachineRequest {
         host_query: machine_id.to_string(),
         delete_interfaces: false,
@@ -746,7 +748,7 @@ async fn validate_machine_deletion(
     bmc_addrs: Option<&Vec<IpAddr>>,
 ) {
     // The machine should be now be gone in the API
-    let response = env.find_machine(*machine_id).await;
+    let response = env.find_machine(machine_id).await;
     assert!(response.is_empty());
 
     // And it should also be gone on the DB layer
@@ -873,7 +875,7 @@ async fn test_admin_force_delete_rejects_instance_committed_before_machine_lock(
     db::instance::batch_persist(
         vec![NewInstance {
             instance_id,
-            machine_id: managed_host.id,
+            machine_id: managed_host.id.into(),
             instance_type_id: None,
             config: &config,
             metadata: Metadata::default(),
@@ -905,10 +907,12 @@ async fn test_admin_force_delete_rejects_instance_committed_before_machine_lock(
     for machine_id in managed_host
         .dpu_ids
         .iter()
-        .chain(std::iter::once(&managed_host.id))
+        .copied()
+        .map(MachineId::from)
+        .chain(std::iter::once(managed_host.id.into()))
     {
         assert_eq!(
-            env.find_machine(*machine_id).await.len(),
+            env.find_machine(&machine_id).await.len(),
             1,
             "the rejected force-delete must retain Machine {machine_id}"
         );
@@ -1001,7 +1005,7 @@ async fn test_admin_force_delete_rereads_config_committed_before_marker(pool: sq
     let (response, ()) = tokio::join!(force_delete, orchestrate);
     let response = response.unwrap().into_inner();
     validate_delete_response(&response, Some(&managed_host.id), &managed_host.dpu().id);
-    for machine_id in [managed_host.id, managed_host.dpu().id] {
+    for machine_id in [managed_host.id.into(), managed_host.dpu().id.into()] {
         validate_machine_deletion(&env, &machine_id, None).await;
     }
     let generated_segment_is_deleted: bool =
@@ -1078,7 +1082,7 @@ async fn test_admin_force_delete_marker_rejects_started_config_update(pool: sqlx
     let (response, ()) = tokio::join!(force_delete, orchestrate);
     let response = response.unwrap().into_inner();
     validate_delete_response(&response, Some(&managed_host.id), &managed_host.dpu().id);
-    for machine_id in [managed_host.id, managed_host.dpu().id] {
+    for machine_id in [managed_host.id.into(), managed_host.dpu().id.into()] {
         validate_machine_deletion(&env, &machine_id, None).await;
     }
 }
@@ -1206,7 +1210,7 @@ async fn test_admin_force_delete_host_with_ib_instance(pool: sqlx::PgPool) {
     txn.commit().await.unwrap();
 
     let check_instance = tinstance.rpc_instance().await;
-    assert_eq!(check_instance.machine_id(), mh.id);
+    assert_eq!(check_instance.machine_id(), mh.id.into());
     assert_eq!(check_instance.status().tenant(), rpc::TenantState::Ready);
     assert_eq!(instance, check_instance);
 
@@ -1309,8 +1313,8 @@ async fn test_admin_force_delete_host_with_ib_instance(pool: sqlx::PgPool) {
     };
     assert_eq!(ib_fabric.find_ib_port(Some(filter)).await.unwrap().len(), 0);
 
-    assert!(env.find_machine(mh.id).await.is_empty());
-    assert!(env.find_machine(mh.dpu().id).await.is_empty());
+    assert!(env.find_machine(&mh.id).await.is_empty());
+    assert!(env.find_machine(&mh.dpu().id).await.is_empty());
 
     assert_eq!(response.ufm_unregistrations, 1);
     assert!(response.all_done, "Host and DPU must be deleted");
@@ -1338,7 +1342,7 @@ async fn test_admin_force_delete_host_with_ib_instance(pool: sqlx::PgPool) {
     );
 
     // Everything should be gone now
-    for id in [mh.id, mh.dpu().id] {
+    for id in [mh.id.into(), mh.dpu().id.into()] {
         validate_machine_deletion(&env, &id, None).await;
     }
 }
@@ -1376,7 +1380,7 @@ async fn test_admin_force_delete_managed_host_multi_dpu(pool: sqlx::PgPool) {
 
     validate_delete_response_multi_dpu(&response, Some(&mh.host().id), dpu_ids.as_slice());
 
-    for id in [&[mh.host().id], dpu_ids.as_slice()].concat().iter() {
+    for id in [&[mh.host().id.into()], dpu_ids.as_slice()].concat().iter() {
         validate_machine_deletion(&env, id, None).await;
     }
 }
@@ -1390,6 +1394,7 @@ async fn test_admin_force_delete_dpu_from_managed_host_multi_dpu(pool: sqlx::PgP
         .dpu_ids
         .clone()
         .into_iter()
+        .map(Into::into)
         .collect::<Vec<carbide_uuid::machine::MachineId>>();
     assert_eq!(
         mh.dpu_ids.len(),
@@ -1413,8 +1418,14 @@ async fn test_admin_force_delete_dpu_from_managed_host_multi_dpu(pool: sqlx::PgP
 
     validate_delete_response_multi_dpu(&response, Some(&mh.host().id), &rpc_dpu_ids);
 
-    for id in mh.dpu_ids.iter().chain([&mh.id]) {
-        validate_machine_deletion(&env, id, None).await;
+    for id in mh
+        .dpu_ids
+        .iter()
+        .copied()
+        .map(MachineId::from)
+        .chain([mh.id.into()])
+    {
+        validate_machine_deletion(&env, &id, None).await;
     }
 }
 
@@ -1513,7 +1524,7 @@ async fn test_admin_force_delete_with_instance_type(pool: sqlx::PgPool) {
         .unwrap_err();
     assert_eq!(error.code(), tonic::Code::FailedPrecondition);
 
-    let retained_machines = env.find_machine(tmp_machine_id).await;
+    let retained_machines = env.find_machine(&tmp_machine_id).await;
     assert_eq!(retained_machines.len(), 1);
     assert_eq!(
         retained_machines[0]
@@ -1536,7 +1547,7 @@ async fn test_admin_force_delete_with_instance_type(pool: sqlx::PgPool) {
         response.all_done,
         "the machine should delete when the instance type override is set"
     );
-    assert!(env.find_machine(tmp_machine_id).await.is_empty());
+    assert!(env.find_machine(&tmp_machine_id).await.is_empty());
 }
 
 /// Force delete with DPF: the node_id and dpu_device_names passed to
