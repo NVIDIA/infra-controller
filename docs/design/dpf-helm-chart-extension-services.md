@@ -9,7 +9,6 @@ GitHub Issue: [#3103](https://github.com/NVIDIA/infra-controller/issues/3103)
 |   0.1   | 07/01/2026 | Felicity Xu | Initial version |
 |   0.2   | 08/13/2026 | Felicity Xu | Revised version |
 
-
 ## 2. Summary
 
 NICo currently supports DPU Extension Services of type `KUBERNETES_POD`. When a
@@ -96,7 +95,6 @@ Stage 2 must:
    expose narrowly scoped overrides for those fields when a use case
    establishes their ownership and update.
 
-
 ## 3. Design
 
 ### 3.0 Helm Chart Requirements
@@ -169,7 +167,7 @@ and validate the required Kubernetes Secrets. NICo does not accept, store,
 rotate, update, or delete DPF Helm-chart credentials.
 
 - A private Helm-chart repository requires an Argo CD repository Secret in the
-  namespace in which Argo CD runs, i.e. `argocd`. 
+  namespace in which Argo CD runs, i.e. `argocd`.
 - A private image registry requires a Secret
   in `dpf-operator-system`, labeled `dpu.nvidia.com/image-pull-secret` so DPF
   mirrors it to the target DPU clusters.
@@ -764,7 +762,7 @@ service configuration in the persisted instance configuration with
 `removed: true`; it does not remove it immediately.
 
 The removed entry is the durable detachment intent. The API handler validates
-and persists the configuration change but does not call DPF. 
+and persists the configuration change but does not call DPF.
 
 #### 3.8.2 DPUDevice Label Removal and Recovery
 
