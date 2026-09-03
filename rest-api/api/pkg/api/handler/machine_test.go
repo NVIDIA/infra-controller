@@ -3286,7 +3286,7 @@ func TestMachineHandler_Delete(t *testing.T) {
 			if tc.siteClientError {
 				siteClientPool = failingSiteTemporalClientPool{err: fmt.Errorf("test Site client lookup failure")}
 			}
-			handler := NewDeleteMachineHandler(fixture.DBSession, siteClientPool, fixture.Config)
+			handler := NewDeleteMachineHandler(fixture.DBSession, siteClientPool)
 			var linkedInstanceID uuid.UUID
 			var linkedMachineInstanceTypeID uuid.UUID
 
@@ -3409,7 +3409,7 @@ func TestMachineHandler_Delete(t *testing.T) {
 
 	t.Run("cleanup failure rolls back before compatibility retry", func(t *testing.T) {
 		fixture := common.NewTestSetupProviderMachineHandlerFixture(t, &corev1.AdminForceDeleteMachineResponse{})
-		handler := NewDeleteMachineHandler(fixture.DBSession, fixture.SiteClientPool, fixture.Config)
+		handler := NewDeleteMachineHandler(fixture.DBSession, fixture.SiteClientPool)
 		machine, err := cdbm.NewMachineDAO(fixture.DBSession).GetByID(
 			context.Background(),
 			nil,

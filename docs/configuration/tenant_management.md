@@ -725,6 +725,12 @@ nico-admin-cli -a <core-api-url> machine reboot --machine-id="<machine-id>"
 nico-admin-cli -a <core-api-url> machine force-delete --machine="<machine-id>"
 ```
 
+The unflagged command requires a Machine with no assigned Instance Type or
+attached Instance. Add `--allow-delete-with-instance-type` to remove an
+Instance Type association. `--allow-delete-with-instance` implies that
+override and permits removal of the control-plane record for the attached
+Instance without stopping the running tenant workload.
+
 See the [Machine Reboot](../playbooks/machine_reboot.md) and [Force Delete](../playbooks/force_delete.md) playbooks in the core documentation for detailed procedures.
 
 ## Tenant Lifecycle Operations

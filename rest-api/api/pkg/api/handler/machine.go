@@ -1710,7 +1710,7 @@ type DeleteMachineHandler struct {
 }
 
 // NewDeleteMachineHandler initializes and returns a new handler to delete a Machine.
-func NewDeleteMachineHandler(dbSession *cdb.Session, scp common.SiteTemporalClientPool, _ *config.Config) DeleteMachineHandler {
+func NewDeleteMachineHandler(dbSession *cdb.Session, scp common.SiteTemporalClientPool) DeleteMachineHandler {
 	return DeleteMachineHandler{
 		dbSession:  dbSession,
 		scp:        scp,
