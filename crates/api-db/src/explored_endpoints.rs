@@ -27,7 +27,7 @@ use model::site_explorer::{
     PowerDrainState, PreingestionState, TimeSyncResetPhase,
 };
 use sqlx::postgres::PgRow;
-use sqlx::{FromRow, PgConnection, Row};
+use sqlx::{FromRow, PgConnection, PgExecutor, Row};
 
 use crate::db_read::DbReader;
 use crate::{BIND_LIMIT, DatabaseError};
@@ -190,17 +190,19 @@ pub async fn find_all(txn: impl DbReader<'_>) -> Result<Vec<ExploredEndpoint>, D
         .map_err(|e| DatabaseError::new("explored_endpoints find_all", e))
 }
 
-/// The WHERE clause matching endpoints still in preingestion that are neither
-/// waiting for a site-explorer refresh nor in an error state. If
-/// LastExplorationError is completely nonexistent it is NULL; if it is there
-/// and indicates a null value it is 'null'.
+/// The WHERE clause matching endpoints ready for pre-ingestion work. Active RMS
+/// firmware jobs remain eligible because polling them does not access the BMC.
+/// Other endpoints must not be waiting for a site-explorer refresh or have a
+/// `LastExplorationError`. If `LastExplorationError` is absent it is NULL; an
+/// explicit null value is 'null'.
 ///
 /// [`find_preingest_not_waiting_not_error`] and
 /// [`count_preingest_not_waiting_not_error`] both build their queries from
 /// this, so the row-returning and counting variants cannot drift apart.
-const PREINGEST_NOT_WAITING_NOT_ERROR_WHERE: &str = "(preingestion_state IS NULL OR preingestion_state->'state' != '\"complete\"')
-                            AND waiting_for_explorer_refresh = false
-                            AND (exploration_report->'LastExplorationError' IS NULL OR exploration_report->'LastExplorationError' = 'null')";
+const PREINGEST_NOT_WAITING_NOT_ERROR_WHERE: &str = "(preingestion_state->>'state' IN ('rackfirmwaresubmitting', 'rackfirmwareupdatewait')
+                            OR ((preingestion_state IS NULL OR preingestion_state->'state' != '\"complete\"')
+                                AND waiting_for_explorer_refresh = false
+                                AND (exploration_report->'LastExplorationError' IS NULL OR exploration_report->'LastExplorationError' = 'null')))";
 
 /// find_preingest_not_waiting gets everything that is still in preingestion that isn't waiting for site explorer to refresh it again and isn't in an error state.
 pub async fn find_preingest_not_waiting_not_error(
@@ -251,7 +253,8 @@ pub async fn count_preingest_not_waiting_not_error(
 /// [`find_preingest_installing`] and [`count_preingest_installing`] both build
 /// their queries from this, so the row-returning and counting variants cannot
 /// drift apart.
-const PREINGEST_INSTALLING_WHERE: &str = "preingestion_state->'state' = '\"upgradefirmwarewait\"'";
+const PREINGEST_INSTALLING_WHERE: &str =
+    "preingestion_state->>'state' IN ('upgradefirmwarewait', 'rackfirmwareupdatewait')";
 
 /// find_preingest_installing returns the endpoints where we are waiting for firmware installs.
 ///
@@ -525,6 +528,26 @@ async fn set_preingestion(
     Ok(())
 }
 
+async fn set_preingestion_preserving_failed(
+    address: IpAddr,
+    state: PreingestionState,
+    txn: &mut PgConnection,
+) -> Result<(), DatabaseError> {
+    let query = "
+UPDATE explored_endpoints
+SET preingestion_state = $1
+WHERE address = $2
+  AND preingestion_state->>'state' IS DISTINCT FROM 'failed'";
+    sqlx::query(query)
+        .bind(sqlx::types::Json(&state))
+        .bind(address)
+        .execute(txn)
+        .await
+        .map_err(|e| DatabaseError::query(query, e))?;
+
+    Ok(())
+}
+
 pub async fn set_preingestion_recheck_versions(
     address: IpAddr,
     txn: &mut PgConnection,
@@ -606,6 +629,52 @@ pub async fn set_preingestion_waittask(
     set_preingestion(address, state, txn).await
 }
 
+/// Atomically claims one endpoint as the submitter for a compute-tray RMS update.
+///
+/// Returns `false` without changing the row when the endpoint is not in a
+/// schedulable state. Clearing an earlier job ID and entering the submitting
+/// state happen in the same update.
+pub async fn claim_preingestion_rack_firmware_submitting(
+    address: IpAddr,
+    txn: &mut PgConnection,
+) -> Result<bool, DatabaseError> {
+    let query = r#"
+        UPDATE explored_endpoints
+        SET preingestion_state = $1,
+            backend_firmware_object_job_id = NULL
+        WHERE address = $2
+          AND preingestion_state->>'state' IN (
+              'setntpservers',
+              'timesyncreset',
+              'recheckversions',
+              'recheckversionsafterfailure'
+          )
+    "#;
+
+    let state = PreingestionState::RackFirmwareSubmitting;
+
+    let result = sqlx::query(query)
+        .bind(sqlx::types::Json(&state))
+        .bind(address)
+        .execute(txn)
+        .await
+        .map_err(|error| DatabaseError::query(query, error))?;
+
+    Ok(result.rows_affected() == 1)
+}
+
+/// Moves the canonical compute-tray endpoint into the RMS firmware wait state.
+///
+/// Callers persist the accepted backend job ID in the same transaction so the
+/// wait state is always recoverable after restart.
+pub async fn set_preingestion_rack_firmware_wait(
+    address: IpAddr,
+    txn: &mut PgConnection,
+) -> Result<(), DatabaseError> {
+    let state = PreingestionState::RackFirmwareUpdateWait;
+    set_preingestion(address, state, txn).await
+}
+
 pub async fn set_preingestion_reset_for_new_firmware(
     address: IpAddr,
     final_version: &str,
@@ -645,6 +714,15 @@ pub async fn set_preingestion_complete(
 ) -> Result<(), DatabaseError> {
     let state = PreingestionState::Complete;
     set_preingestion(address, state, txn).await
+}
+
+/// Completes rack firmware pre-ingestion unless another worker has already
+/// recorded a terminal failure for the endpoint.
+pub async fn set_preingestion_rack_firmware_complete(
+    address: IpAddr,
+    txn: &mut PgConnection,
+) -> Result<(), DatabaseError> {
+    set_preingestion_preserving_failed(address, PreingestionState::Complete, txn).await
 }
 
 pub async fn pregestion_hostboot_time_test(
@@ -729,6 +807,16 @@ pub async fn set_preingestion_failed(
 ) -> Result<(), DatabaseError> {
     let state = PreingestionState::Failed { reason };
     set_preingestion(address, state, txn).await
+}
+
+/// Records a rack firmware pre-ingestion failure unless another worker has
+/// already recorded the endpoint's terminal failure and its original reason.
+pub async fn set_preingestion_rack_firmware_failed(
+    address: IpAddr,
+    reason: String,
+    txn: &mut PgConnection,
+) -> Result<(), DatabaseError> {
+    set_preingestion_preserving_failed(address, PreingestionState::Failed { reason }, txn).await
 }
 
 /// If the endpoint's preingestion is in the terminal `Failed` state, reset it
@@ -830,12 +918,13 @@ pub async fn find_by_mac_address(
         .map_err(|e| DatabaseError::new("explored_endpoints find_freetext_in_report", e))
 }
 
-/// Persist the backend firmware-object job ID for a pre-ingestion compute tray,
-/// keyed by BMC IP. Mirrors [`machine::save_backend_firmware_object_job_id`] for
-/// trays that have no `machines` row yet, so `get_firmware_status` can recover
-/// the job after a nico-api restart loses the in-memory job map.
+/// Persists the backend firmware-object job ID for a pre-ingestion compute tray.
+///
+/// The BMC IP identifies the canonical explored endpoint selected for the tray.
+/// The generic executor lets callers persist the job and state transition in
+/// one transaction.
 pub async fn save_backend_firmware_object_job_id_by_ip(
-    db: &sqlx::PgPool,
+    db: impl PgExecutor<'_>,
     address: IpAddr,
     job_id: &str,
 ) -> Result<(), DatabaseError> {
@@ -859,7 +948,7 @@ pub async fn save_backend_firmware_object_job_id_by_ip(
     Ok(())
 }
 
-/// Fetch the persisted backend firmware-object job ID for a pre-ingestion
+/// Fetches the persisted backend firmware-object job ID for a pre-ingestion
 /// compute tray by BMC IP, if any.
 pub async fn get_backend_firmware_object_job_id_by_ip(
     db: &sqlx::PgPool,
@@ -999,6 +1088,7 @@ pub async fn set_pause_ingestion_and_poweron(
 
 #[cfg(test)]
 mod tests {
+    use model::site_explorer::PreingestionState::RackFirmwareUpdateWait;
     use model::site_explorer::{Chassis, NetworkAdapter};
 
     use super::*;
@@ -1051,6 +1141,13 @@ mod tests {
         seed_endpoint(&mut txn, "10.0.0.1", PreingestionState::Initial).await;
         seed_endpoint(&mut txn, "10.0.0.2", PreingestionState::RecheckVersions).await;
         seed_endpoint(&mut txn, "10.0.0.3", installing_state()).await;
+
+        seed_endpoint(&mut txn, "10.0.0.5", RackFirmwareUpdateWait).await;
+
+        set_waiting_for_explorer_refresh("10.0.0.5".parse().unwrap(), &mut txn)
+            .await
+            .unwrap();
+
         // One that is complete -> excluded by the predicate.
         seed_endpoint(&mut txn, "10.0.0.4", PreingestionState::Complete).await;
 
@@ -1061,8 +1158,8 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(rows.len(), 3, "three endpoints match the predicate");
-        assert_eq!(count, 3, "count agrees with the row count");
+        assert_eq!(rows.len(), 4, "four endpoints match the predicate");
+        assert_eq!(count, 4, "count agrees with the row count");
         assert_eq!(count, rows.len() as i64);
     }
 
@@ -1074,14 +1171,17 @@ mod tests {
         let mut txn = pool.begin().await.unwrap();
         seed_endpoint(&mut txn, "10.0.1.1", installing_state()).await;
         seed_endpoint(&mut txn, "10.0.1.2", installing_state()).await;
+
+        seed_endpoint(&mut txn, "10.0.1.4", RackFirmwareUpdateWait).await;
+
         // Not installing -> excluded.
         seed_endpoint(&mut txn, "10.0.1.3", PreingestionState::Initial).await;
 
         let rows = find_preingest_installing(&mut *txn).await.unwrap();
         let count = count_preingest_installing(&mut *txn).await.unwrap();
 
-        assert_eq!(rows.len(), 2, "two endpoints are installing firmware");
-        assert_eq!(count, 2, "count agrees with the row count");
+        assert_eq!(rows.len(), 3, "three endpoints are installing firmware");
+        assert_eq!(count, 3, "count agrees with the row count");
         assert_eq!(count, rows.len() as i64);
     }
 
@@ -1108,5 +1208,65 @@ mod tests {
         let endpoints = find_by_mac_address(&mut *txn, mac_address).await.unwrap();
         assert_eq!(endpoints.len(), 1);
         assert_eq!(endpoints[0].address, address);
+    }
+
+    #[crate::sqlx_test]
+    async fn rack_firmware_terminal_updates_preserve_existing_failure(pool: sqlx::PgPool) {
+        let mut txn = pool.begin().await.unwrap();
+        let failed_address = "10.0.3.1".parse().unwrap();
+        let waiting_address = "10.0.3.2".parse().unwrap();
+
+        seed_endpoint(
+            &mut txn,
+            "10.0.3.1",
+            PreingestionState::Failed {
+                reason: "first failure".to_string(),
+            },
+        )
+        .await;
+
+        seed_endpoint(&mut txn, "10.0.3.2", RackFirmwareUpdateWait).await;
+
+        set_preingestion_rack_firmware_complete(failed_address, &mut txn)
+            .await
+            .unwrap();
+
+        set_preingestion_rack_firmware_failed(
+            failed_address,
+            "stale worker failure".to_string(),
+            &mut txn,
+        )
+        .await
+        .unwrap();
+
+        set_preingestion_rack_firmware_complete(waiting_address, &mut txn)
+            .await
+            .unwrap();
+
+        let endpoints = find_by_ips(&mut *txn, vec![failed_address, waiting_address])
+            .await
+            .unwrap();
+
+        let failed_endpoint = endpoints
+            .iter()
+            .find(|endpoint| endpoint.address == failed_address)
+            .unwrap();
+
+        let completed_endpoint = endpoints
+            .iter()
+            .find(|endpoint| endpoint.address == waiting_address)
+            .unwrap();
+
+        assert_eq!(
+            failed_endpoint.preingestion_state,
+            PreingestionState::Failed {
+                reason: "first failure".to_string(),
+            }
+        );
+
+        assert_eq!(
+            completed_endpoint.preingestion_state,
+            PreingestionState::Complete
+        );
     }
 }
