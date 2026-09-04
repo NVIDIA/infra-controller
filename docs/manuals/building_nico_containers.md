@@ -87,9 +87,10 @@ make images-all NICO_ARCHES=amd64 DPU_ARCHES=arm64
 A single-architecture build still produces a valid tag at `$(IMAGE_TAG)` (the multi-arch
 manifest just has one entry). Values other than `amd64`/`arm64` fail fast with an error.
 
-The published `machine-validation` image follows `NICO_ARCHES`. Its embedded
-runner defaults to x86_64 for `make images-all`; `make images-all-arm` overrides
-the runner to ARM64 so the complete ARM-only path stays native.
+`images-machine-validation` retains its existing x86_64 runner and requires
+`NICO_ARCHES` to include `amd64`. The additive
+`images-machine-validation-arm` target builds the runner and config image for
+ARM64 and is used only by `make images-all-arm`.
 
 Each architecture is built separately before the bare tag is assembled. This matches CI
 and is required for the REST Dockerfiles: a single combined Buildx invocation would reuse

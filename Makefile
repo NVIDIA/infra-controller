@@ -107,9 +107,10 @@ BOOT_ARTIFACTS_RUNTIME_IMAGE ?= docker.io/library/alpine:3.20.10@sha256:d9e853e8
 NICO_ARCHES ?= amd64 arm64
 BOOT_ARTIFACTS_ARCHES ?= amd64 arm64
 DPU_ARCHES ?= amd64 arm64
-MACHINE_VALIDATION_RUNNER_ARCH ?= amd64
 
 check-arches = $(if $(strip $(1)),,$(error $(2) must not be empty))$(if $(filter-out amd64 arm64,$(1)),$(error $(2) must be a subset of "amd64 arm64", got: $(1)))
+
+require-nico-amd64 = $(if $(filter amd64,$(NICO_ARCHES)),,$(error NICO_ARCHES must include amd64: the machine-validation-runner intermediate image is always built for amd64 and depends on the amd64 Core runtime base container that images-base only pushes when amd64 is requested; got: $(NICO_ARCHES)))
 
 # Intermediate base containers the Core and machine-validation images build FROM.
 CORE_BUILD_CONTAINER_AMD64 ?= $(IMAGE_REGISTRY)/nico-buildcontainer:$(IMAGE_TAG)-amd64
@@ -118,7 +119,7 @@ CORE_RUNTIME_CONTAINER_AMD64 ?= $(IMAGE_REGISTRY)/nico-runtime-container:$(IMAGE
 CORE_RUNTIME_CONTAINER_ARM64 ?= $(IMAGE_REGISTRY)/nico-runtime-container:$(IMAGE_TAG)-arm64
 
 .PHONY: images images-arm images-all images-all-arm images-validate images-all-validate images-registry \
-        images-base images-core images-rest images-machine-validation \
+        images-base images-core images-rest images-machine-validation images-machine-validation-arm \
         images-boot-artifacts images-bfb
 
 images-validate:
@@ -127,6 +128,7 @@ images-validate:
 images-all-validate: images-validate
 	$(call check-arches,$(BOOT_ARTIFACTS_ARCHES),BOOT_ARTIFACTS_ARCHES)
 	$(call check-arches,$(DPU_ARCHES),DPU_ARCHES)
+	$(require-nico-amd64)
 
 images: ## Build the deployable service stack (NICo Core + REST images)
 	# Ensure validation runs before building even with parallel builds.
@@ -153,8 +155,8 @@ images-all-arm: ## Build every ARM64 image and boot artifact natively on an ARM6
 			arm64|aarch64) ;; \
 			*) echo "images-all-arm requires an ARM64 Docker host; got $$arch. Run 'make images-all' for the multi-architecture compatibility build." >&2; exit 1 ;; \
 		esac
-	$(MAKE) images images-machine-validation images-bfb \
-		NICO_ARCHES=arm64 DPU_ARCHES=arm64 MACHINE_VALIDATION_RUNNER_ARCH=arm64
+	$(MAKE) images images-machine-validation-arm images-bfb \
+		NICO_ARCHES=arm64 DPU_ARCHES=arm64
 
 # Safe to call concurrently from multiple sibling targets (images-base,
 # images-rest, images-boot-artifacts, images-bfb each invoke this themselves).
@@ -214,21 +216,11 @@ images-rest: ## Build the REST service images (api, workflow, site-manager, site
 	$(MAKE) images-registry
 	$(MAKE) -C rest-api docker-build IMAGE_REGISTRY=$(IMAGE_REGISTRY) IMAGE_TAG=$(IMAGE_TAG) DOCKER_ARCHES="$(NICO_ARCHES)"
 
-images-machine-validation: ## Build the machine-validation runner + config images (NICO_ARCHES="amd64 arm64")
+images-machine-validation: ## Build the machine-validation runner + config images (NICO_ARCHES="amd64 arm64"; must include amd64)
 	$(call check-arches,$(NICO_ARCHES),NICO_ARCHES)
-	$(call check-arches,$(MACHINE_VALIDATION_RUNNER_ARCH),MACHINE_VALIDATION_RUNNER_ARCH)
+	$(require-nico-amd64)
 	$(MAKE) images-base
-	@case "$(MACHINE_VALIDATION_RUNNER_ARCH)" in \
-		amd64) runtime_file=dev/docker/Dockerfile.runtime-container-x86_64; runtime_tag=$(CORE_RUNTIME_CONTAINER_AMD64) ;; \
-		arm64) runtime_file=dev/docker/Dockerfile.runtime-container-aarch64; runtime_tag=$(CORE_RUNTIME_CONTAINER_ARM64) ;; \
-	 esac; \
-	 case " $(NICO_ARCHES) " in \
-		*" $(MACHINE_VALIDATION_RUNNER_ARCH) "*) ;; \
-		*) docker buildx build --platform linux/$(MACHINE_VALIDATION_RUNNER_ARCH) --push \
-			--file $$runtime_file -t $$runtime_tag . ;; \
-	 esac; \
-	 docker buildx build --platform linux/$(MACHINE_VALIDATION_RUNNER_ARCH) --load \
-		--build-arg CONTAINER_RUNTIME=$$runtime_tag \
+	docker buildx build --platform linux/amd64 --load --build-arg CONTAINER_RUNTIME_X86_64=$(CORE_RUNTIME_CONTAINER_AMD64) \
 		-t machine-validation-runner:$(IMAGE_TAG) \
 		--file dev/docker/Dockerfile.machine-validation-runner .
 	mkdir -p crates/machine-validation/images
@@ -248,13 +240,24 @@ images-machine-validation: ## Build the machine-validation runner + config image
 	done; \
 	docker buildx imagetools create -t $(IMAGE_REGISTRY)/machine-validation:$(IMAGE_TAG) $$tags
 
+images-machine-validation-arm: ## Build the native ARM64 machine-validation runner + config image
+	$(MAKE) images-base NICO_ARCHES=arm64
+	docker buildx build --platform linux/arm64 --load --build-arg CONTAINER_RUNTIME_AARCH64=$(CORE_RUNTIME_CONTAINER_ARM64) \
+		-t machine-validation-runner:$(IMAGE_TAG) \
+		--file dev/docker/Dockerfile.machine-validation-runner-aarch64 .
+	mkdir -p crates/machine-validation/images
+	docker save --output crates/machine-validation/images/machine-validation-runner.tar machine-validation-runner:$(IMAGE_TAG)
+	docker buildx build --platform linux/arm64 --push \
+		--build-arg CONTAINER_RUNTIME_AARCH64=$(CORE_RUNTIME_CONTAINER_ARM64) \
+		-t $(IMAGE_REGISTRY)/machine-validation:$(IMAGE_TAG)-arm64 \
+		--file dev/docker/Dockerfile.machine-validation-config-aarch64 .
+	docker buildx imagetools create -t $(IMAGE_REGISTRY)/machine-validation:$(IMAGE_TAG) \
+		$(IMAGE_REGISTRY)/machine-validation:$(IMAGE_TAG)-arm64
+
 images-boot-artifacts: ## Build the x86 boot-artifact image (BOOT_ARTIFACTS_ARCHES="amd64 arm64"; requires mkosi + rust toolchain on the host)
 	$(call check-arches,$(BOOT_ARTIFACTS_ARCHES),BOOT_ARTIFACTS_ARCHES)
 	$(MAKE) images-registry
-	@case "$$(docker info --format '{{.Architecture}}')" in \
-		arm64|aarch64) cargo make build-pxe-build-container && cargo make pxe-docker-x86 ;; \
-		*) cargo make --cwd pxe --env SA_ENABLEMENT=1 build-boot-artifacts-x86-host-sa ;; \
-	esac
+	cargo make --cwd pxe --env SA_ENABLEMENT=1 build-boot-artifacts-x86-host-sa
 	@set -e; \
 	tags=""; \
 	for arch in $(BOOT_ARTIFACTS_ARCHES); do \

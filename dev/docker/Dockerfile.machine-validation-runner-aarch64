@@ -1,4 +1,3 @@
-#
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -14,11 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-ARG CONTAINER_RUNTIME_X86_64
+ARG CONTAINER_RUNTIME_AARCH64
 
-FROM $CONTAINER_RUNTIME_X86_64
-# TODO replace this base container with GPU based containers
+FROM $CONTAINER_RUNTIME_AARCH64
 
 WORKDIR /
 COPY crates/machine-validation/scripts /machine-validation/scripts
-
