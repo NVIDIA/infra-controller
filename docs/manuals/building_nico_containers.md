@@ -49,8 +49,13 @@ top of the repo with a single `make` command:
 
 ```sh
 make images          # deployable stack: NICo Core (nico) + the REST service images
+make images-arm      # the deployable stack for ARM64 only, built on an ARM64 host
 make images-all      # the above plus machine-validation and both boot-artifact images
 ```
+
+On an ARM64 Docker host, `make images-arm` builds only the ARM64 Core and REST
+service images. It refuses non-ARM64 Docker hosts, so this path does not use QEMU
+or binfmt to run build commands for another architecture.
 
 Images are pushed as `linux/amd64` and `linux/arm64` manifests at
 `localhost:5000/<name>:latest` by default. The Makefile starts a local registry named
