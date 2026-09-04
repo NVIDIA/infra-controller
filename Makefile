@@ -297,6 +297,7 @@ images-bfb-arm: ## Build the aarch64 DPU BFB boot-artifact image in a native ARM
 		docker run --rm --privileged \
 			-v /var/run/docker.sock:/var/run/docker.sock \
 			-v "$(CURDIR)":"$(CURDIR)" \
+			-v /dev/null:"$(CURDIR)/pxe/mkosi.profiles/scout-oss-aarch64/mkosi.extra/etc/apt/sources.list.d/forge.list":ro \
 			-v "$$cargo_home":"$$cargo_home" \
 			-v "$$sccache_home":"$$sccache_home" \
 			-w "$(CURDIR)" \
