@@ -50,11 +50,20 @@ top of the repo with a single `make` command:
 make images          # deployable stack: NICo Core (nico) + the REST service images
 make images-arm      # the deployable stack for ARM64 only, built on an ARM64 host
 make images-all      # the above plus machine-validation and both boot-artifact images
+make images-all-arm  # every published image for ARM64, plus required boot payloads
 ```
 
 On an ARM64 Docker host, `make images-arm` builds only the ARM64 Core and REST
 service images. It refuses non-ARM64 Docker hosts, so this path does not use QEMU
 or binfmt to run build commands for another architecture.
+
+`make images-all-arm` is the complete ARM64-hosted build. It publishes only ARM64
+container manifests, builds the ARM64 Scout, loader, qcow, iPXE, and DPU artifacts
+on ARM64, and cross-compiles the separate x86_64 Scout, qcow, and iPXE payloads
+needed to provision x86_64 managed hosts. The x86_64 compilers run natively on the
+ARM64 host; mkosi still uses the pinned amd64 binfmt handler for package scripts
+inside the x86_64 images, and the machine-validation image embeds its required
+x86_64 runner.
 
 Images are pushed as `linux/amd64` and `linux/arm64` manifests at
 `localhost:5000/<name>:latest` by default. The Makefile starts a local registry named
@@ -80,12 +89,10 @@ make images-all NICO_ARCHES=amd64 DPU_ARCHES=arm64
 A single-architecture build still produces a valid tag at `$(IMAGE_TAG)` (the multi-arch
 manifest just has one entry). Values other than `amd64`/`arm64` fail fast with an error.
 
-`images-machine-validation` additionally requires `NICO_ARCHES` to include `amd64`:
-the `machine-validation-runner` intermediate image it embeds is always built for
-`amd64` regardless of which architectures you're publishing, and it depends on the
-amd64 Core runtime base container that `images-base` only pushes when `amd64` is
-requested. `NICO_ARCHES=arm64` alone fails fast with an error; use
-`NICO_ARCHES="amd64 arm64"` (the default) or `NICO_ARCHES=amd64`.
+The published `machine-validation` image follows `NICO_ARCHES`. Its embedded
+`machine-validation-runner` remains x86_64 because that runner executes on the
+managed host, so an ARM64-only build creates the x86_64 Core runtime intermediate
+needed for that payload without adding an amd64 entry to the published manifest.
 
 Each architecture is built separately before the bare tag is assembled. This matches CI
 and is required for the REST Dockerfiles: a single combined Buildx invocation would reuse
@@ -99,7 +106,7 @@ need to build or debug a single image.
 
 ### Verifying the build
 
-After `make images-all` completes, verify that each of the 14 deployable image tags
+After `make images-all` or `make images-all-arm` completes, verify that each of the 14 deployable image tags
 contains the platforms you actually built. Set `NICO_ARCHES`, `BOOT_ARTIFACTS_ARCHES`,
 and `DPU_ARCHES` below to whatever you passed to `make` (they default to `amd64 arm64`,
 matching the Makefile); the script derives each image's expected platform list from its
