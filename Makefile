@@ -140,7 +140,7 @@ images: ## Build the deployable service stack (NICo Core + REST images)
 
 images-arm: ## Build the deployable ARM64 service stack natively on an ARM64 Docker host
 	@arch="$$(docker info --format '{{.Architecture}}')"; \
-		test "$$arch" = arm64 || { echo "images-arm requires an ARM64 Docker host; got $$arch" >&2; exit 1; }
+		case "$$arch" in arm64|aarch64) ;; *) echo "images-arm requires an ARM64 Docker host; got $$arch" >&2; exit 1 ;; esac
 	$(MAKE) images NICO_ARCHES=arm64
 
 images-all: ## Build every image (stack + machine validation + boot artifacts; needs an mkosi build host)
