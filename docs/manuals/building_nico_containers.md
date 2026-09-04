@@ -112,13 +112,22 @@ and `DPU_ARCHES` below to whatever you passed to `make` (they default to `amd64 
 matching the Makefile); the script derives each image's expected platform list from its
 group automatically, so a narrowed selection doesn't produce false failures.
 
+After `make images-all-arm`, first run
+`export ARM_ONLY=1 NICO_ARCHES=arm64 DPU_ARCHES=arm64`; the same loop then checks
+the 13 ARM64 manifests and skips the x86 boot-artifact image.
+
 ```bash
 images=(
   nico nico-rest-api nico-rest-workflow nico-rest-site-manager
   nico-rest-site-agent nico-rest-db nico-rest-cert-manager nico-flow
   nico-psm nico-nsm nico-mcp machine-validation
-  boot-artifacts-x86_64 boot-artifacts-aarch64
+  boot-artifacts-aarch64
 )
+
+# Include this image after make images-all; leave it out after make images-all-arm.
+if [ "${ARM_ONLY:-0}" != "1" ]; then
+  images+=(boot-artifacts-x86_64)
+fi
 
 # Mirrors the Makefile defaults; set these to whatever you passed to `make`.
 NICO_ARCHES="${NICO_ARCHES:-amd64 arm64}"
@@ -172,9 +181,9 @@ The loop should print exactly 14 successful checks:
 manifests.
 
 If the loop exits early, the `FAIL` line identifies which image has an incomplete
-manifest. The three boot/validation images (`machine-validation`,
-`boot-artifacts-x86_64`, `boot-artifacts-aarch64`) require the full mkosi + Rust
-toolchain. Use `make images` instead of `make images-all` to build only the 11-image
+manifest. The multi-architecture build requires the full mkosi + Rust toolchain on
+the host. `make images-all-arm` supplies that toolchain in a native ARM64 build
+container. Use `make images` instead of `make images-all` to build only the 11-image
 deployable stack.
 
 The architecture-specific Core base images and `-amd64`/`-arm64` service tags are build
@@ -201,7 +210,7 @@ docker build --file dev/docker/Dockerfile.runtime-container-x86_64 -t nico-runti
 
 ```sh
 cargo make --cwd pxe --env SA_ENABLEMENT=1 build-boot-artifacts-x86-host-sa
-docker build --build-arg "CONTAINER_RUNTIME_X86_64=alpine:latest" -t boot-artifacts-x86_64 -f dev/docker/Dockerfile.release-artifacts-x86_64 .
+docker build --build-arg "CONTAINER_RUNTIME_X86_64=alpine:3.20.10@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc" -t boot-artifacts-x86_64 -f dev/docker/Dockerfile.release-artifacts-x86_64 .
 ```
 
 ## Building the Machine Validation images

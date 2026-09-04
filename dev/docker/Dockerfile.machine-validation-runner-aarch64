@@ -17,5 +17,7 @@ ARG CONTAINER_RUNTIME_AARCH64
 
 FROM $CONTAINER_RUNTIME_AARCH64
 
+# Machine-validation supports privileged and full-host plugins. The runtime
+# grants those modes per plugin, so this image intentionally retains root.
 WORKDIR /
 COPY crates/machine-validation/scripts /machine-validation/scripts
