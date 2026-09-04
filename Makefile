@@ -79,8 +79,7 @@ bootstrap: ## Set up an Ubuntu/Debian build host: apt deps, rustup, submodules, 
 #
 #   make images        Build the deployable service stack: NICo Core + REST images
 #   make images-arm    Build the deployable service stack for ARM64 only
-#   make images-all-arm Build every ARM64 image on an ARM64 host, including the
-#                       cross-built x86_64 PXE payloads required by managed hosts
+#   make images-all-arm Build every ARM64 image and boot artifact natively on ARM64
 #   make images-all    Build everything: the stack plus machine-validation and
 #                       boot-artifact images (needs the full mkosi build host)
 #   make images-core   NICo Core image (nico) only
@@ -108,6 +107,7 @@ BOOT_ARTIFACTS_RUNTIME_IMAGE ?= docker.io/library/alpine:3.20.10@sha256:d9e853e8
 NICO_ARCHES ?= amd64 arm64
 BOOT_ARTIFACTS_ARCHES ?= amd64 arm64
 DPU_ARCHES ?= amd64 arm64
+MACHINE_VALIDATION_RUNNER_ARCH ?= amd64
 
 check-arches = $(if $(strip $(1)),,$(error $(2) must not be empty))$(if $(filter-out amd64 arm64,$(1)),$(error $(2) must be a subset of "amd64 arm64", got: $(1)))
 
@@ -147,10 +147,14 @@ images-all: ## Build every image (stack + machine validation + boot artifacts; n
 	$(MAKE) images-all-validate
 	$(MAKE) images images-machine-validation images-boot-artifacts images-bfb
 
-images-all-arm: ## Build every ARM64 image on an ARM64 host, including required x86_64 PXE payloads
+images-all-arm: ## Build every ARM64 image and boot artifact natively on an ARM64 host
 	@arch="$$(docker info --format '{{.Architecture}}')"; \
-		case "$$arch" in arm64|aarch64) ;; *) echo "images-all-arm requires an ARM64 Docker host; got $$arch" >&2; exit 1 ;; esac
-	$(MAKE) images-all NICO_ARCHES=arm64 BOOT_ARTIFACTS_ARCHES=arm64 DPU_ARCHES=arm64
+		case "$$arch" in \
+			arm64|aarch64) ;; \
+			*) echo "images-all-arm requires an ARM64 Docker host; got $$arch. Run 'make images-all' for the multi-architecture compatibility build." >&2; exit 1 ;; \
+		esac
+	$(MAKE) images images-machine-validation images-bfb \
+		NICO_ARCHES=arm64 DPU_ARCHES=arm64 MACHINE_VALIDATION_RUNNER_ARCH=arm64
 
 # Safe to call concurrently from multiple sibling targets (images-base,
 # images-rest, images-boot-artifacts, images-bfb each invoke this themselves).
@@ -212,13 +216,19 @@ images-rest: ## Build the REST service images (api, workflow, site-manager, site
 
 images-machine-validation: ## Build the machine-validation runner + config images (NICO_ARCHES="amd64 arm64")
 	$(call check-arches,$(NICO_ARCHES),NICO_ARCHES)
+	$(call check-arches,$(MACHINE_VALIDATION_RUNNER_ARCH),MACHINE_VALIDATION_RUNNER_ARCH)
 	$(MAKE) images-base
-	@case " $(NICO_ARCHES) " in \
-		*" amd64 "*) ;; \
-		*) docker buildx build --platform linux/amd64 --push \
-			--file dev/docker/Dockerfile.runtime-container-x86_64 -t $(CORE_RUNTIME_CONTAINER_AMD64) . ;; \
-	esac
-	docker buildx build --platform linux/amd64 --load --build-arg CONTAINER_RUNTIME_X86_64=$(CORE_RUNTIME_CONTAINER_AMD64) \
+	@case "$(MACHINE_VALIDATION_RUNNER_ARCH)" in \
+		amd64) runtime_file=dev/docker/Dockerfile.runtime-container-x86_64; runtime_tag=$(CORE_RUNTIME_CONTAINER_AMD64) ;; \
+		arm64) runtime_file=dev/docker/Dockerfile.runtime-container-aarch64; runtime_tag=$(CORE_RUNTIME_CONTAINER_ARM64) ;; \
+	 esac; \
+	 case " $(NICO_ARCHES) " in \
+		*" $(MACHINE_VALIDATION_RUNNER_ARCH) "*) ;; \
+		*) docker buildx build --platform linux/$(MACHINE_VALIDATION_RUNNER_ARCH) --push \
+			--file $$runtime_file -t $$runtime_tag . ;; \
+	 esac; \
+	 docker buildx build --platform linux/$(MACHINE_VALIDATION_RUNNER_ARCH) --load \
+		--build-arg CONTAINER_RUNTIME=$$runtime_tag \
 		-t machine-validation-runner:$(IMAGE_TAG) \
 		--file dev/docker/Dockerfile.machine-validation-runner .
 	mkdir -p crates/machine-validation/images

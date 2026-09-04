@@ -57,13 +57,11 @@ On an ARM64 Docker host, `make images-arm` builds only the ARM64 Core and REST
 service images. It refuses non-ARM64 Docker hosts, so this path does not use QEMU
 or binfmt to run build commands for another architecture.
 
-`make images-all-arm` is the complete ARM64-hosted build. It publishes only ARM64
-container manifests, builds the ARM64 Scout, loader, qcow, iPXE, and DPU artifacts
-on ARM64, and cross-compiles the separate x86_64 Scout, qcow, and iPXE payloads
-needed to provision x86_64 managed hosts. The x86_64 compilers run natively on the
-ARM64 host; mkosi still uses the pinned amd64 binfmt handler for package scripts
-inside the x86_64 images, and the machine-validation image embeds its required
-x86_64 runner.
+`make images-all-arm` is the complete native ARM64 build. It publishes only ARM64
+container manifests and builds the ARM64 Core, REST services, machine-validation
+runner, Scout, loader, qcow, iPXE, and DPU artifacts on ARM64 without emulation.
+It refuses non-ARM64 Docker hosts and directs x86_64 users to `make images-all`,
+which remains the multi-architecture compatibility build.
 
 Images are pushed as `linux/amd64` and `linux/arm64` manifests at
 `localhost:5000/<name>:latest` by default. The Makefile starts a local registry named
@@ -90,9 +88,8 @@ A single-architecture build still produces a valid tag at `$(IMAGE_TAG)` (the mu
 manifest just has one entry). Values other than `amd64`/`arm64` fail fast with an error.
 
 The published `machine-validation` image follows `NICO_ARCHES`. Its embedded
-`machine-validation-runner` remains x86_64 because that runner executes on the
-managed host, so an ARM64-only build creates the x86_64 Core runtime intermediate
-needed for that payload without adding an amd64 entry to the published manifest.
+runner defaults to x86_64 for `make images-all`; `make images-all-arm` overrides
+the runner to ARM64 so the complete ARM-only path stays native.
 
 Each architecture is built separately before the bare tag is assembled. This matches CI
 and is required for the REST Dockerfiles: a single combined Buildx invocation would reuse
@@ -106,7 +103,7 @@ need to build or debug a single image.
 
 ### Verifying the build
 
-After `make images-all` or `make images-all-arm` completes, verify that each of the 14 deployable image tags
+After `make images-all` completes, verify that each of the 14 deployable image tags
 contains the platforms you actually built. Set `NICO_ARCHES`, `BOOT_ARTIFACTS_ARCHES`,
 and `DPU_ARCHES` below to whatever you passed to `make` (they default to `amd64 arm64`,
 matching the Makefile); the script derives each image's expected platform list from its
@@ -166,6 +163,10 @@ The loop should print exactly 14 successful checks:
 | `machine-validation` | `images-machine-validation` |
 | `boot-artifacts-x86_64` | `images-boot-artifacts` |
 | `boot-artifacts-aarch64` | `images-bfb` |
+
+`make images-all-arm` produces the same list except for
+`boot-artifacts-x86_64`, so its verification should report exactly 13 ARM64
+manifests.
 
 If the loop exits early, the `FAIL` line identifies which image has an incomplete
 manifest. The three boot/validation images (`machine-validation`,
