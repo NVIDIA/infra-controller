@@ -20,6 +20,16 @@ make bootstrap          # or: ./scripts/setup-build-host.sh
 Reboot (or log out and back in) afterwards so the `docker` group membership and the
 userns sysctl change take effect.
 
+For the native ARM64-only workflow, the host only needs Git, Make, curl, Docker,
+and Docker Buildx. Initialize the pinned build sources after cloning:
+
+```sh
+git submodule update --init --recursive
+```
+
+`make images-all-arm` supplies Rust, cargo-make, and mkosi in its native ARM64
+build containers and does not require binfmt registration.
+
 ### Manual setup (what `make bootstrap` does)
 
 `make bootstrap` runs `scripts/setup-build-host.sh`, which is equivalent to the following
