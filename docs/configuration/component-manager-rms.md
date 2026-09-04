@@ -1,6 +1,6 @@
 # Component Manager RMS Backends (Day 1) <Badge intent="info">v2.0</Badge>
 
-Operator guide for configuring **Rack Manager Service (RMS)** backends in the
+Operator guide for configuring **[Rack Management Service (RMS)](https://docs.nvidia.com/rms/documentation/home/)** backends in the
 `[component_manager]` section of `nico-api` site config, and the **rack profile**
 data those backends require for node descriptors.
 
@@ -17,6 +17,22 @@ Configure the `[rms]` block (mTLS connectivity to the external RMS) separately;
 the examples on this page cover the component-manager and rack-profile fields.
 The `nsm` and `psm` backend values require externally managed services; the
 NICo deployment charts do not install NSM or PSM.
+
+`setup.sh` deploys RMS in-cluster by default (phase 5c, opt out with `--skip-rms`): it installs the
+[nv-rms](https://github.com/dsx-ai-factory/nv-rms) rack-manager chart with an
+mTLS certificate issued from `vault-nico-issuer`, matching the `[rms]` defaults
+NICo Core's chart already renders (`rms-api-server.rack-manager.svc.cluster.local:8801`).
+An externally managed RMS remains supported - point `[rms] api_url` at it and
+pass `--skip-rms`.
+
+For predecessor Flow deployments that still bundle PSM/NSM, the setup.sh path
+is intentionally unreachable: the upgrade guard exits before any phase runs,
+because a prerequisites sync would strand the bundled managers' credentials.
+To move Core backends to RMS *before* that Flow upgrade, use an externally
+managed RMS, or install the rack-manager chart manually from the
+`helm-prereqs/nv-rms` submodule with a database the guard cannot touch
+(`databaseMode: standalone`, or an external PostgreSQL). Once the Flow-only
+upgrade completes, re-run `setup.sh` and phase 5c adopts RMS management.
 
 ---
 
