@@ -120,7 +120,7 @@ CORE_RUNTIME_CONTAINER_ARM64 ?= $(IMAGE_REGISTRY)/nico-runtime-container:$(IMAGE
 
 .PHONY: images images-arm images-all images-all-arm images-validate images-all-validate images-registry \
         images-base images-core images-rest images-machine-validation images-machine-validation-arm \
-        images-boot-artifacts images-bfb
+        images-boot-artifacts images-bfb images-bfb-arm
 
 images-validate:
 	$(call check-arches,$(NICO_ARCHES),NICO_ARCHES)
@@ -155,7 +155,7 @@ images-all-arm: ## Build every ARM64 image and boot artifact natively on an ARM6
 			arm64|aarch64) ;; \
 			*) echo "images-all-arm requires an ARM64 Docker host; got $$arch. Run 'make images-all' for the multi-architecture compatibility build." >&2; exit 1 ;; \
 		esac
-	$(MAKE) images images-machine-validation-arm images-bfb \
+	$(MAKE) images images-machine-validation-arm images-bfb-arm \
 		NICO_ARCHES=arm64 DPU_ARCHES=arm64
 
 # Safe to call concurrently from multiple sibling targets (images-base,
@@ -281,6 +281,31 @@ images-bfb: ## Build the aarch64 DPU BFB boot-artifact image (DPU_ARCHES="amd64 
 		tags="$$tags $$tag"; \
 	done; \
 	docker buildx imagetools create -t $(IMAGE_REGISTRY)/boot-artifacts-aarch64:$(IMAGE_TAG) $$tags
+
+images-bfb-arm: ## Build the aarch64 DPU BFB boot-artifact image in a native ARM64 build container
+	$(MAKE) images-registry
+	docker build -t carbide-pxe-builder -f dev/docker/Dockerfile.pxe-build-container dev/docker
+	docker build -t carbide-pxe-builder-aarch64 -f dev/docker/Dockerfile.pxe-build-container-aarch64 dev/docker
+	@set -e; \
+		cargo_home="$${CARGO_HOME:-$$HOME/.cargo}"; \
+		sccache_home="$${SCCACHE_DIR:-$$HOME/.sccache}"; \
+		mkdir -p "$$cargo_home" "$$sccache_home"; \
+		docker run --rm --privileged \
+			-v /var/run/docker.sock:/var/run/docker.sock \
+			-v "$(CURDIR)":"$(CURDIR)" \
+			-v "$$cargo_home":"$$cargo_home" \
+			-v "$$sccache_home":"$$sccache_home" \
+			-w "$(CURDIR)" \
+			-e CARGO_HOME="$$cargo_home" \
+			-e SCCACHE_DIR="$$sccache_home" \
+			-e VERSION="$(VERSION)" \
+			carbide-pxe-builder-aarch64 \
+			sh -c 'git config --global --add safe.directory "$(CURDIR)" && git config --global --add safe.directory "$(CURDIR)/pxe/ipxe/upstream" && cargo make --cwd pxe --env SA_ENABLEMENT=1 build-boot-artifacts-bfb-sa'
+	docker buildx build --platform linux/arm64 --push --build-arg CONTAINER_RUNTIME_AARCH64=$(BOOT_ARTIFACTS_RUNTIME_IMAGE) \
+		-t $(IMAGE_REGISTRY)/boot-artifacts-aarch64:$(IMAGE_TAG)-arm64 \
+		--file dev/docker/Dockerfile.release-artifacts-aarch64 .
+	docker buildx imagetools create -t $(IMAGE_REGISTRY)/boot-artifacts-aarch64:$(IMAGE_TAG) \
+		$(IMAGE_REGISTRY)/boot-artifacts-aarch64:$(IMAGE_TAG)-arm64
 
 # =============================================================================
 # Rest (delegate to rest-api/Makefile)

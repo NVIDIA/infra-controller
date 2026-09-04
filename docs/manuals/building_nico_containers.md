@@ -61,7 +61,9 @@ or binfmt to run build commands for another architecture.
 container manifests and builds the ARM64 Core, REST services, machine-validation
 runner, Scout, loader, qcow, iPXE, and DPU artifacts on ARM64 without emulation.
 It refuses non-ARM64 Docker hosts and directs x86_64 users to `make images-all`,
-which remains the multi-architecture compatibility build.
+which remains the multi-architecture compatibility build. The ARM boot payloads
+are built in a native ARM64 container, so this command does not require Rust,
+Cargo, cargo-make, or mkosi to be installed directly on the host.
 
 Images are pushed as `linux/amd64` and `linux/arm64` manifests at
 `localhost:5000/<name>:latest` by default. The Makefile starts a local registry named
