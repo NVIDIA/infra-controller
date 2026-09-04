@@ -28052,7 +28052,9 @@ type AdminForceDeleteMachineRequest struct {
 	// Machine.
 	AllowDeleteWithInstanceType bool `protobuf:"varint,8,opt,name=allow_delete_with_instance_type,json=allowDeleteWithInstanceType,proto3" json:"allow_delete_with_instance_type,omitempty"`
 	// False or omitted rejects deletion while an Instance is attached to the
-	// Machine. True permits deletion and destroys the attached Instance.
+	// Machine. True permits deletion and removes the attached Instance
+	// control-plane record without first requesting a graceful workload
+	// shutdown; later cleanup may forcibly restart the host.
 	AllowDeleteWithInstance bool `protobuf:"varint,9,opt,name=allow_delete_with_instance,json=allowDeleteWithInstance,proto3" json:"allow_delete_with_instance,omitempty"`
 	unknownFields           protoimpl.UnknownFields
 	sizeCache               protoimpl.SizeCache

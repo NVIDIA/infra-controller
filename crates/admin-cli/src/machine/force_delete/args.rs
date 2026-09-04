@@ -25,7 +25,7 @@ EXAMPLES:
 Force delete a machine (by UUID, IPv4, MAC, or hostname):
     $ nico-admin-cli machine force-delete --machine 12345678-1234-5678-90ab-cdef01234567
 
-Force delete a machine and its interfaces (redeploy kea afterward):
+Force delete a machine and its interfaces:
     $ nico-admin-cli machine force-delete --machine 12345678-1234-5678-90ab-cdef01234567 \
     --delete-interfaces
 

@@ -267,9 +267,11 @@ verification expectations.
   tenant workload, check `Machine.IsAssigned` (or the equivalent association)
   and reject unless the product requirement explicitly allows Provider Admins
   to override tenant attachment. When an explicit override uses a low-level
-  Core cleanup RPC that does not stop the workload, state that behavior in the
-  API contract and interactive confirmation. After Core accepts a destructive
-  mutation, reconcile the corresponding REST records before returning success;
+  Core cleanup RPC, state separately whether it first requests a graceful
+  workload shutdown and whether later cleanup may forcibly restart the host.
+  State both in the API contract and interactive confirmation. After Core
+  accepts a destructive mutation, reconcile the corresponding REST records
+  before returning success;
   keep that cleanup idempotent so a retry can complete it. Keep the attachment
   check and destructive mutation inside the same Machine lock boundary so a
   concurrent allocation cannot attach a workload between them.
