@@ -78,6 +78,7 @@ bootstrap: ## Set up an Ubuntu/Debian build host: apt deps, rustup, submodules, 
 # registry access is required.
 #
 #   make images        Build the deployable service stack: NICo Core + REST images
+#   make images-arm    Build the deployable service stack for ARM64 only
 #   make images-all    Build everything: the stack plus machine-validation and
 #                       boot-artifact images (needs the full mkosi build host)
 #   make images-core   NICo Core image (nico) only
@@ -116,7 +117,7 @@ CORE_BUILD_CONTAINER_ARM64 ?= $(IMAGE_REGISTRY)/nico-buildcontainer:$(IMAGE_TAG)
 CORE_RUNTIME_CONTAINER_AMD64 ?= $(IMAGE_REGISTRY)/nico-runtime-container:$(IMAGE_TAG)-amd64
 CORE_RUNTIME_CONTAINER_ARM64 ?= $(IMAGE_REGISTRY)/nico-runtime-container:$(IMAGE_TAG)-arm64
 
-.PHONY: images images-all images-validate images-all-validate images-registry \
+.PHONY: images images-arm images-all images-validate images-all-validate images-registry \
         images-base images-core images-rest images-machine-validation \
         images-boot-artifacts images-bfb
 
@@ -136,6 +137,11 @@ images: ## Build the deployable service stack (NICo Core + REST images)
 	@echo "Deployable multi-arch images pushed under $(IMAGE_REGISTRY) (tag: $(IMAGE_TAG)):"
 	@echo "  $(IMAGE_REGISTRY)/nico:$(IMAGE_TAG)   (NICo Core)"
 	@echo "  $(IMAGE_REGISTRY)/nico-rest-*:$(IMAGE_TAG)       (REST services)"
+
+images-arm: ## Build the deployable ARM64 service stack natively on an ARM64 Docker host
+	@arch="$$(docker info --format '{{.Architecture}}')"; \
+		test "$$arch" = arm64 || { echo "images-arm requires an ARM64 Docker host; got $$arch" >&2; exit 1; }
+	$(MAKE) images NICO_ARCHES=arm64
 
 images-all: ## Build every image (stack + machine validation + boot artifacts; needs an mkosi build host)
 	# Ensure validation runs before building even with parallel builds.
