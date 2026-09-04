@@ -26,7 +26,7 @@ Force delete a machine
 ## OPTIONS
 
 **--machine** *\<MACHINE\>*  
-UUID, IPv4, MAC or hostnmame of the host or DPU machine to delete
+UUID, IPv4, MAC or hostname of the host or DPU machine to delete
 
 **-d**, **--delete-interfaces**  
 Delete interfaces.
@@ -53,9 +53,9 @@ removing the Instance Type association.
 
 **--allow-delete-with-instance**  
 Delete Machine with an attached Instance. This flag also allows removing
-an assigned Instance Type and acknowledges removing the control-plane
-record for the attached Instance without stopping a running tenant
-workload.
+an assigned Instance Type and removes the attached Instance
+control-plane record without first requesting a graceful workload
+shutdown; force-delete cleanup may forcibly restart the host.
 
 **--allow-delete-with-orphaned-dpf-crds**  
 Delete machine even if DPF CRDs exist and DPF is disabled at the site

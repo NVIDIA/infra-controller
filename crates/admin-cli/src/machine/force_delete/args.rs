@@ -39,8 +39,9 @@ Force delete a machine assigned to an Instance Type:
     $ nico-admin-cli machine force-delete --machine 12345678-1234-5678-90ab-cdef01234567 \
     --allow-delete-with-instance-type
 
-Force delete a machine with an attached Instance, removing its control-plane \
-record without stopping the running workload:
+Force delete a machine with an attached Instance. This removes the attached \
+Instance control-plane record without first requesting a graceful workload \
+shutdown; force-delete cleanup may forcibly restart the host:
     $ nico-admin-cli machine force-delete --machine 12345678-1234-5678-90ab-cdef01234567 \
     --allow-delete-with-instance
 
@@ -48,7 +49,7 @@ record without stopping the running workload:
 pub(crate) struct Args {
     #[clap(
         long,
-        help = "UUID, IPv4, MAC or hostnmame of the host or DPU machine to delete"
+        help = "UUID, IPv4, MAC or hostname of the host or DPU machine to delete"
     )]
     pub(super) machine: String,
 
@@ -90,7 +91,7 @@ pub(crate) struct Args {
     #[clap(
         long,
         action,
-        help = "Delete Machine with an attached Instance. This flag also allows removing an assigned Instance Type and acknowledges removing the control-plane record for the attached Instance without stopping a running tenant workload."
+        help = "Delete Machine with an attached Instance. This flag also allows removing an assigned Instance Type and removes the attached Instance control-plane record without first requesting a graceful workload shutdown; force-delete cleanup may forcibly restart the host."
     )]
     pub(super) allow_delete_with_instance: bool,
 

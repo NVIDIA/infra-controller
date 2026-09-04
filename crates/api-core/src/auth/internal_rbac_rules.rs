@@ -587,7 +587,7 @@ impl InternalRBACRules {
         );
         x.perm(
             "MachineValidationTestVerfied",
-            vec![ForgeAdminCLI, Scout, SiteAgent],
+            vec![ForgeAdminCLI, SiteAgent],
         );
         x.perm(
             "MachineValidationTestNextVersion",
@@ -595,7 +595,11 @@ impl InternalRBACRules {
         );
         x.perm(
             "MachineValidationTestEnableDisableTest",
-            vec![ForgeAdminCLI, SiteAgent, Scout],
+            vec![ForgeAdminCLI, SiteAgent],
+        );
+        x.perm(
+            "MachineValidationTestApproveFullHost",
+            vec![ForgeAdminCLI, SiteAgent],
         );
         x.perm("UpdateMachineValidationRun", vec![Scout, SiteAgent]);
         x.perm("FindInstanceTypeIds", vec![SiteAgent, ForgeAdminCLI]);

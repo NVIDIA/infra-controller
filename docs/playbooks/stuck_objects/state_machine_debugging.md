@@ -166,9 +166,9 @@ nico-admin-cli machine force-delete --machine <machine-id>
 
 The unflagged command requires no assigned Instance Type or attached Instance.
 Add `--allow-delete-with-instance-type` to remove an Instance Type association.
-`--allow-delete-with-instance` implies that override and permits removal of the
-control-plane record for the attached Instance without stopping the running
-tenant workload.
+`--allow-delete-with-instance` implies that override and removes the attached
+Instance control-plane record without first requesting a graceful workload
+shutdown. Force-delete cleanup may forcibly restart the host.
 
 After a force delete, reboot the host through BMC or Redfish so discovery can
 restart.

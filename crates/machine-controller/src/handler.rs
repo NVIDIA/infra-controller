@@ -128,6 +128,7 @@ mod dpu_uefi_rotation;
 mod extension_services;
 mod factory_reset;
 mod firmware_artifact;
+mod gb200_host_interface;
 mod helpers;
 mod host_boot_config;
 mod host_uefi_rotation;
@@ -1969,7 +1970,7 @@ impl MachineStateHandler {
                             None => Ok(StateHandlerOutcome::do_nothing()),
                         }
                     }
-                    FailureCause::BiosSetupFailed { .. } if machine_id.machine_type().is_host() => {
+                    FailureCause::BiosSetupFailed { .. } if machine_id == host_machine_id => {
                         let recovered = ManagedHostState::HostInit {
                             machine_state: MachineState::SetBootOrder {
                                 set_boot_order_info: Some(initial_set_boot_order_info()),
@@ -2213,12 +2214,16 @@ impl MachineStateHandler {
         }
     }
 
+    /// Enables Astra on a single NIC.
+    /// We pass in the expected interfaces and the NIC index to enable Astra on.
+    /// Returns `true` when the NIC was enabled and the caller
+    /// should AC-power-cycle the host for the change to take effect.
     async fn enable_astra_nic(
         &self,
         nic_index: u8,
         mh_snapshot: &ManagedHostStateSnapshot,
         ctx: &mut StateHandlerContext<'_, MachineStateHandlerContextObjects>,
-        expected_nic: &ExpectedInterface,
+        cx9_nics: &[&ExpectedInterface],
     ) -> Result<(), StateHandlerError> {
         tracing::info!(
             machine_id = %mh_snapshot.host_snapshot.id,
@@ -2249,16 +2254,22 @@ impl MachineStateHandler {
             StateHandlerError::GenericError(eyre!("invalid SPX NIC MAC address {mac_address}: {e}"))
         })?;
 
-        let expected_mac_address = expected_nic.mac_address;
-        // Does this mac address match the mac address in the passed in expected interface?
-        if mac_address != expected_nic.mac_address {
-            tracing::error!(
-                "Actual MAC address {mac_address} does not match expected MAC address {expected_mac_address} for NIC {nic_index}"
-            );
-            return Err(StateHandlerError::GenericError(eyre!(
-                "mac address mismatch: expected {expected_mac_address}, got {mac_address}"
-            )));
-        }
+        // Find the expected CX9 NIC whose MAC matches what Redfish reported for
+        // this card. If none matches, this card is not one we were told to
+        // enable, so error out.
+        let expected_nic = cx9_nics
+            .iter()
+            .copied()
+            .find(|nic| nic.mac_address == mac_address)
+            .ok_or_else(|| {
+                tracing::error!(
+                    machine_id = %mh_snapshot.host_snapshot.id,
+                    "No expected CX9 NIC matches Redfish MAC address {mac_address} for NIC {nic_index}"
+                );
+                StateHandlerError::GenericError(eyre!(
+                    "no expected CX9 NIC matches MAC address {mac_address} for NIC {nic_index}"
+                ))
+            })?;
 
         // Now enable EastWestControlEnabled on this card.
         redfish_client
@@ -2395,9 +2406,9 @@ impl MachineStateHandler {
             .collect();
         let enabled_any_cx9 = !cx9_nics.is_empty();
 
-        for (nic_index, expected_nic) in cx9_nics.into_iter().enumerate() {
+        for nic_index in 0..cx9_nics.len() {
             if let Err(e) = self
-                .enable_astra_nic(nic_index as u8, mh_snapshot, ctx, expected_nic)
+                .enable_astra_nic(nic_index as u8, mh_snapshot, ctx, &cx9_nics)
                 .await
             {
                 tracing::error!(
@@ -7828,6 +7839,15 @@ impl StateHandler for HostMachineStateHandler {
                         }
                     }
 
+                    // GB200 SBIOS can rebuild a stale UEFI HTTP option only when
+                    // `hostusb0` is configured before the platform setup reboot.
+                    gb200_host_interface::repair_gb200_host_interface_if_needed(
+                        ctx,
+                        redfish_client.as_ref(),
+                        mh_snapshot,
+                    )
+                    .await?;
+
                     handle_host_init_boot_config_stage(
                         ctx,
                         mh_snapshot,
@@ -7973,6 +7993,32 @@ impl StateHandler for HostMachineStateHandler {
                     }
                 }
                 MachineState::WaitingForDiscovery => {
+                    let discovery_pending = !discovered_after_state_transition(
+                        mh_snapshot.host_snapshot.state.version,
+                        mh_snapshot.host_snapshot.status.last_discovery_time,
+                    );
+                    if discovery_pending
+                        && gb200_host_interface::gb200_host_interface_address_is_missing(
+                            ctx,
+                            mh_snapshot,
+                        )
+                        .await?
+                    {
+                        // Persist the rewind first. The next iteration repairs
+                        // the BMC from the state that already owns platform setup.
+                        tracing::warn!(
+                            machine_id = %host_machine_id,
+                            "GB200 BMC hostusb0 static IPv4 address is missing; returning to platform configuration before another discovery boot"
+                        );
+                        return Ok(StateHandlerOutcome::transition(
+                            ManagedHostState::HostInit {
+                                machine_state: MachineState::WaitingForPlatformConfiguration {
+                                    retry_count: 0,
+                                },
+                            },
+                        ));
+                    }
+
                     // Storage cleanup is a destructive disk wipe (NVMe/HDD) that scout runs after a
                     // reset, so only a real, discovered host enters it. A predicted host waits for
                     // discovery to promote it; the promoted host then does the cleanup.
@@ -7986,10 +8032,7 @@ impl StateHandler for HostMachineStateHandler {
                         )));
                     }
 
-                    if !discovered_after_state_transition(
-                        mh_snapshot.host_snapshot.state.version,
-                        mh_snapshot.host_snapshot.status.last_discovery_time,
-                    ) {
+                    if discovery_pending {
                         tracing::trace!(
                             machine_id = %host_machine_id,
                             host_last_seen = ?mh_snapshot.host_snapshot.status.last_discovery_time,

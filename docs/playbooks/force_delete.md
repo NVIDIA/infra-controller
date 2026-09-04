@@ -33,9 +33,9 @@ hostname, MAC address, or IP address of either the managed host or DPU and
 deletes information for both. By default, the command rejects a Machine
 assigned to an Instance Type or attached to an Instance. Add
 `--allow-delete-with-instance-type` to remove the Instance Type association.
-`--allow-delete-with-instance` implies that override and permits removal of the
-control-plane record for an attached Instance; it does not stop a running tenant
-workload.
+`--allow-delete-with-instance` implies that override and removes the attached
+Instance control-plane record without first requesting a graceful workload
+shutdown. Force-delete cleanup may forcibly restart the host.
 
 It returns all machine-ids and instance-ids it acted on, as well as the BMC information for the host.
 

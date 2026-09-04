@@ -299,7 +299,7 @@ that the operator already selected the primary interface. Either reconciliation 
 | admin-cli | Forge RPC | Purpose |
 |---|---|---|
 | `site-explorer remediation <bmc-ip> --pause` / `--resume` | `PauseExploredEndpointRemediation` | Pause/resume site-explorer's automatic remediation (and ingestion processing) for an endpoint. |
-| `machine force-delete --machine <id> [--delete-interfaces] [--delete-bmc-interfaces] [--delete-bmc-credentials] [--allow-delete-with-instance-type] [--allow-delete-with-instance]` | `AdminForceDeleteMachine` | Remove a Machine from the database, bypassing the normal lifecycle. The Instance Type flag removes that association; the Instance flag implies it and permits removal of the control-plane record for the attached Instance without stopping the running tenant workload. |
+| `machine force-delete --machine <id> [--delete-interfaces] [--delete-bmc-interfaces] [--delete-bmc-credentials] [--allow-delete-with-instance-type] [--allow-delete-with-instance]` | `AdminForceDeleteMachine` | Remove a Machine from the database, bypassing the normal lifecycle. The Instance Type flag removes that association; the Instance flag implies it and removes the attached Instance control-plane record without first requesting a graceful workload shutdown. Force-delete cleanup may forcibly restart the host. |
 | `managed-host show [--all \| <machine-id>]` | (query) | Inspect a host's current state, interfaces, and database primary selection. This does not prove that Redfish matches; use `boot-interface show` for reconciliation. |
 
 ---
