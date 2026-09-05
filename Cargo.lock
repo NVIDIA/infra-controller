@@ -1820,6 +1820,7 @@ dependencies = [
  "carbide-uuid",
  "clap",
  "dashmap",
+ "derive_builder",
  "eyre",
  "futures",
  "hex",
