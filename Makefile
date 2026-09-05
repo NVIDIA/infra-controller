@@ -288,8 +288,8 @@ images-bfb-arm: ## Build the aarch64 DPU BFB boot-artifact image in a native ARM
 	@arch="$$(docker info --format '{{.Architecture}}')"; \
 		case "$$arch" in arm64|aarch64) ;; *) echo "images-bfb-arm requires an ARM64 Docker host; got $$arch" >&2; exit 1 ;; esac
 	$(MAKE) images-registry
-	docker buildx build --load -t carbide-pxe-builder -f dev/docker/Dockerfile.pxe-build-container dev/docker
-	docker buildx build --load -t carbide-pxe-builder-aarch64 -f dev/docker/Dockerfile.pxe-build-container-aarch64 dev/docker
+	docker buildx build --builder default --load -t carbide-pxe-builder -f dev/docker/Dockerfile.pxe-build-container dev/docker
+	docker buildx build --builder default --load -t carbide-pxe-builder-aarch64 -f dev/docker/Dockerfile.pxe-build-container-aarch64 dev/docker
 	@set -e; \
 		cargo_home="$${CARGO_HOME:-$$HOME/.cargo}"; \
 		sccache_home="$${SCCACHE_DIR:-$$HOME/.sccache}"; \
