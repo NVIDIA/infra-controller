@@ -69,7 +69,7 @@ or binfmt to run build commands for another architecture.
 
 `make images-all-arm` is the complete native ARM64 build. It publishes only ARM64
 container manifests and builds the ARM64 Core, REST services, machine-validation
-runner, Scout, loader, qcow, iPXE, and DPU artifacts on ARM64 without emulation.
+runner, machine-a-tron, Scout, loader, qcow, iPXE, and DPU artifacts on ARM64 without emulation.
 It refuses non-ARM64 Docker hosts and directs x86_64 users to `make images-all`,
 which remains the multi-architecture compatibility build. The ARM boot payloads
 are built in a native ARM64 container, so this command does not require Rust,
@@ -103,6 +103,10 @@ manifest just has one entry). Values other than `amd64`/`arm64` fail fast with a
 `NICO_ARCHES` to include `amd64`. The additive
 `images-machine-validation-arm` target builds the runner and config image for
 ARM64 and is used only by `make images-all-arm`.
+
+The additive `images-machine-a-tron-arm` target builds the machine-a-tron
+simulator for ARM64. The existing machine-a-tron Dockerfile remains the AMD64
+compatibility path.
 
 Each architecture is built separately before the bare tag is assembled. This matches CI
 and is required for the REST Dockerfiles: a single combined Buildx invocation would reuse

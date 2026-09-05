@@ -119,7 +119,7 @@ CORE_RUNTIME_CONTAINER_AMD64 ?= $(IMAGE_REGISTRY)/nico-runtime-container:$(IMAGE
 CORE_RUNTIME_CONTAINER_ARM64 ?= $(IMAGE_REGISTRY)/nico-runtime-container:$(IMAGE_TAG)-arm64
 
 .PHONY: images images-arm images-all images-all-arm images-validate images-all-validate images-registry \
-        images-base images-core images-rest images-machine-validation images-machine-validation-arm \
+        images-base images-core images-rest images-machine-validation images-machine-validation-arm images-machine-a-tron-arm \
         images-boot-artifacts images-bfb images-bfb-arm
 
 images-validate:
@@ -155,7 +155,7 @@ images-all-arm: ## Build every ARM64 image and boot artifact natively on an ARM6
 			arm64|aarch64) ;; \
 			*) echo "images-all-arm requires an ARM64 Docker host; got $$arch. Run 'make images-all' for the multi-architecture compatibility build." >&2; exit 1 ;; \
 		esac
-	$(MAKE) images images-machine-validation-arm images-bfb-arm \
+	$(MAKE) images images-machine-validation-arm images-machine-a-tron-arm images-bfb-arm \
 		NICO_ARCHES=arm64 DPU_ARCHES=arm64
 
 # Safe to call concurrently from multiple sibling targets (images-base,
@@ -255,6 +255,14 @@ images-machine-validation-arm: ## Build the native ARM64 machine-validation runn
 		--file dev/docker/Dockerfile.machine-validation-config-aarch64 .
 	docker buildx imagetools create -t $(IMAGE_REGISTRY)/machine-validation:$(IMAGE_TAG) \
 		$(IMAGE_REGISTRY)/machine-validation:$(IMAGE_TAG)-arm64
+
+images-machine-a-tron-arm: ## Build the native ARM64 machine-a-tron image
+	@arch="$$(docker info --format '{{.Architecture}}')"; \
+		case "$$arch" in arm64|aarch64) ;; *) echo "images-machine-a-tron-arm requires an ARM64 Docker host; got $$arch" >&2; exit 1 ;; esac
+	$(MAKE) images-registry
+	docker buildx build --platform linux/arm64 --push \
+		-t $(IMAGE_REGISTRY)/machine-a-tron:$(IMAGE_TAG) \
+		--file crates/machine-a-tron/Dockerfile.arm64 .
 
 images-boot-artifacts: ## Build the x86 boot-artifact image (BOOT_ARTIFACTS_ARCHES="amd64 arm64"; requires mkosi + rust toolchain on the host)
 	$(call check-arches,$(BOOT_ARTIFACTS_ARCHES),BOOT_ARTIFACTS_ARCHES)
