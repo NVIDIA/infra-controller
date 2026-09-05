@@ -91,23 +91,30 @@ enumerate the non-obvious failure modes it guards against.
 
 ## Building the Container Image
 
-### Why cross-compilation is required
+### Supported architectures
 
-machine-a-tron must run on **x86_64** cluster nodes. The Rust dependency `aws-lc-sys`
-contains hand-written x86_64 assembly (`s2n-bignum`). Compiling under QEMU emulation
-causes a SIGSEGV in the assembler (`bignum_madd_n25519.S`). We therefore use true
-cross-compilation: a native `linux/arm64` Rust compiler targeting
-`x86_64-unknown-linux-gnu`.
+machine-a-tron supports **x86_64** and **ARM64** cluster nodes. Use the existing
+cross-compilation Dockerfile for x86_64. On an ARM64 host, use the native ARM64
+target; it does not use QEMU or binfmt emulation.
+
+The Rust dependency `aws-lc-sys` contains hand-written x86_64 assembly
+(`s2n-bignum`). Compiling the x86_64 target under QEMU emulation causes a SIGSEGV
+in the assembler (`bignum_madd_n25519.S`), so the x86_64 Dockerfile uses true
+cross-compilation when its build host is ARM64.
 
 The `carbide-rpc` crate runs a protobuf build script that requires both `protoc`
 and the protobuf well-known types (`libprotobuf-dev` on Debian). `libredfish` is a
 Git dependency so `git` must also be present in the build stage.
 
-### Build command
+### Build commands
 
 Run from the **repository root**:
 
 ```bash
+# Native ARM64 image on an ARM64 Docker host:
+make images-machine-a-tron-arm
+
+# x86_64 compatibility image:
 # Same convention as setup.sh: your registry/repository prefix, no scheme.
 REGISTRY=${NICO_IMAGE_REGISTRY:?export NICO_IMAGE_REGISTRY=<registry>/<repo>}
 COMMIT=$(git rev-parse --short HEAD)
@@ -456,7 +463,7 @@ The `machine_dhcp_records` view inner-joins the singleton control row `machine_i
 | `client error (Connect)` on every nico-api call after a reprovision | Stale `nico-roots` CA + client cert signed by the old CA | Re-copy `nico-roots` from nico-system; delete `nico-machine-a-tron-certificate` so cert-manager reissues from the current CA |
 | `DiscoverDhcp`: `no rows ... expected to return at least one row` | `machine_interfaces_deletion` singleton (id=1) deleted; breaks `machine_dhcp_records` view | `INSERT INTO machine_interfaces_deletion (id) VALUES (1) ON CONFLICT DO NOTHING;` — never hand-delete lease rows |
 | DPU explorations stuck at `403 Factory-default password must be changed` | Site root password equals the factory password → rotation is a no-op | Seed `machines/bmc/site/root` with a password distinct from both factory defaults |
-| `exec format error` in pod | Image was built for `arm64`, nodes are `x86_64` | Cross-compile with `--platform linux/amd64` and `x86_64-unknown-linux-gnu` Rust target |
+| `exec format error` in pod | Image architecture does not match the cluster node | Build natively with `make images-machine-a-tron-arm` for ARM64 nodes, or cross-compile with `--platform linux/amd64` for x86_64 nodes |
 | `File not found: google/protobuf/timestamp.proto` | `libprotobuf-dev` absent in build image | Add `libprotobuf-dev` to `apt-get install` in builder stage |
 | `git fetch ... (exit status: 127)` | `libredfish` is a git dependency, `git` not in slim image | Add `git` to builder stage |
 | Host BMCs 401 while DPUs explore fine | Host and DPU factory passwords differ (`factory_password` vs `0penBmc`); host factory cred missing or wrong | Seed `machines/all_hosts/factory_default/bmc-metadata-items/dell` = `root`/`factory_password` (lowercase `dell`) |

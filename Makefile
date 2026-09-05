@@ -261,6 +261,8 @@ images-machine-a-tron-arm: ## Build the native ARM64 machine-a-tron image
 		case "$$arch" in arm64|aarch64) ;; *) echo "images-machine-a-tron-arm requires an ARM64 Docker host; got $$arch" >&2; exit 1 ;; esac
 	$(MAKE) images-registry
 	docker buildx build --platform linux/arm64 --push \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg CI_COMMIT_SHORT_SHA=$(CI_COMMIT_SHORT_SHA) \
 		-t $(IMAGE_REGISTRY)/machine-a-tron:$(IMAGE_TAG) \
 		--file crates/machine-a-tron/Dockerfile.arm64 .
 
