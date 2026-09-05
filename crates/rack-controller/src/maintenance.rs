@@ -37,7 +37,7 @@ use carbide_rack_controller::fabric_manager::{
     switch_endpoint_from_firmware_device, validate_switch_inventory_for_nmx_cluster,
 };
 use carbide_rack_controller::validating::strip_rv_labels;
-use carbide_secrets::credentials::{CredentialManager, Credentials};
+use carbide_secrets::credentials::{CredentialKey, CredentialManager, Credentials};
 use carbide_uuid::rack::{RackId, RackProfileId};
 use component_manager::NvosUpdateRequest;
 use component_manager::component_manager::ComponentManager;
@@ -830,22 +830,47 @@ fn requested_firmware_object_json_upgrade(
     })
 }
 
-/// Loads and validates the default firmware object selected by a rack profile.
+/// Loads the default firmware object and optional artifact token selected by a
+/// rack profile.
 ///
 /// A missing or unknown profile, or a profile without a firmware-object
-/// source, returns `Ok(None)`. Fetch and JSON validation failures are returned
-/// so the state controller can retry `FirmwareUpgrade(Start)`.
+/// source, returns `Ok(None)`. Source, credential, and JSON validation failures
+/// are returned so the state controller can retry `FirmwareUpgrade(Start)`.
 async fn configured_ingestion_firmware_object_json(
     rack_id: &RackId,
     rack_profile_id: Option<&RackProfileId>,
     ctx: &mut StateHandlerContext<'_, RackStateHandlerContextObjects>,
-) -> Result<Option<String>, String> {
+) -> Result<Option<(String, String)>, String> {
     let Some(profile) = super::resolve_profile(rack_id, rack_profile_id, ctx) else {
         return Ok(None);
     };
 
     let Some(firmware_object) = profile.firmware_object.clone() else {
         return Ok(None);
+    };
+
+    let access_token = match firmware_object.access_token_credential.as_ref() {
+        Some(name) => {
+            let key = CredentialKey::FirmwareArtifactAccessToken { name: name.clone() };
+
+            let credentials = ctx
+                .services
+                .credential_manager
+                .get_credentials(&key)
+                .await
+                .map_err(|error| {
+                    format!(
+                        "failed to read firmware artifact access-token credential {name}: {error}"
+                    )
+                })?
+                .ok_or_else(|| {
+                    format!("firmware artifact access-token credential {name} was not found")
+                })?;
+
+            let Credentials::UsernamePassword { password, .. } = credentials;
+            password
+        }
+        None => rms_access_token_or_noauth(None),
     };
 
     let config_json = ctx
@@ -857,7 +882,7 @@ async fn configured_ingestion_firmware_object_json(
     serde_json::from_str::<std::collections::HashMap<String, serde::de::IgnoredAny>>(&config_json)
         .map_err(|error| format!("configured SOT firmware object is not a JSON object: {error}"))?;
 
-    Ok(Some(config_json))
+    Ok(Some((config_json, access_token)))
 }
 
 async fn load_rack_maintenance_access_token(
@@ -1974,19 +1999,27 @@ pub async fn handle_maintenance(
                 let requested_source = requested_firmware_object_json_upgrade(scope);
                 let uses_stored_token = requested_source.is_some();
 
-                let (config_json, components, force_update) = match requested_source {
-                    Some(requested_source) => requested_source,
-                    None => {
-                        let config_json =
-                            configured_ingestion_firmware_object_json(id, rack_profile_id, ctx)
-                                .await
-                                .map_err(|error| {
-                                    StateHandlerError::GenericError(eyre::eyre!(error))
-                                })?;
+                let (config_json, components, force_update, configured_access_token) =
+                    match requested_source {
+                        Some((config_json, components, force_update)) => {
+                            (config_json, components, force_update, None)
+                        }
+                        None => {
+                            let configured =
+                                configured_ingestion_firmware_object_json(id, rack_profile_id, ctx)
+                                    .await
+                                    .map_err(|error| {
+                                        StateHandlerError::GenericError(eyre::eyre!(error))
+                                    })?;
 
-                        (config_json, Vec::new(), false)
-                    }
-                };
+                            match configured {
+                                Some((config_json, access_token)) => {
+                                    (Some(config_json), Vec::new(), false, Some(access_token))
+                                }
+                                None => (None, Vec::new(), false, None),
+                            }
+                        }
+                    };
 
                 // Defensive: older persisted maintenance state may predate API-side JSON
                 // validation.
@@ -2019,6 +2052,7 @@ pub async fn handle_maintenance(
                         .collect::<Vec<_>>();
                     desired_off_machine_ids(conn.as_mut(), &machine_ids).await?
                 };
+
                 if !desired_off_machine_ids.is_empty() {
                     if uses_stored_token {
                         delete_rack_maintenance_access_token(
@@ -2027,6 +2061,7 @@ pub async fn handle_maintenance(
                         )
                         .await;
                     }
+
                     return transition_to_rack_error(
                         id,
                         state,
@@ -2052,24 +2087,24 @@ pub async fn handle_maintenance(
                         .await;
                 };
 
-                // Profile-driven ingestion has no caller token, so it uses the RMS
-                // NOAUTH sentinel.
-                let access_token = if uses_stored_token {
-                    match load_rack_maintenance_access_token(
-                        ctx.services.credential_manager.as_ref(),
-                        id,
-                    )
-                    .await
-                    {
-                        Ok(access_token) => access_token,
-                        Err(error) => {
-                            let message = error.to_string();
-                            return transition_to_rack_error(id, state, &message, ctx).await;
+                let access_token = match configured_access_token {
+                    Some(access_token) => access_token,
+                    None => {
+                        match load_rack_maintenance_access_token(
+                            ctx.services.credential_manager.as_ref(),
+                            id,
+                        )
+                        .await
+                        {
+                            Ok(access_token) => access_token,
+                            Err(error) => {
+                                let message = error.to_string();
+                                return transition_to_rack_error(id, state, &message, ctx).await;
+                            }
                         }
                     }
-                } else {
-                    rms_access_token_or_noauth(None)
                 };
+
                 let profile = super::resolve_profile(id, rack_profile_id, ctx);
                 let rack_hardware_type = profile_hardware_type_or_any(profile);
                 let firmware_type = profile
