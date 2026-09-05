@@ -69,7 +69,7 @@ or binfmt to run build commands for another architecture.
 
 `make images-all-arm` is the complete native ARM64 build. It publishes only ARM64
 container manifests and builds the ARM64 Core, REST services, machine-validation
-runner, machine-a-tron, Scout, loader, qcow, iPXE, and DPU artifacts on ARM64 without emulation.
+runner, machine-a-tron, and DPU BFB boot-artifact image on ARM64 without emulation.
 It refuses non-ARM64 Docker hosts and directs x86_64 users to `make images-all`,
 which remains the multi-architecture compatibility build. The ARM boot payloads
 are built in a native ARM64 container, so this command does not require Rust,
@@ -128,7 +128,7 @@ group automatically, so a narrowed selection doesn't produce false failures.
 
 After `make images-all-arm`, first run
 `export ARM_ONLY=1 NICO_ARCHES=arm64 DPU_ARCHES=arm64`; the same loop then checks
-the 13 ARM64 manifests and skips the x86 boot-artifact image.
+the 14 ARM64 manifests and skips the x86 boot-artifact image.
 
 ```bash
 images=(
@@ -138,8 +138,11 @@ images=(
   boot-artifacts-aarch64
 )
 
-# Include this image after make images-all; leave it out after make images-all-arm.
-if [ "${ARM_ONLY:-0}" != "1" ]; then
+# Include the x86 boot-artifact image after make images-all. The ARM-only target
+# publishes machine-a-tron instead and does not build the x86 boot-artifact image.
+if [ "${ARM_ONLY:-0}" = "1" ]; then
+  images+=(machine-a-tron)
+else
   images+=(boot-artifacts-x86_64)
 fi
 
@@ -190,9 +193,8 @@ The loop should print exactly 14 successful checks:
 | `boot-artifacts-x86_64` | `images-boot-artifacts` |
 | `boot-artifacts-aarch64` | `images-bfb` |
 
-`make images-all-arm` produces the same list except for
-`boot-artifacts-x86_64`, so its verification should report exactly 13 ARM64
-manifests.
+`make images-all-arm` omits `boot-artifacts-x86_64` and adds `machine-a-tron`, so
+its verification should report exactly 14 ARM64 manifests.
 
 If the loop exits early, the `FAIL` line identifies which image has an incomplete
 manifest. The multi-architecture build requires the full mkosi + Rust toolchain on
